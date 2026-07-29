@@ -1,7 +1,8 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const { EventEmitter } = require('node:events')
-const { BotManager, normalizeLoginCode } = require('../electron/bot-manager.cjs')
+const { BotManager, normalizeLoginCode, extractText } = require('../electron/bot-manager.cjs')
+const { computeSignedChatChecksum } = require('../electron/protocol-fixes.cjs')
 
 class FakeBot extends EventEmitter {
   constructor() {
@@ -10,11 +11,14 @@ class FakeBot extends EventEmitter {
     this.entity = null
     this.controls = []
     this.messages = []
+    this.writes = []
+    this._client = { write: (name, payload) => this.writes.push([name, payload]) }
   }
   chat(message) { this.messages.push(message) }
   setControlState(control, value) { this.controls.push([control, value]) }
   look() { return Promise.resolve() }
   quit() { this.emit('end', 'quit') }
+  supportFeature(name) { return name === 'seperateSignedChatCommandPacket' }
 }
 
 test('normalizes Microsoft device codes', () => {
@@ -67,7 +71,8 @@ test('sends separate join and server-change messages', async () => {
   await new Promise((resolve) => setTimeout(resolve, 5))
   bot.emit('respawn')
   await new Promise((resolve) => setTimeout(resolve, 5))
-  assert.deepEqual(bot.messages, ['joined', '/server survival'])
+  assert.deepEqual(bot.messages, ['joined'])
+  assert.deepEqual(bot.writes, [['chat_command', { command: 'server survival' }]])
   manager.disconnect('messages')
 })
 
@@ -86,4 +91,22 @@ test('live chat marks a session online and a late login event cannot downgrade i
   assert.deepEqual(bot.messages, ['works'])
   assert.deepEqual(bot.controls[0], ['jump', true])
   manager.disconnect('ordering')
+})
+
+test('uses the unsigned command packet for modern proxy-switch commands', () => {
+  const bot = new FakeBot()
+  const manager = new BotManager({ profilesPath: 'profiles', emit: () => {}, createBot: () => bot })
+  manager.connect({ id: 'proxy', username: 'user@example.com', host: 'localhost', port: 25565, antiAfk: false })
+  bot.entity = { yaw: 0, pitch: 0 }
+  manager.sendChat('proxy', '/server towny')
+  assert.deepEqual(bot.writes, [['chat_command', { command: 'server towny' }]])
+  assert.deepEqual(bot.messages, [])
+  manager.sendChat('proxy', '/home')
+  assert.deepEqual(bot.messages, ['/home'])
+  manager.disconnect('proxy')
+})
+
+test('converts 1.21.11 checksums to signed i8 and formats component kick reasons', () => {
+  assert.equal(computeSignedChatChecksum([{ signature: Buffer.from([255, 255]) }]), -64)
+  assert.equal(extractText({ type: 'compound', value: { color: { type: 'string', value: 'red' }, text: { type: 'string', value: 'An internal error occurred.' } } }), 'An internal error occurred.')
 })

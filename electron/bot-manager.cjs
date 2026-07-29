@@ -1,5 +1,9 @@
 const path = require('node:path')
+const { applyProtocolFixes } = require('./protocol-fixes.cjs')
+applyProtocolFixes()
 const mineflayer = require('mineflayer')
+
+const PROXY_COMMANDS = new Set(['server', 'hub', 'lobby', 'switch'])
 
 class BotManager {
   constructor({ profilesPath, emit, createBot = mineflayer.createBot }) {
@@ -72,7 +76,11 @@ class BotManager {
     const bot = this.requireOnline(id)
     const trimmed = String(message || '').trim()
     if (!trimmed) return
-    bot.chat(trimmed)
+    if (shouldUseProxyCommandPacket(bot, trimmed)) {
+      bot._client.write('chat_command', { command: trimmed.slice(1) })
+    } else {
+      bot.chat(trimmed)
+    }
     this.emit('log', id, { kind: 'sent', message: trimmed, at: Date.now() })
   }
 
@@ -156,8 +164,30 @@ function normalizeLoginCode(code) {
 }
 
 function formatReason(reason) {
-  if (typeof reason === 'string') return reason
+  const extracted = extractText(reason)
+  if (extracted) return extracted
   try { return JSON.stringify(reason) } catch { return String(reason) }
 }
 
-module.exports = { BotManager, normalizeLoginCode }
+function extractText(value) {
+  if (typeof value === 'string') {
+    try { return extractText(JSON.parse(value)) || value } catch { return value }
+  }
+  if (!value || typeof value !== 'object') return ''
+  if (value.type === 'string' && typeof value.value === 'string') return value.value
+  const source = value.type === 'compound' && value.value ? value.value : value
+  const text = extractText(source.text)
+  const extrasValue = source.extra?.value?.value || source.extra?.value || source.extra
+  const extras = Array.isArray(extrasValue) ? extrasValue.map(extractText).join('') : ''
+  return `${text}${extras}`.trim()
+}
+
+function shouldUseProxyCommandPacket(bot, message) {
+  if (!message.startsWith('/') || !bot?._client?.write) return false
+  const command = message.slice(1).trim().split(/\s+/, 1)[0].toLowerCase()
+  if (!PROXY_COMMANDS.has(command)) return false
+  try { return bot.supportFeature?.('seperateSignedChatCommandPacket') === true }
+  catch { return false }
+}
+
+module.exports = { BotManager, normalizeLoginCode, extractText, shouldUseProxyCommandPacket }
