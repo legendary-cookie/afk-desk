@@ -36,11 +36,12 @@ class BotManager {
       onMsaCode: (code) => this.emit('login-code', account.id, normalizeLoginCode(code))
     })
 
-    const session = { bot, antiAfkTimer: null, jumpTimer: null, messageTimers: new Set(), ready: false, joinMessageSent: false }
+    const session = { bot, antiAfkTimer: null, jumpTimer: null, messageTimers: new Set(), ready: false, switching: false, joinMessageSent: false }
     this.sessions.set(account.id, session)
     this.status(account.id, 'connecting', reconnecting ? `Reconnect attempt ${reconnectState.attempts}…` : `Connecting to ${account.host}…`)
 
     bot._client?.on?.('start_configuration', () => {
+      session.switching = true
       bot._client.write('settings', {
         locale: 'en_us',
         viewDistance: 10,
@@ -56,16 +57,24 @@ class BotManager {
     })
 
     const markReady = () => {
-      if (session.ready || !this.sessions.has(account.id)) return
+      if (!this.sessions.has(account.id)) return
+      const completedSwitch = session.switching
+      if (session.ready && !completedSwitch) return
+      const firstReady = !session.ready
       session.ready = true
+      session.switching = false
       reconnectState.attempts = 0
       this.status(account.id, 'online', `Online as ${bot.username}`)
-      if (account.antiAfk !== false) this.enableAntiAfk(account.id, account.antiAfkInterval)
-      if (account.joinMessage && !session.joinMessageSent) {
+      if (firstReady && account.antiAfk !== false) this.enableAntiAfk(account.id, account.antiAfkInterval)
+      if (firstReady && account.joinMessage && !session.joinMessageSent) {
         session.joinMessageSent = true
         this.scheduleMessage(account.id, account.joinMessage, account.messageDelay)
       }
     }
+
+    bot._client?.on?.('finish_configuration', () => {
+      if (session.switching) markReady()
+    })
 
     bot.on('login', () => {
       if (!session.ready) this.status(account.id, 'connected', 'Authenticated. Joining world…')

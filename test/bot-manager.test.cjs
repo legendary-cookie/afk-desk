@@ -118,6 +118,8 @@ test('resends client settings when Velocity switches backend servers', () => {
   const manager = new BotManager({ profilesPath: 'profiles', emit: (...event) => events.push(event), createBot: () => bot })
   manager.connect({ id: 'velocity', username: 'user@example.com', host: 'localhost', port: 25565, antiAfk: false, autoReconnect: false })
 
+  bot.entity = { yaw: 0, pitch: 0 }
+  bot.emit('spawn')
   bot._client.emit('start_configuration')
 
   assert.deepEqual(bot.writes.at(-1), ['settings', {
@@ -132,6 +134,10 @@ test('resends client settings when Velocity switches backend servers', () => {
     particleStatus: 'all'
   }])
   assert.equal(events.at(-1)[2].detail, 'Switching servers…')
+  bot._client.emit('finish_configuration')
+  assert.equal(events.filter(([type]) => type === 'status').at(-1)[2].status, 'online')
+  bot.emit('messagestr', 'Towny is ready')
+  assert.equal(events.filter(([type]) => type === 'status').at(-1)[2].status, 'online')
   manager.disconnect('velocity')
 })
 
