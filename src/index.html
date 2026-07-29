@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'" />
+    <title>AFK Desk</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Accounts">
+        <header class="brand">
+          <div class="brand-mark" aria-hidden="true">A</div>
+          <div>
+            <strong>AFK Desk</strong>
+            <span>Local Minecraft client</span>
+          </div>
+        </header>
+
+        <div class="sidebar-heading">
+          <span>Accounts</span>
+          <span id="account-count" class="count">0</span>
+        </div>
+        <nav id="account-list" class="account-list" aria-label="Minecraft accounts"></nav>
+
+        <button id="add-account" class="button primary sidebar-action" type="button">
+          <span aria-hidden="true">＋</span> Add account
+        </button>
+        <p class="privacy-note">Credentials stay in Microsoft’s sign-in flow. AFK Desk never stores your password.</p>
+      </aside>
+
+      <main id="main-content" class="main-content">
+        <section id="empty-state" class="empty-state" aria-labelledby="empty-title">
+          <div class="empty-illustration" aria-hidden="true">
+            <span></span><span></span><span></span>
+          </div>
+          <h1 id="empty-title">Your quiet corner of Minecraft</h1>
+          <p>Add an account, pick a server, and stay connected without running the full game.</p>
+          <button class="button primary" data-action="add" type="button">Add your first account</button>
+        </section>
+
+        <section id="dashboard" class="dashboard" hidden>
+          <header class="topbar">
+            <div>
+              <div class="eyebrow">Selected account</div>
+              <h1 id="account-title">Account</h1>
+            </div>
+            <div class="topbar-actions">
+              <button id="edit-account" class="button secondary" type="button">Edit</button>
+              <button id="connection-button" class="button primary" type="button">Connect</button>
+            </div>
+          </header>
+
+          <div id="status-banner" class="status-banner" role="status" aria-live="polite">
+            <span class="status-dot" aria-hidden="true"></span>
+            <div><strong id="status-name">Offline</strong><span id="status-detail">Ready to connect</span></div>
+          </div>
+
+          <div class="workspace-grid">
+            <section class="panel console-panel" aria-labelledby="console-title">
+              <header class="panel-header">
+                <div>
+                  <h2 id="console-title">Console</h2>
+                  <p id="server-address">server.example.com</p>
+                </div>
+                <button id="clear-console" class="text-button" type="button">Clear</button>
+              </header>
+              <div id="console-log" class="console-log" role="log" aria-live="polite" aria-label="Server messages">
+                <div class="console-placeholder">Server messages will appear here after you connect.</div>
+              </div>
+              <form id="chat-form" class="chat-form">
+                <label class="sr-only" for="chat-message">Message or command</label>
+                <input id="chat-message" autocomplete="off" placeholder="Message or /command" disabled />
+                <button class="send-button" type="submit" disabled aria-label="Send message">Send</button>
+              </form>
+            </section>
+
+            <aside class="controls-column">
+              <section class="panel details-panel" aria-labelledby="details-title">
+                <header class="panel-header"><h2 id="details-title">Connection</h2></header>
+                <dl class="details-list">
+                  <div><dt>Account</dt><dd id="detail-username">—</dd></div>
+                  <div><dt>Server</dt><dd id="detail-server">—</dd></div>
+                  <div><dt>Version</dt><dd id="detail-version">Auto-detect</dd></div>
+                  <div><dt>Anti-AFK</dt><dd id="detail-antiafk">Every 45 seconds</dd></div>
+                </dl>
+              </section>
+
+              <section class="panel movement-panel" aria-labelledby="movement-title">
+                <header class="panel-header">
+                  <div><h2 id="movement-title">Movement</h2><p>Quick taps while online</p></div>
+                </header>
+                <div class="movement-grid" aria-label="Movement controls">
+                  <button data-control="forward" class="move-button forward" disabled aria-label="Move forward">W</button>
+                  <button data-control="left" class="move-button" disabled aria-label="Move left">A</button>
+                  <button data-control="back" class="move-button" disabled aria-label="Move backward">S</button>
+                  <button data-control="right" class="move-button" disabled aria-label="Move right">D</button>
+                </div>
+                <div class="movement-actions">
+                  <button data-control="jump" class="button secondary" disabled>Jump</button>
+                  <button data-look="left" class="button secondary" disabled>Look left</button>
+                  <button data-look="right" class="button secondary" disabled>Look right</button>
+                </div>
+              </section>
+            </aside>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="account-dialog" aria-labelledby="dialog-title">
+      <form id="account-form" method="dialog">
+        <header class="dialog-header">
+          <div><div class="eyebrow">Connection profile</div><h2 id="dialog-title">Add account</h2></div>
+          <button class="icon-button" value="cancel" aria-label="Close">×</button>
+        </header>
+        <input id="account-id" type="hidden" />
+        <div class="form-grid">
+          <label class="field full"><span>Display name</span><input id="label" maxlength="50" placeholder="Main account" /></label>
+          <label class="field full"><span>Microsoft account email</span><input id="username" type="email" required autocomplete="username" placeholder="name@example.com" /></label>
+          <label class="field server-field"><span>Server address</span><input id="host" required placeholder="play.example.com" /></label>
+          <label class="field port-field"><span>Port</span><input id="port" type="number" min="1" max="65535" value="25565" required /></label>
+          <label class="field full"><span>Minecraft version</span><input id="version" placeholder="Auto-detect (recommended)" /><small>Leave blank unless the server needs a specific version.</small></label>
+          <label class="toggle-row full">
+            <input id="anti-afk" type="checkbox" checked />
+            <span class="toggle" aria-hidden="true"></span>
+            <span><strong>Enable anti-AFK</strong><small>Occasionally jumps and turns to keep the connection active.</small></span>
+          </label>
+          <label class="field full"><span>Anti-AFK interval (seconds)</span><input id="anti-afk-interval" type="number" min="15" max="3600" value="45" /></label>
+        </div>
+        <p id="form-error" class="form-error" role="alert" hidden></p>
+        <footer class="dialog-footer">
+          <button id="delete-account" class="button danger" type="button" hidden>Delete</button>
+          <span class="footer-spacer"></span>
+          <button class="button secondary" value="cancel">Cancel</button>
+          <button id="save-account" class="button primary" type="submit">Save account</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog id="login-dialog" aria-labelledby="login-title">
+      <div class="login-content">
+        <div class="login-icon" aria-hidden="true">M</div>
+        <div class="eyebrow">Microsoft sign-in</div>
+        <h2 id="login-title">Connect your account</h2>
+        <p>Open Microsoft’s device page, then enter this one-time code.</p>
+        <button id="login-code" class="login-code" type="button" title="Copy code">Waiting…</button>
+        <button id="open-login" class="button primary full-button" type="button">Open Microsoft sign-in</button>
+        <button id="close-login" class="text-button" type="button">Continue in background</button>
+      </div>
+    </dialog>
+
+    <div id="toast-region" class="toast-region" aria-live="polite"></div>
+    <script src="renderer.js"></script>
+  </body>
+</html>
