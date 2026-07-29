@@ -1,13 +1,15 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const { EventEmitter } = require('node:events')
-const { BotManager, normalizeLoginCode, extractText } = require('../electron/bot-manager.cjs')
+const { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, normalizeSkinUrl } = require('../electron/bot-manager.cjs')
 const { computeSignedChatChecksum } = require('../electron/protocol-fixes.cjs')
 
 class FakeBot extends EventEmitter {
   constructor() {
     super()
     this.username = 'Player'
+    this.uuid = '123456781234123412341234567890ab'
+    this.players = {}
     this.entity = null
     this.controls = []
     this.messages = []
@@ -110,6 +112,37 @@ test('uses the unsigned command packet for modern proxy-switch commands', () => 
 test('converts 1.21.11 checksums to signed i8 and formats component kick reasons', () => {
   assert.equal(computeSignedChatChecksum([{ signature: Buffer.from([255, 255]) }]), -64)
   assert.equal(extractText({ type: 'compound', value: { color: { type: 'string', value: 'red' }, text: { type: 'string', value: 'An internal error occurred.' } } }), 'An internal error occurred.')
+})
+
+test('converts Minecraft chat formatting into safe styled text segments', () => {
+  assert.deepEqual(parseMinecraftFormatting('§aGreen §lBold§r plain §#123456Hex'), [
+    { text: 'Green ', color: '#55ff55' },
+    { text: 'Bold', color: '#55ff55', bold: true },
+    { text: ' plain ' },
+    { text: 'Hex', color: '#123456' }
+  ])
+  assert.equal(normalizeSkinUrl('https://textures.minecraft.net/texture/abcdef123'), 'https://textures.minecraft.net/texture/abcdef123')
+  assert.equal(normalizeSkinUrl('http://textures.minecraft.net/texture/abcdef123'), 'https://textures.minecraft.net/texture/abcdef123')
+  assert.equal(normalizeSkinUrl('https://example.com/texture/abcdef123'), '')
+})
+
+test('emits the authenticated Minecraft identity and official skin texture', () => {
+  const events = []
+  const bot = new FakeBot()
+  const manager = new BotManager({ profilesPath: 'profiles', emit: (...event) => events.push(event), createBot: () => bot })
+  manager.connect({ id: 'skin', username: 'user@example.com', host: 'localhost', port: 25565, antiAfk: false, autoReconnect: false })
+  bot.player = {
+    username: 'Player',
+    uuid: bot.uuid,
+    skinData: { url: 'https://textures.minecraft.net/texture/abcdef123' }
+  }
+  bot.emit('playerUpdated', bot.player)
+  assert.deepEqual(events.find(([type]) => type === 'identity'), ['identity', 'skin', {
+    username: 'Player',
+    uuid: bot.uuid,
+    skinUrl: 'https://textures.minecraft.net/texture/abcdef123'
+  }])
+  manager.disconnect('skin')
 })
 
 test('resends client settings when Velocity switches backend servers', () => {

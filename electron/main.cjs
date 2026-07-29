@@ -4,7 +4,7 @@ const crypto = require('node:crypto')
 const { execFile } = require('node:child_process')
 const { promisify } = require('node:util')
 const { AccountStore } = require('./store.cjs')
-const { BotManager } = require('./bot-manager.cjs')
+const { BotManager, normalizeSkinUrl } = require('./bot-manager.cjs')
 const { AccessStore } = require('./remote/access-store.cjs')
 const { RemoteAccessServer } = require('./remote/server.cjs')
 const execFileAsync = promisify(execFile)
@@ -147,6 +147,17 @@ function emitBotEvent(type, id, payload) {
   const current = getRuntime(id)
   if (type === 'status') runtime.set(id, { ...current, status: payload.status, detail: payload.detail })
   if (type === 'log') runtime.set(id, { ...current, logs: [...current.logs.slice(-499), payload] })
+  if (type === 'identity') {
+    const account = store.list().find((item) => item.id === id)
+    if (account) {
+      store.save({
+        ...account,
+        minecraftName: String(payload.username || account.minecraftName || '').slice(0, 16),
+        minecraftUuid: normalizeUuid(payload.uuid) || account.minecraftUuid || '',
+        skinUrl: normalizeSkinUrl(payload.skinUrl) || account.skinUrl || ''
+      })
+    }
+  }
   mainWindow?.webContents.send('bot:event', { type, id, payload })
 }
 
@@ -183,6 +194,9 @@ function validateAccount(input) {
     host,
     port,
     version: String(input?.version || '').trim(),
+    minecraftName: String(input?.minecraftName || '').trim().slice(0, 16),
+    minecraftUuid: normalizeUuid(input?.minecraftUuid),
+    skinUrl: normalizeSkinUrl(input?.skinUrl),
     antiAfk: input?.antiAfk !== false,
     antiAfkInterval: Math.max(15, Math.min(Number(input?.antiAfkInterval) || 45, 3600)),
     autoReconnect: input?.autoReconnect !== false,
@@ -192,4 +206,9 @@ function validateAccount(input) {
     serverChangeMessage: String(input?.serverChangeMessage || '').trim().slice(0, 256),
     messageDelay: Math.max(0, Math.min(Number(input?.messageDelay) || 2, 30))
   }
+}
+
+function normalizeUuid(value) {
+  const uuid = String(value || '').replace(/-/g, '').toLowerCase()
+  return /^[0-9a-f]{32}$/.test(uuid) ? uuid : ''
 }

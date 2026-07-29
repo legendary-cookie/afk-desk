@@ -36,7 +36,7 @@ class BotManager {
       onMsaCode: (code) => this.emit('login-code', account.id, normalizeLoginCode(code))
     })
 
-    const session = { bot, antiAfkTimer: null, jumpTimer: null, messageTimers: new Set(), ready: false, switching: false, joinMessageSent: false }
+    const session = { bot, antiAfkTimer: null, jumpTimer: null, messageTimers: new Set(), ready: false, switching: false, joinMessageSent: false, identityKey: '' }
     this.sessions.set(account.id, session)
     this.status(account.id, 'connecting', reconnecting ? `Reconnect attempt ${reconnectState.attempts}…` : `Connecting to ${account.host}…`)
 
@@ -65,6 +65,7 @@ class BotManager {
       session.switching = false
       reconnectState.attempts = 0
       this.status(account.id, 'online', `Online as ${bot.username}`)
+      emitIdentity()
       if (firstReady && account.antiAfk !== false) this.enableAntiAfk(account.id, account.antiAfkInterval)
       if (firstReady && account.joinMessage && !session.joinMessageSent) {
         session.joinMessageSent = true
@@ -76,18 +77,35 @@ class BotManager {
       if (session.switching) markReady()
     })
 
+    const emitIdentity = () => {
+      const player = bot.player || bot.players?.[bot.username]
+      const identity = {
+        username: String(bot.username || bot._client?.username || '').slice(0, 16),
+        uuid: String(bot.uuid || bot._client?.uuid || player?.uuid || '').replace(/-/g, '').toLowerCase(),
+        skinUrl: normalizeSkinUrl(player?.skinData?.url)
+      }
+      const key = JSON.stringify(identity)
+      if (!identity.username || key === session.identityKey) return
+      session.identityKey = key
+      this.emit('identity', account.id, identity)
+    }
+
     bot.on('login', () => {
       if (!session.ready) this.status(account.id, 'connected', 'Authenticated. Joining world…')
+      emitIdentity()
     })
+    bot.on('playerJoined', (player) => { if (player?.username === bot.username) emitIdentity() })
+    bot.on('playerUpdated', (player) => { if (player?.username === bot.username) emitIdentity() })
     bot.on('spawn', markReady)
     bot.on('forcedMove', markReady)
     bot.on('respawn', () => {
       markReady()
       if (account.serverChangeMessage) this.scheduleMessage(account.id, account.serverChangeMessage, account.messageDelay)
     })
-    bot.on('messagestr', (message) => {
+    bot.on('messagestr', (message, _position, originalMessage) => {
       markReady()
-      this.emit('log', account.id, { kind: 'chat', message, at: Date.now() })
+      const formatted = originalMessage?.toMotd?.() || message
+      this.emit('log', account.id, { kind: 'chat', message, segments: parseMinecraftFormatting(formatted), at: Date.now() })
     })
     bot.on('kicked', (reason) => {
       session.lastKickReason = formatReason(reason)
@@ -267,4 +285,69 @@ function shouldUseProxyCommandPacket(bot, message) {
   catch { return false }
 }
 
-module.exports = { BotManager, normalizeLoginCode, extractText, shouldUseProxyCommandPacket }
+const CHAT_COLORS = {
+  0: '#000000', 1: '#0000aa', 2: '#00aa00', 3: '#00aaaa', 4: '#aa0000', 5: '#aa00aa', 6: '#ffaa00', 7: '#aaaaaa',
+  8: '#555555', 9: '#5555ff', a: '#55ff55', b: '#55ffff', c: '#ff5555', d: '#ff55ff', e: '#ffff55', f: '#ffffff'
+}
+
+function parseMinecraftFormatting(input) {
+  const source = String(input || '').slice(0, 8192)
+  const segments = []
+  let style = {}
+  let text = ''
+  const flush = () => {
+    if (!text) return
+    segments.push({ text, ...style })
+    text = ''
+  }
+  for (let index = 0; index < source.length; index += 1) {
+    if (source[index] !== '§' || index + 1 >= source.length) {
+      text += source[index]
+      continue
+    }
+    const code = source[index + 1].toLowerCase()
+    if (code === '#' && /^[0-9a-f]{6}$/i.test(source.slice(index + 2, index + 8))) {
+      flush()
+      style = { color: `#${source.slice(index + 2, index + 8).toLowerCase()}` }
+      index += 7
+      continue
+    }
+    if (CHAT_COLORS[code]) {
+      flush()
+      style = { color: CHAT_COLORS[code] }
+      index += 1
+      continue
+    }
+    if (code === 'r') {
+      flush()
+      style = {}
+      index += 1
+      continue
+    }
+    const formats = { l: 'bold', o: 'italic', n: 'underlined', m: 'strikethrough' }
+    if (formats[code]) {
+      flush()
+      style = { ...style, [formats[code]]: true }
+      index += 1
+      continue
+    }
+    if (code === 'k') {
+      index += 1
+      continue
+    }
+    text += source[index]
+  }
+  flush()
+  return segments.slice(0, 256)
+}
+
+function normalizeSkinUrl(value) {
+  try {
+    const url = new URL(String(value || ''))
+    if (!['http:', 'https:'].includes(url.protocol) || url.hostname !== 'textures.minecraft.net' || !/^\/texture\/[a-z0-9]+$/i.test(url.pathname)) return ''
+    url.protocol = 'https:'
+    return url.toString()
+  } catch { return '' }
+}
+
+module.exports = { BotManager, normalizeLoginCode, extractText, shouldUseProxyCommandPacket, parseMinecraftFormatting, normalizeSkinUrl }

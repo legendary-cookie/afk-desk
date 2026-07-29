@@ -11,7 +11,7 @@ test('browser access enforces authentication, account scope, permissions, and re
   const accessStore = new AccessStore(directory)
   const actions = []
   const accounts = [
-    { id: 'allowed', label: 'Allowed', host: 'one.example', port: 25565 },
+    { id: 'allowed', label: 'Allowed', host: 'one.example', port: 25565, minecraftName: 'Player', skinUrl: 'https://textures.minecraft.net/texture/abcdef123' },
     { id: 'private', label: 'Private', host: 'two.example', port: 25565 }
   ]
   const server = new RemoteAccessServer({
@@ -37,7 +37,9 @@ test('browser access enforces authentication, account scope, permissions, and re
 
   const state = await fetch(`${base}/api/state`, { headers: { Cookie: cookie } })
   assert.equal(state.status, 200)
-  assert.deepEqual((await state.json()).accounts.map((account) => account.id), ['allowed'])
+  const visibleAccounts = (await state.json()).accounts
+  assert.deepEqual(visibleAccounts.map((account) => account.id), ['allowed'])
+  assert.equal(visibleAccounts[0].skinUrl, 'https://textures.minecraft.net/texture/abcdef123')
 
   const deniedAccount = await postAction(base, cookie, { accountId: 'private', action: 'chat', payload: { message: 'no' } })
   assert.equal(deniedAccount.status, 403)

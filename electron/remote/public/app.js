@@ -30,7 +30,10 @@ function render() {
     const button = document.createElement('button')
     button.type = 'button'
     button.className = 'tab'
-    button.textContent = item.label
+    const avatar = createPlayerHead(item)
+    const label = document.createElement('span')
+    label.textContent = item.label
+    button.append(avatar, label)
     button.setAttribute('aria-current', String(item.id === account.id))
     button.addEventListener('click', () => { state.selectedId = item.id; render() })
     return button
@@ -66,7 +69,7 @@ function renderLog(account) {
     const time = document.createElement('time')
     time.textContent = new Date(entry.at).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' })
     const message = document.createElement('span')
-    message.textContent = entry.kind === 'sent' ? `You: ${entry.message}` : entry.message
+    appendLogMessage(message, entry)
     line.append(time,message)
     return line
   }))
@@ -96,6 +99,36 @@ document.querySelectorAll('[data-control]').forEach((button) => button.addEventL
 document.querySelectorAll('[data-look]').forEach((button) => button.addEventListener('click', () => run(() => action('look',{ direction:button.dataset.look }))))
 
 function current() { return state.accounts.find((account) => account.id === state.selectedId) }
+function createPlayerHead(account) {
+  const avatar = document.createElement('span')
+  avatar.className = 'player-head'
+  avatar.setAttribute('aria-hidden','true')
+  if (!validSkinUrl(account.skinUrl)) {
+    avatar.textContent = account.minecraftName?.slice(0,1).toUpperCase() || account.label.slice(0,1).toUpperCase()
+    return avatar
+  }
+  avatar.classList.add('has-skin')
+  avatar.style.backgroundImage = `url("${account.skinUrl}")`
+  const overlay = document.createElement('span')
+  overlay.style.backgroundImage = `url("${account.skinUrl}")`
+  avatar.append(overlay)
+  return avatar
+}
+function validSkinUrl(value) { try { const url=new URL(value); return url.protocol==='https:' && url.hostname==='textures.minecraft.net' && /^\/texture\/[a-z0-9]+$/i.test(url.pathname) } catch { return false } }
+function appendLogMessage(container,entry) {
+  if (entry.kind==='sent') { container.textContent=`You: ${entry.message}`; return }
+  if (!Array.isArray(entry.segments)||!entry.segments.length) { container.textContent=entry.message; return }
+  for (const segment of entry.segments) {
+    const part=document.createElement('span')
+    part.textContent=String(segment.text||'')
+    if (/^#[0-9a-f]{6}$/i.test(segment.color||'')) part.style.color=segment.color
+    if (segment.bold) part.classList.add('chat-bold')
+    if (segment.italic) part.classList.add('chat-italic')
+    if (segment.underlined) part.classList.add('chat-underlined')
+    if (segment.strikethrough) part.classList.add('chat-strikethrough')
+    container.append(part)
+  }
+}
 async function run(fn) { try { await fn() } catch(error) { toast(error.message) } }
 function toast(message) { elements.toast.textContent=message; elements.toast.hidden=false; clearTimeout(toast.timer); toast.timer=setTimeout(() => { elements.toast.hidden=true },4000) }
 

@@ -132,6 +132,8 @@ class RemoteAccessServer {
         return {
           id: account.id,
           label: account.label,
+          minecraftName: account.minecraftName || '',
+          skinUrl: account.skinUrl || '',
           server: `${account.host}:${account.port}`,
           status: runtime.status,
           detail: runtime.detail,
@@ -175,7 +177,7 @@ class RemoteAccessServer {
   }
 
   setSecurityHeaders(response) {
-    response.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+    response.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https://textures.minecraft.net; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
     response.setHeader('X-Content-Type-Options', 'nosniff')
     response.setHeader('X-Frame-Options', 'DENY')
     response.setHeader('Referrer-Policy', 'no-referrer')

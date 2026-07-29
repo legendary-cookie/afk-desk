@@ -86,10 +86,18 @@ function renderAccountList() {
     button.type = 'button'
     button.className = 'account-item'
     button.setAttribute('aria-current', String(account.id === state.selectedId))
-    button.innerHTML = `<span class="account-avatar" aria-hidden="true"></span><span class="account-copy"><strong></strong><span></span></span><span class="mini-status ${status}" aria-label="${status}"></span>`
-    button.querySelector('.account-avatar').textContent = account.label.slice(0, 1).toUpperCase()
-    button.querySelector('strong').textContent = account.label
-    button.querySelector('.account-copy span').textContent = account.host
+    const avatar = createPlayerHead(account, 'account-avatar')
+    const copy = document.createElement('span')
+    copy.className = 'account-copy'
+    const title = document.createElement('strong')
+    title.textContent = account.label
+    const server = document.createElement('span')
+    server.textContent = account.host
+    copy.append(title, server)
+    const indicator = document.createElement('span')
+    indicator.className = `mini-status ${status}`
+    indicator.setAttribute('aria-label', status)
+    button.append(avatar, copy, indicator)
     button.addEventListener('click', () => {
       state.selectedId = account.id
       render()
@@ -128,7 +136,7 @@ function renderConsole() {
     time.dateTime = new Date(entry.at).toISOString()
     time.textContent = new Date(entry.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     const message = document.createElement('span')
-    message.textContent = entry.kind === 'sent' ? `You: ${entry.message}` : entry.message
+    appendLogMessage(message, entry)
     line.append(time, message)
     return line
   }))
@@ -160,6 +168,7 @@ function openAccountDialog(account) {
 
 async function saveAccount(event) {
   event.preventDefault()
+  const existing = state.accounts.find((account) => account.id === el['account-id'].value)
   const input = {
     id: el['account-id'].value || undefined,
     label: el.label.value,
@@ -167,6 +176,9 @@ async function saveAccount(event) {
     host: el.host.value,
     port: Number(el.port.value),
     version: el.version.value,
+    minecraftName: existing?.minecraftName || '',
+    minecraftUuid: existing?.minecraftUuid || '',
+    skinUrl: existing?.skinUrl || '',
     antiAfk: el['anti-afk'].checked,
     antiAfkInterval: Number(el['anti-afk-interval'].value),
     autoReconnect: el['auto-reconnect'].checked,
@@ -224,6 +236,14 @@ function handleBotEvent({ type, id, payload }) {
   if (type === 'log') {
     const logs = state.logs.get(id) || []
     state.logs.set(id, [...logs.slice(-499), payload])
+  }
+  if (type === 'identity') {
+    const account = state.accounts.find((item) => item.id === id)
+    if (account) {
+      if (payload.username) account.minecraftName = payload.username
+      if (payload.uuid) account.minecraftUuid = payload.uuid
+      if (validSkinUrl(payload.skinUrl)) account.skinUrl = payload.skinUrl
+    }
   }
   if (type === 'login-code') {
     state.login = {
@@ -338,6 +358,51 @@ async function run(action) {
 
 function cleanError(error) {
   return String(error?.message || error).replace(/^Error invoking remote method '[^']+': Error: /, '')
+}
+
+function createPlayerHead(account, className) {
+  const avatar = document.createElement('span')
+  avatar.className = className
+  avatar.setAttribute('aria-hidden', 'true')
+  if (!validSkinUrl(account.skinUrl)) {
+    avatar.textContent = account.minecraftName?.slice(0, 1).toUpperCase() || account.label.slice(0, 1).toUpperCase()
+    return avatar
+  }
+  avatar.classList.add('has-skin')
+  avatar.style.backgroundImage = `url("${account.skinUrl}")`
+  const overlay = document.createElement('span')
+  overlay.className = 'skin-overlay'
+  overlay.style.backgroundImage = `url("${account.skinUrl}")`
+  avatar.append(overlay)
+  return avatar
+}
+
+function validSkinUrl(value) {
+  try {
+    const url = new URL(value)
+    return url.protocol === 'https:' && url.hostname === 'textures.minecraft.net' && /^\/texture\/[a-z0-9]+$/i.test(url.pathname)
+  } catch { return false }
+}
+
+function appendLogMessage(container, entry) {
+  if (entry.kind === 'sent') {
+    container.textContent = `You: ${entry.message}`
+    return
+  }
+  if (!Array.isArray(entry.segments) || !entry.segments.length) {
+    container.textContent = entry.message
+    return
+  }
+  for (const segment of entry.segments) {
+    const part = document.createElement('span')
+    part.textContent = String(segment.text || '')
+    if (/^#[0-9a-f]{6}$/i.test(segment.color || '')) part.style.color = segment.color
+    if (segment.bold) part.classList.add('chat-bold')
+    if (segment.italic) part.classList.add('chat-italic')
+    if (segment.underlined) part.classList.add('chat-underlined')
+    if (segment.strikethrough) part.classList.add('chat-strikethrough')
+    container.append(part)
+  }
 }
 
 function toast(message, kind = '') {
