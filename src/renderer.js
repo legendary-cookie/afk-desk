@@ -100,15 +100,16 @@ function renderAccountList() {
 
 function renderStatus({ status, detail }) {
   const online = status === 'online'
+  const canInteract = online || status === 'connected'
   const active = online || status === 'connecting' || status === 'connected'
   el['status-banner'].className = `status-banner ${status === 'connected' ? 'connecting' : status}`
   el['status-name'].textContent = status
   el['status-detail'].textContent = detail
   el['connection-button'].textContent = active ? 'Disconnect' : 'Connect'
   el['connection-button'].className = `button ${active ? 'secondary' : 'primary'}`
-  el['chat-message'].disabled = !online
-  el['chat-form'].querySelector('button').disabled = !online
-  document.querySelectorAll('[data-control], [data-look]').forEach((button) => { button.disabled = !online })
+  el['chat-message'].disabled = !canInteract
+  el['chat-form'].querySelector('button').disabled = !canInteract
+  document.querySelectorAll('[data-control], [data-look]').forEach((button) => { button.disabled = !canInteract })
 }
 
 function renderConsole() {

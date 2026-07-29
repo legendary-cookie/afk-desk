@@ -65,8 +65,25 @@ test('sends separate join and server-change messages', async () => {
   bot.entity = { yaw: 0, pitch: 0 }
   bot.emit('spawn')
   await new Promise((resolve) => setTimeout(resolve, 5))
-  bot.emit('spawn')
+  bot.emit('respawn')
   await new Promise((resolve) => setTimeout(resolve, 5))
   assert.deepEqual(bot.messages, ['joined', '/server survival'])
   manager.disconnect('messages')
+})
+
+test('live chat marks a session online and a late login event cannot downgrade it', () => {
+  const events = []
+  const bot = new FakeBot()
+  const manager = new BotManager({ profilesPath: 'profiles', emit: (...event) => events.push(event), createBot: () => bot })
+  manager.connect({ id: 'ordering', username: 'user@example.com', host: 'localhost', port: 25565, antiAfk: false })
+  bot.entity = { yaw: 0, pitch: 0 }
+  bot.emit('messagestr', 'Welcome')
+  bot.emit('login')
+  const statuses = events.filter(([type]) => type === 'status').map(([, , payload]) => payload.status)
+  assert.equal(statuses.at(-1), 'online')
+  manager.sendChat('ordering', 'works')
+  manager.control('ordering', 'jump', 100)
+  assert.deepEqual(bot.messages, ['works'])
+  assert.deepEqual(bot.controls[0], ['jump', true])
+  manager.disconnect('ordering')
 })

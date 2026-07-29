@@ -41,11 +41,12 @@ function render() {
   elements.status.querySelector('strong').textContent = account.status
   elements.status.querySelector('small').textContent = account.detail
   const active = ['online','connecting','connected'].includes(account.status)
+  const canInteract = ['online','connected'].includes(account.status)
   elements.connection.textContent = active ? 'Disconnect' : 'Connect'
   elements.connection.disabled = !permissions.has('connect')
-  elements.chat.disabled = !permissions.has('chat') || account.status !== 'online'
+  elements.chat.disabled = !permissions.has('chat') || !canInteract
   elements['chat-form'].querySelector('button').disabled = elements.chat.disabled
-  elements.movement.querySelectorAll('button').forEach((button) => { button.disabled = !permissions.has('control') || account.status !== 'online' })
+  elements.movement.querySelectorAll('button').forEach((button) => { button.disabled = !permissions.has('control') || !canInteract })
   renderLog(account)
 }
 

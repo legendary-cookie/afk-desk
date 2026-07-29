@@ -23,19 +23,34 @@ class BotManager {
       onMsaCode: (code) => this.emit('login-code', account.id, normalizeLoginCode(code))
     })
 
-    const session = { bot, antiAfkTimer: null, jumpTimer: null, messageTimers: new Set(), spawnCount: 0 }
+    const session = { bot, antiAfkTimer: null, jumpTimer: null, messageTimers: new Set(), ready: false, joinMessageSent: false }
     this.sessions.set(account.id, session)
     this.status(account.id, 'connecting', `Connecting to ${account.host}…`)
 
-    bot.on('login', () => this.status(account.id, 'connected', 'Authenticated. Joining world…'))
-    bot.on('spawn', () => {
-      session.spawnCount += 1
+    const markReady = () => {
+      if (session.ready || !this.sessions.has(account.id)) return
+      session.ready = true
       this.status(account.id, 'online', `Online as ${bot.username}`)
       if (account.antiAfk !== false) this.enableAntiAfk(account.id, account.antiAfkInterval)
-      const message = session.spawnCount === 1 ? account.joinMessage : account.serverChangeMessage
-      if (message) this.scheduleMessage(account.id, message, account.messageDelay)
+      if (account.joinMessage && !session.joinMessageSent) {
+        session.joinMessageSent = true
+        this.scheduleMessage(account.id, account.joinMessage, account.messageDelay)
+      }
+    }
+
+    bot.on('login', () => {
+      if (!session.ready) this.status(account.id, 'connected', 'Authenticated. Joining world…')
     })
-    bot.on('messagestr', (message) => this.emit('log', account.id, { kind: 'chat', message, at: Date.now() }))
+    bot.on('spawn', markReady)
+    bot.on('forcedMove', markReady)
+    bot.on('respawn', () => {
+      markReady()
+      if (account.serverChangeMessage) this.scheduleMessage(account.id, account.serverChangeMessage, account.messageDelay)
+    })
+    bot.on('messagestr', (message) => {
+      markReady()
+      this.emit('log', account.id, { kind: 'chat', message, at: Date.now() })
+    })
     bot.on('kicked', (reason) => this.emit('log', account.id, { kind: 'error', message: `Kicked: ${formatReason(reason)}`, at: Date.now() }))
     bot.on('error', (error) => this.emit('log', account.id, { kind: 'error', message: error.message, at: Date.now() }))
     bot.on('end', (reason) => {
@@ -93,7 +108,8 @@ class BotManager {
   enableAntiAfk(id, seconds = 45) {
     const session = this.sessions.get(id)
     if (!session) return
-    this.clearTimers(session)
+    if (session.antiAfkTimer) clearInterval(session.antiAfkTimer)
+    if (session.jumpTimer) clearTimeout(session.jumpTimer)
     const interval = Math.max(15, Math.min(Number(seconds) || 45, 3600)) * 1000
     session.antiAfkTimer = setInterval(() => {
       const bot = session.bot
