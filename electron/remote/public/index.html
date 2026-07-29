@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>AFK Desk Remote</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="brand"><span aria-hidden="true">A</span><div><strong>AFK Desk</strong><small>Remote control</small></div></div>
+      <div id="viewer" class="viewer">Connecting…</div>
+    </header>
+    <main>
+      <section id="error-state" class="notice error" hidden role="alert"></section>
+      <section id="empty-state" class="empty" hidden>
+        <h1>No accounts shared</h1>
+        <p>Ask the owner to include at least one account in this access link.</p>
+      </section>
+      <section id="dashboard" hidden>
+        <nav id="accounts" class="tabs" aria-label="Shared accounts"></nav>
+        <div class="account-header">
+          <div><p class="eyebrow">Selected account</p><h1 id="title">Account</h1><p id="server">—</p></div>
+          <button id="connection" class="button primary" type="button">Connect</button>
+        </div>
+        <div id="status" class="status" role="status"><span></span><div><strong>Offline</strong><small>Ready</small></div></div>
+        <div class="layout">
+          <section class="panel console-panel">
+            <header><h2>Console</h2><button id="clear" class="text-button" type="button">Clear locally</button></header>
+            <div id="log" class="log" role="log" aria-live="polite"></div>
+            <form id="chat-form"><label class="sr-only" for="chat">Message or command</label><input id="chat" placeholder="Message or /command" autocomplete="off" /><button type="submit">Send</button></form>
+          </section>
+          <section id="movement" class="panel movement">
+            <header><h2>Movement</h2></header>
+            <div class="keys">
+              <button data-control="forward">W<span>Forward</span></button>
+              <button data-control="left">A<span>Left</span></button>
+              <button data-control="back">S<span>Back</span></button>
+              <button data-control="right">D<span>Right</span></button>
+            </div>
+            <div class="actions">
+              <button data-control="jump" class="button secondary">Jump</button>
+              <button data-look="left" class="button secondary">Look left</button>
+              <button data-look="right" class="button secondary">Look right</button>
+            </div>
+          </section>
+        </div>
+      </section>
+    </main>
+    <div id="toast" class="toast" hidden role="status"></div>
+    <script src="/app.js"></script>
+  </body>
+</html>

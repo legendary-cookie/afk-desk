@@ -54,3 +54,19 @@ test('connects, emits status, sends chat, and disconnects', () => {
   manager.disconnect('one')
   assert.equal(events.at(-1)[2].status, 'offline')
 })
+
+test('sends separate join and server-change messages', async () => {
+  const bot = new FakeBot()
+  const manager = new BotManager({ profilesPath: 'profiles', emit: () => {}, createBot: () => bot })
+  manager.connect({
+    id: 'messages', username: 'user@example.com', host: 'localhost', port: 25565,
+    antiAfk: false, joinMessage: 'joined', serverChangeMessage: '/server survival', messageDelay: 0
+  })
+  bot.entity = { yaw: 0, pitch: 0 }
+  bot.emit('spawn')
+  await new Promise((resolve) => setTimeout(resolve, 5))
+  bot.emit('spawn')
+  await new Promise((resolve) => setTimeout(resolve, 5))
+  assert.deepEqual(bot.messages, ['joined', '/server survival'])
+  manager.disconnect('messages')
+})

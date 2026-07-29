@@ -23,14 +23,17 @@ class BotManager {
       onMsaCode: (code) => this.emit('login-code', account.id, normalizeLoginCode(code))
     })
 
-    const session = { bot, antiAfkTimer: null, jumpTimer: null }
+    const session = { bot, antiAfkTimer: null, jumpTimer: null, messageTimers: new Set(), spawnCount: 0 }
     this.sessions.set(account.id, session)
     this.status(account.id, 'connecting', `Connecting to ${account.host}…`)
 
     bot.on('login', () => this.status(account.id, 'connected', 'Authenticated. Joining world…'))
     bot.on('spawn', () => {
+      session.spawnCount += 1
       this.status(account.id, 'online', `Online as ${bot.username}`)
       if (account.antiAfk !== false) this.enableAntiAfk(account.id, account.antiAfkInterval)
+      const message = session.spawnCount === 1 ? account.joinMessage : account.serverChangeMessage
+      if (message) this.scheduleMessage(account.id, message, account.messageDelay)
     })
     bot.on('messagestr', (message) => this.emit('log', account.id, { kind: 'chat', message, at: Date.now() }))
     bot.on('kicked', (reason) => this.emit('log', account.id, { kind: 'error', message: `Kicked: ${formatReason(reason)}`, at: Date.now() }))
@@ -74,6 +77,19 @@ class BotManager {
     bot.look(bot.entity.yaw + delta, bot.entity.pitch, true)
   }
 
+  scheduleMessage(id, message, delaySeconds = 2) {
+    const session = this.sessions.get(id)
+    if (!session) return
+    const delay = Math.max(0, Math.min(Number(delaySeconds) || 0, 30)) * 1000
+    const timer = setTimeout(() => {
+      session.messageTimers.delete(timer)
+      if (!this.sessions.has(id)) return
+      try { this.sendChat(id, String(message).slice(0, 256)) }
+      catch (error) { this.emit('log', id, { kind: 'error', message: `Automatic message failed: ${error.message}`, at: Date.now() }) }
+    }, delay)
+    session.messageTimers.add(timer)
+  }
+
   enableAntiAfk(id, seconds = 45) {
     const session = this.sessions.get(id)
     if (!session) return
@@ -97,6 +113,8 @@ class BotManager {
   clearTimers(session) {
     if (session.antiAfkTimer) clearInterval(session.antiAfkTimer)
     if (session.jumpTimer) clearTimeout(session.jumpTimer)
+    for (const timer of session.messageTimers || []) clearTimeout(timer)
+    session.messageTimers?.clear()
     session.antiAfkTimer = null
     session.jumpTimer = null
   }

@@ -9,12 +9,15 @@ const state = {
 }
 
 const el = Object.fromEntries([
-  'account-list', 'account-count', 'add-account', 'empty-state', 'dashboard', 'account-title',
+  'account-list', 'account-count', 'add-account', 'browser-access', 'empty-state', 'dashboard', 'account-title',
   'edit-account', 'connection-button', 'status-banner', 'status-name', 'status-detail', 'server-address',
   'detail-username', 'detail-server', 'detail-version', 'detail-antiafk', 'console-log', 'clear-console',
   'chat-form', 'chat-message', 'account-dialog', 'account-form', 'dialog-title', 'account-id', 'label',
-  'username', 'host', 'port', 'version', 'anti-afk', 'anti-afk-interval', 'form-error', 'delete-account',
-  'login-dialog', 'login-code', 'open-login', 'close-login', 'toast-region'
+  'username', 'host', 'port', 'version', 'anti-afk', 'anti-afk-interval', 'join-message', 'server-change-message',
+  'message-delay', 'form-error', 'delete-account', 'login-dialog', 'login-code', 'open-login-private', 'open-login',
+  'close-login', 'remote-dialog', 'close-remote', 'remote-local-url', 'open-dashboard', 'tailscale-command',
+  'enable-tailscale', 'tailscale-result', 'remote-base-url', 'grant-label', 'grant-accounts', 'create-grant', 'generated-link', 'share-link',
+  'copy-share-link', 'grant-list', 'toast-region'
 ].map((id) => [id, document.getElementById(id)]))
 
 async function init() {
@@ -27,6 +30,7 @@ async function init() {
 
 function bindEvents() {
   el['add-account'].addEventListener('click', () => openAccountDialog())
+  el['browser-access'].addEventListener('click', openRemoteDialog)
   document.querySelector('[data-action="add"]').addEventListener('click', () => openAccountDialog())
   el['edit-account'].addEventListener('click', () => openAccountDialog(selectedAccount()))
   el['account-form'].addEventListener('submit', saveAccount)
@@ -44,7 +48,16 @@ function bindEvents() {
     toast('Sign-in code copied.')
   })
   el['open-login'].addEventListener('click', () => run(() => api.openExternal(state.login.url)))
+  el['open-login-private'].addEventListener('click', () => run(() => api.openIsolatedLogin(state.login.accountId, state.login.url, state.login.code)))
   el['close-login'].addEventListener('click', () => el['login-dialog'].close())
+  el['close-remote'].addEventListener('click', () => el['remote-dialog'].close())
+  el['open-dashboard'].addEventListener('click', () => run(() => api.openRemoteDashboard()))
+  el['enable-tailscale'].addEventListener('click', enableTailscale)
+  el['create-grant'].addEventListener('click', createRemoteGrant)
+  el['copy-share-link'].addEventListener('click', async () => {
+    await navigator.clipboard.writeText(el['share-link'].value)
+    toast('Access link copied.')
+  })
 }
 
 function render() {
@@ -132,6 +145,9 @@ function openAccountDialog(account) {
   el.version.value = account?.version || ''
   el['anti-afk'].checked = account?.antiAfk !== false
   el['anti-afk-interval'].value = account?.antiAfkInterval || 45
+  el['join-message'].value = account?.joinMessage || ''
+  el['server-change-message'].value = account?.serverChangeMessage || ''
+  el['message-delay'].value = account?.messageDelay ?? 2
   el['dialog-title'].textContent = account ? 'Edit account' : 'Add account'
   el['delete-account'].hidden = !account
   el['account-dialog'].showModal()
@@ -148,7 +164,10 @@ async function saveAccount(event) {
     port: Number(el.port.value),
     version: el.version.value,
     antiAfk: el['anti-afk'].checked,
-    antiAfkInterval: Number(el['anti-afk-interval'].value)
+    antiAfkInterval: Number(el['anti-afk-interval'].value),
+    joinMessage: el['join-message'].value,
+    serverChangeMessage: el['server-change-message'].value,
+    messageDelay: Number(el['message-delay'].value)
   }
   try {
     const saved = await api.saveAccount(input)
@@ -201,6 +220,7 @@ function handleBotEvent({ type, id, payload }) {
   }
   if (type === 'login-code') {
     state.login = {
+      accountId: id,
       code: payload.code,
       url: payload.verificationUri || 'https://microsoft.com/link'
     }
@@ -208,6 +228,92 @@ function handleBotEvent({ type, id, payload }) {
     if (!el['login-dialog'].open) el['login-dialog'].showModal()
   }
   render()
+}
+
+async function openRemoteDialog() {
+  try {
+    const status = await api.remoteStatus()
+    el['remote-local-url'].textContent = status.localUrl
+    el['tailscale-command'].textContent = `tailscale serve --bg ${status.port}`
+    renderGrantAccounts()
+    await renderGrantList()
+    el['generated-link'].hidden = true
+    el['remote-dialog'].showModal()
+  } catch (error) { toast(cleanError(error), 'error') }
+}
+
+function renderGrantAccounts() {
+  el['grant-accounts'].replaceChildren(...state.accounts.map((account) => {
+    const label = document.createElement('label')
+    const checkbox = document.createElement('input')
+    checkbox.type = 'checkbox'
+    checkbox.value = account.id
+    const text = document.createElement('span')
+    text.textContent = `${account.label} — ${account.host}`
+    label.append(checkbox, text)
+    return label
+  }))
+}
+
+async function createRemoteGrant() {
+  const accountIds = [...el['grant-accounts'].querySelectorAll('input:checked')].map((input) => input.value)
+  const permissions = ['view', ...[...document.querySelectorAll('[data-permission]:checked:not(:disabled)')].map((input) => input.dataset.permission)]
+  try {
+    const created = await api.createRemoteGrant({ label: el['grant-label'].value, accountIds, permissions })
+    const base = el['remote-base-url'].value.trim().replace(/\/$/, '')
+    el['share-link'].value = base ? `${base}${created.sharePath}` : created.localUrl
+    el['generated-link'].hidden = false
+    await renderGrantList()
+    el['share-link'].select()
+  } catch (error) { toast(cleanError(error), 'error') }
+}
+
+async function enableTailscale() {
+  el['enable-tailscale'].disabled = true
+  try {
+    const result = await api.enableTailscale()
+    el['tailscale-result'].textContent = result.output || 'Tailscale browser access is enabled.'
+    el['tailscale-result'].hidden = false
+    if (result.url) el['remote-base-url'].value = result.url
+  } catch (error) {
+    el['tailscale-result'].textContent = `Could not enable Tailscale: ${cleanError(error)}`
+    el['tailscale-result'].hidden = false
+  } finally { el['enable-tailscale'].disabled = false }
+}
+
+async function renderGrantList() {
+  const grants = await api.listRemoteGrants()
+  if (!grants.length) {
+    const empty = document.createElement('div')
+    empty.className = 'grant-empty'
+    empty.textContent = 'No browser access links created yet.'
+    el['grant-list'].replaceChildren(empty)
+    return
+  }
+  el['grant-list'].replaceChildren(...grants.sort((a, b) => b.createdAt - a.createdAt).map((grant) => {
+    const item = document.createElement('div')
+    item.className = `grant-item ${grant.revokedAt ? 'revoked' : ''}`
+    const copy = document.createElement('div')
+    const title = document.createElement('strong')
+    title.textContent = grant.label
+    const detail = document.createElement('span')
+    detail.textContent = `${grant.accountIds.length} account${grant.accountIds.length === 1 ? '' : 's'} · ${grant.permissions.join(', ')}${grant.revokedAt ? ' · revoked' : ''}`
+    copy.append(title, detail)
+    item.append(copy)
+    if (!grant.revokedAt) {
+      const revoke = document.createElement('button')
+      revoke.type = 'button'
+      revoke.className = 'button danger'
+      revoke.textContent = 'Revoke'
+      revoke.addEventListener('click', async () => {
+        await api.revokeRemoteGrant(grant.id)
+        await renderGrantList()
+        toast('Browser access revoked.')
+      })
+      item.append(revoke)
+    }
+    return item
+  }))
 }
 
 function selectedAccount() {

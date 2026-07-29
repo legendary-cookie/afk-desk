@@ -50,6 +50,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .mini-status.online, .status-banner.online .status-dot { background: var(--accent); box-shadow: 0 0 0 3px rgb(96 211 148 / 12%); }
 .mini-status.connecting, .status-banner.connecting .status-dot { background: var(--warning); }
 .sidebar-action { width: 100%; margin-top: 12px; }
+.browser-action { margin-top: 8px; }
 .privacy-note { margin: 12px 6px 0; color: var(--subtle); font-size: 10px; line-height: 1.5; }
 
 .main-content { min-width: 0; padding: 28px 32px; }
@@ -95,7 +96,8 @@ h1, h2, p { margin-top: 0; }
 .log-line.error span { color: #ff9da2; }
 .log-line.sent span { color: #8ee7b5; }
 .chat-form { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 8px; padding: 12px; border-top: 1px solid var(--border); }
-.chat-form input, .field input { width: 100%; min-height: 40px; padding: 0 11px; background: #0c1016; border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); }
+.chat-form input, .field input, .field textarea { width: 100%; min-height: 40px; padding: 0 11px; background: #0c1016; border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); }
+.field textarea { min-height: 60px; padding-block: 10px; resize: vertical; line-height: 1.45; }
 .chat-form input::placeholder, .field input::placeholder { color: var(--subtle); }
 .send-button { min-width: 68px; background: var(--surface-raised); border: 1px solid var(--border); border-radius: var(--radius-sm); font-weight: 700; cursor: pointer; }
 .send-button:disabled { cursor: not-allowed; opacity: .4; }
@@ -115,6 +117,7 @@ h1, h2, p { margin-top: 0; }
 
 dialog { width: min(540px, calc(100vw - 32px)); padding: 0; background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius-md); color: var(--text); box-shadow: var(--shadow); }
 dialog::backdrop { background: rgb(3 5 8 / 78%); backdrop-filter: blur(3px); }
+.wide-dialog { width: min(720px, calc(100vw - 32px)); }
 .dialog-header { display: flex; justify-content: space-between; align-items: flex-start; padding: 20px 20px 14px; border-bottom: 1px solid var(--border); }
 .dialog-header h2 { margin: 0; font-size: 20px; }
 .icon-button { font-size: 25px; line-height: 1; }
@@ -122,6 +125,9 @@ dialog::backdrop { background: rgb(3 5 8 / 78%); backdrop-filter: blur(3px); }
 .field { display: block; }
 .field > span { display: block; margin-bottom: 7px; color: #c8cdd4; font-size: 11px; font-weight: 700; }
 .field small, .toggle-row small { display: block; margin-top: 6px; color: var(--muted); font-size: 10px; line-height: 1.45; }
+.form-section { padding-top: 8px; border-top: 1px solid var(--border); }
+.form-section h3 { margin: 0 0 4px; font-size: 12px; }
+.form-section p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .full { grid-column: 1 / -1; }
 .toggle-row { display: grid; grid-template-columns: auto auto 1fr; gap: 10px; align-items: center; cursor: pointer; }
 .toggle-row > input { position: absolute; opacity: 0; }
@@ -140,7 +146,31 @@ dialog::backdrop { background: rgb(3 5 8 / 78%); backdrop-filter: blur(3px); }
 .login-content p { max-width: 350px; margin: 0 auto 20px; color: var(--muted); line-height: 1.6; }
 .login-code { display: block; width: 100%; margin-bottom: 14px; padding: 15px; background: #0b0f14; border: 1px dashed var(--border-strong); border-radius: var(--radius-sm); color: var(--text); font-family: "Cascadia Code", Consolas, monospace; font-size: 25px; font-weight: 800; letter-spacing: .12em; cursor: pointer; }
 .full-button { width: 100%; }
+.login-secondary { margin-top: 8px; }
 .login-content > .text-button { margin-top: 12px; }
+.remote-body { max-height: min(720px, calc(100vh - 110px)); overflow: auto; padding: 20px; }
+.remote-intro { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: #0c1016; }
+.remote-intro strong, .remote-intro span { display: block; }
+.remote-intro span { margin-top: 4px; color: var(--muted); font: 10px/1.4 "Cascadia Code", Consolas, monospace; }
+.remote-section { padding: 20px 0; border-bottom: 1px solid var(--border); }
+.remote-section:last-child { padding-bottom: 0; border-bottom: 0; }
+.remote-section h3 { margin: 0 0 6px; font-size: 13px; }
+.remote-section > p { margin: 0 0 12px; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.remote-section code { display: block; overflow: auto; margin-bottom: 14px; padding: 11px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: #090c10; color: #a8eac5; font-size: 11px; }
+.remote-section > .field { margin-top: 14px; }
+.inline-result { margin: 10px 0 0 !important; padding: 9px; border: 1px solid rgb(96 211 148 / 25%); border-radius: var(--radius-sm); background: rgb(96 211 148 / 5%); color: #a8eac5 !important; overflow-wrap: anywhere; }
+fieldset { margin: 14px 0; padding: 0; border: 0; }
+legend { margin-bottom: 8px; color: #c8cdd4; font-size: 11px; font-weight: 700; }
+.check-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+.check-grid label { display: flex; align-items: flex-start; gap: 8px; min-height: 36px; padding: 9px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: #0c1016; font-size: 11px; line-height: 1.35; }
+.check-grid input { accent-color: var(--accent-strong); }
+.generated-link { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: end; margin-top: 14px; padding: 13px; border: 1px solid rgb(96 211 148 / 32%); border-radius: var(--radius-sm); background: rgb(96 211 148 / 5%); }
+.grant-list { display: grid; gap: 8px; }
+.grant-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 11px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.grant-item strong, .grant-item span { display: block; }
+.grant-item span { margin-top: 4px; color: var(--muted); font-size: 10px; }
+.grant-item.revoked { opacity: .5; }
+.grant-empty { color: var(--muted); font-size: 11px; }
 .toast-region { position: fixed; right: 20px; bottom: 20px; display: grid; gap: 8px; z-index: 20; }
 .toast { max-width: 360px; padding: 11px 14px; background: var(--surface-raised); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); box-shadow: var(--shadow); font-size: 12px; }
 .toast.error { border-color: rgb(241 110 116 / 45%); }
@@ -161,4 +191,6 @@ dialog::backdrop { background: rgb(3 5 8 / 78%); backdrop-filter: blur(3px); }
   .main-content { padding: 18px 14px; }
   .topbar { align-items: center; }
   .controls-column { grid-template-columns: 1fr; }
+  .check-grid { grid-template-columns: 1fr; }
+  .generated-link { grid-template-columns: 1fr; }
 }

@@ -1,12 +1,20 @@
 const { app, BrowserWindow, ipcMain, shell } = require('electron')
 const path = require('node:path')
 const crypto = require('node:crypto')
+const { execFile } = require('node:child_process')
+const { promisify } = require('node:util')
 const { AccountStore } = require('./store.cjs')
 const { BotManager } = require('./bot-manager.cjs')
+const { AccessStore } = require('./remote/access-store.cjs')
+const { RemoteAccessServer } = require('./remote/server.cjs')
+const execFileAsync = promisify(execFile)
 
 let mainWindow
 let store
 let bots
+let accessStore
+let remoteAccess
+const runtime = new Map()
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -27,12 +35,20 @@ function createWindow() {
   mainWindow.loadFile(path.join(__dirname, '..', 'src', 'index.html'))
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   store = new AccountStore(app.getPath('userData'))
+  accessStore = new AccessStore(app.getPath('userData'))
   bots = new BotManager({
     profilesPath: path.join(app.getPath('userData'), 'profiles'),
-    emit: (type, id, payload) => mainWindow?.webContents.send('bot:event', { type, id, payload })
+    emit: emitBotEvent
   })
+  remoteAccess = new RemoteAccessServer({
+    accessStore,
+    getAccounts: () => store.list(),
+    getRuntime: getRuntime,
+    handleAction: handleRemoteAction
+  })
+  await remoteAccess.start()
   registerIpc()
   createWindow()
 })
@@ -43,6 +59,7 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   for (const account of store?.list() || []) bots?.disconnect(account.id)
+  remoteAccess?.stop()
 })
 
 function registerIpc() {
@@ -60,11 +77,90 @@ function registerIpc() {
   ipcMain.handle('bot:chat', (_event, { id, message }) => bots.sendChat(id, message))
   ipcMain.handle('bot:control', (_event, { id, control, duration }) => bots.control(id, control, duration))
   ipcMain.handle('bot:look', (_event, { id, direction }) => bots.look(id, direction))
+  ipcMain.handle('auth:open-isolated', (_event, { id, url, code }) => openIsolatedLogin(id, url, code))
+  ipcMain.handle('remote:status', () => remoteAccess.status())
+  ipcMain.handle('remote:open-owner', () => shell.openExternal(remoteAccess.ownerUrl()))
+  ipcMain.handle('remote:enable-tailscale', async () => {
+    const { stdout, stderr } = await execFileAsync('tailscale', ['serve', '--bg', String(remoteAccess.port)], { timeout: 20_000, windowsHide: true })
+    const output = `${stdout || ''}\n${stderr || ''}`.trim()
+    const url = output.match(/https:\/\/[^\s]+/)?.[0]?.replace(/[.,]$/, '') || ''
+    return { output: output.slice(0, 1000), url }
+  })
+  ipcMain.handle('remote:list-grants', () => accessStore.publicList())
+  ipcMain.handle('remote:create-grant', (_event, input) => {
+    const created = remoteAccess.createGrant(input || {})
+    return {
+      grant: created.grant,
+      localUrl: `${remoteAccess.status().localUrl}/session?token=${encodeURIComponent(created.token)}`,
+      sharePath: `/session?token=${encodeURIComponent(created.token)}`
+    }
+  })
+  ipcMain.handle('remote:revoke-grant', (_event, id) => accessStore.revoke(String(id)))
   ipcMain.handle('system:open-external', (_event, url) => {
     const parsed = new URL(url)
     if (!['https:', 'http:'].includes(parsed.protocol)) throw new Error('Unsupported link.')
     return shell.openExternal(parsed.toString())
   })
+}
+
+function openIsolatedLogin(id, rawUrl, code) {
+  requireAccount(id)
+  const supplied = new URL(rawUrl || 'https://microsoft.com/link')
+  if (supplied.protocol !== 'https:') throw new Error('Microsoft sign-in must use HTTPS.')
+  const loginUrl = new URL('https://microsoft.com/link')
+  if (code) loginUrl.searchParams.set('otc', String(code).slice(0, 32))
+  const authWindow = new BrowserWindow({
+    width: 560,
+    height: 760,
+    minWidth: 420,
+    minHeight: 560,
+    parent: mainWindow,
+    title: 'Microsoft sign-in — AFK Desk',
+    autoHideMenuBar: true,
+    webPreferences: {
+      partition: `afkdesk-auth-${id}-${Date.now()}`,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+      devTools: false
+    }
+  })
+  authWindow.webContents.setWindowOpenHandler(({ url }) => {
+    try {
+      const target = new URL(url)
+      if (target.protocol === 'https:') authWindow.loadURL(target.toString())
+    } catch {}
+    return { action: 'deny' }
+  })
+  authWindow.webContents.on('will-navigate', (event, url) => {
+    try {
+      if (new URL(url).protocol !== 'https:') event.preventDefault()
+    } catch { event.preventDefault() }
+  })
+  const isolatedSession = authWindow.webContents.session
+  authWindow.on('closed', () => isolatedSession.clearStorageData().catch(() => {}))
+  return authWindow.loadURL(loginUrl.toString())
+}
+
+function emitBotEvent(type, id, payload) {
+  const current = getRuntime(id)
+  if (type === 'status') runtime.set(id, { ...current, status: payload.status, detail: payload.detail })
+  if (type === 'log') runtime.set(id, { ...current, logs: [...current.logs.slice(-499), payload] })
+  mainWindow?.webContents.send('bot:event', { type, id, payload })
+}
+
+function getRuntime(id) {
+  return runtime.get(id) || { status: 'offline', detail: 'Ready to connect', logs: [] }
+}
+
+function handleRemoteAction(id, action, payload) {
+  if (action === 'connect') return bots.connect(requireAccount(id))
+  if (action === 'disconnect') return bots.disconnect(id)
+  if (action === 'chat') return bots.sendChat(id, payload.message)
+  if (action === 'control') return bots.control(id, payload.control, payload.duration)
+  if (action === 'look') return bots.look(id, payload.direction)
+  throw new Error('Unknown remote action.')
 }
 
 function requireAccount(id) {
@@ -88,6 +184,9 @@ function validateAccount(input) {
     port,
     version: String(input?.version || '').trim(),
     antiAfk: input?.antiAfk !== false,
-    antiAfkInterval: Math.max(15, Math.min(Number(input?.antiAfkInterval) || 45, 3600))
+    antiAfkInterval: Math.max(15, Math.min(Number(input?.antiAfkInterval) || 45, 3600)),
+    joinMessage: String(input?.joinMessage || '').trim().slice(0, 256),
+    serverChangeMessage: String(input?.serverChangeMessage || '').trim().slice(0, 256),
+    messageDelay: Math.max(0, Math.min(Number(input?.messageDelay) || 2, 30))
   }
 }
