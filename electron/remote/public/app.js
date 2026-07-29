@@ -40,9 +40,9 @@ function render() {
   elements.status.className = `status ${account.status}`
   elements.status.querySelector('strong').textContent = account.status
   elements.status.querySelector('small').textContent = account.detail
-  const active = ['online','connecting','connected'].includes(account.status)
+  const active = ['online','connecting','connected','reconnecting'].includes(account.status)
   const canInteract = ['online','connected'].includes(account.status)
-  elements.connection.textContent = active ? 'Disconnect' : 'Connect'
+  elements.connection.textContent = account.status === 'reconnecting' ? 'Cancel reconnect' : active ? 'Disconnect' : 'Connect'
   elements.connection.disabled = !permissions.has('connect')
   elements.chat.disabled = !permissions.has('chat') || !canInteract
   elements['chat-form'].querySelector('button').disabled = elements.chat.disabled
@@ -84,7 +84,7 @@ async function action(name, payload = {}) {
   await refresh()
 }
 
-elements.connection.addEventListener('click', () => run(() => action(['online','connecting','connected'].includes(current().status) ? 'disconnect' : 'connect')))
+elements.connection.addEventListener('click', () => run(() => action(['online','connecting','connected','reconnecting'].includes(current().status) ? 'disconnect' : 'connect')))
 elements['chat-form'].addEventListener('submit', (event) => {
   event.preventDefault()
   const message = elements.chat.value.trim()

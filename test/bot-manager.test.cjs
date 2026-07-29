@@ -12,7 +12,8 @@ class FakeBot extends EventEmitter {
     this.controls = []
     this.messages = []
     this.writes = []
-    this._client = { write: (name, payload) => this.writes.push([name, payload]) }
+    this._client = new EventEmitter()
+    this._client.write = (name, payload) => this.writes.push([name, payload])
   }
   chat(message) { this.messages.push(message) }
   setControlState(control, value) { this.controls.push([control, value]) }
@@ -42,7 +43,7 @@ test('connects, emits status, sends chat, and disconnects', () => {
     emit: (...event) => events.push(event),
     createBot: (input) => { options = input; return bot }
   })
-  const account = { id: 'one', username: 'user@example.com', host: 'localhost', port: 25565, antiAfk: false }
+  const account = { id: 'one', username: 'user@example.com', host: 'localhost', port: 25565, antiAfk: false, autoReconnect: false }
 
   manager.connect(account)
   assert.equal(options.auth, 'microsoft')
@@ -64,7 +65,7 @@ test('sends separate join and server-change messages', async () => {
   const manager = new BotManager({ profilesPath: 'profiles', emit: () => {}, createBot: () => bot })
   manager.connect({
     id: 'messages', username: 'user@example.com', host: 'localhost', port: 25565,
-    antiAfk: false, joinMessage: 'joined', serverChangeMessage: '/server survival', messageDelay: 0
+    antiAfk: false, autoReconnect: false, joinMessage: 'joined', serverChangeMessage: '/server survival', messageDelay: 0
   })
   bot.entity = { yaw: 0, pitch: 0 }
   bot.emit('spawn')
@@ -80,7 +81,7 @@ test('live chat marks a session online and a late login event cannot downgrade i
   const events = []
   const bot = new FakeBot()
   const manager = new BotManager({ profilesPath: 'profiles', emit: (...event) => events.push(event), createBot: () => bot })
-  manager.connect({ id: 'ordering', username: 'user@example.com', host: 'localhost', port: 25565, antiAfk: false })
+  manager.connect({ id: 'ordering', username: 'user@example.com', host: 'localhost', port: 25565, antiAfk: false, autoReconnect: false })
   bot.entity = { yaw: 0, pitch: 0 }
   bot.emit('messagestr', 'Welcome')
   bot.emit('login')
@@ -96,7 +97,7 @@ test('live chat marks a session online and a late login event cannot downgrade i
 test('uses the unsigned command packet for modern proxy-switch commands', () => {
   const bot = new FakeBot()
   const manager = new BotManager({ profilesPath: 'profiles', emit: () => {}, createBot: () => bot })
-  manager.connect({ id: 'proxy', username: 'user@example.com', host: 'localhost', port: 25565, antiAfk: false })
+  manager.connect({ id: 'proxy', username: 'user@example.com', host: 'localhost', port: 25565, antiAfk: false, autoReconnect: false })
   bot.entity = { yaw: 0, pitch: 0 }
   manager.sendChat('proxy', '/server towny')
   assert.deepEqual(bot.writes, [['chat_command', { command: 'server towny' }]])
@@ -109,4 +110,59 @@ test('uses the unsigned command packet for modern proxy-switch commands', () => 
 test('converts 1.21.11 checksums to signed i8 and formats component kick reasons', () => {
   assert.equal(computeSignedChatChecksum([{ signature: Buffer.from([255, 255]) }]), -64)
   assert.equal(extractText({ type: 'compound', value: { color: { type: 'string', value: 'red' }, text: { type: 'string', value: 'An internal error occurred.' } } }), 'An internal error occurred.')
+})
+
+test('resends client settings when Velocity switches backend servers', () => {
+  const events = []
+  const bot = new FakeBot()
+  const manager = new BotManager({ profilesPath: 'profiles', emit: (...event) => events.push(event), createBot: () => bot })
+  manager.connect({ id: 'velocity', username: 'user@example.com', host: 'localhost', port: 25565, antiAfk: false, autoReconnect: false })
+
+  bot._client.emit('start_configuration')
+
+  assert.deepEqual(bot.writes.at(-1), ['settings', {
+    locale: 'en_us',
+    viewDistance: 10,
+    chatFlags: 0,
+    chatColors: true,
+    skinParts: 127,
+    mainHand: 1,
+    enableTextFiltering: false,
+    enableServerListing: true,
+    particleStatus: 'all'
+  }])
+  assert.equal(events.at(-1)[2].detail, 'Switching servers…')
+  manager.disconnect('velocity')
+})
+
+test('automatically reconnects after a kick and manual disconnect cancels retries', () => {
+  const events = []
+  const bots = [new FakeBot(), new FakeBot()]
+  let created = 0
+  let scheduled
+  const cleared = []
+  const manager = new BotManager({
+    profilesPath: 'profiles',
+    emit: (...event) => events.push(event),
+    createBot: () => bots[created++],
+    scheduleReconnectTimer: (callback, delay) => { scheduled = { callback, delay }; return 'retry-timer' },
+    clearReconnectTimer: (timer) => cleared.push(timer)
+  })
+  const account = {
+    id: 'retry', username: 'user@example.com', host: 'localhost', port: 25565,
+    antiAfk: false, autoReconnect: true, autoReconnectDelay: 5, autoReconnectMaxAttempts: 3
+  }
+
+  manager.connect(account)
+  bots[0].emit('kicked', 'Temporary failure')
+  bots[0].emit('end', 'socketClosed')
+  assert.equal(scheduled.delay, 5000)
+  assert.equal(events.at(-1)[2].status, 'reconnecting')
+
+  scheduled.callback()
+  assert.equal(created, 2)
+  assert.equal(events.at(-1)[2].detail, 'Reconnect attempt 1…')
+  manager.disconnect('retry')
+  assert.equal(events.at(-1)[2].status, 'offline')
+  assert.deepEqual(cleared, [])
 })

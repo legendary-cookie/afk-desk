@@ -10,7 +10,9 @@ AFK Desk is a local-first desktop client for keeping Minecraft Java accounts con
 - Server console and chat commands
 - Quick movement controls
 - Configurable anti-AFK movement
+- Configurable automatic reconnect with exponential backoff
 - Separate automatic messages for initial join and later server/world changes
+- Velocity proxy server-switch compatibility for modern Minecraft versions
 - Fresh, isolated Microsoft sign-in window for each account
 - Mobile-friendly browser dashboard
 - Revocable browser links scoped to selected accounts and permissions

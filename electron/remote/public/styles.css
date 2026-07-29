@@ -27,7 +27,7 @@ main { width:min(1180px,calc(100% - 32px)); margin:0 auto; padding:28px 0; }
 .status { display:flex; align-items:center; gap:10px; min-height:52px; margin-bottom:16px; padding:10px 14px; border:1px solid var(--border); border-radius:7px; background:var(--surface); }
 .status>span { width:8px; height:8px; border-radius:50%; background:#647080; }
 .status.online>span { background:var(--accent); box-shadow:0 0 0 3px rgb(96 211 148 / 12%); }
-.status.connecting>span,.status.connected>span { background:#f6c85f; }
+.status.connecting>span,.status.connected>span,.status.reconnecting>span { background:#f6c85f; }
 .status strong,.status small { display:block; }
 .status small { margin-top:2px; color:var(--muted); font-size:10px; }
 .layout { display:grid; grid-template-columns:minmax(0,1fr) 290px; gap:16px; }

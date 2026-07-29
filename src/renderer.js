@@ -13,7 +13,7 @@ const el = Object.fromEntries([
   'edit-account', 'connection-button', 'status-banner', 'status-name', 'status-detail', 'server-address',
   'detail-username', 'detail-server', 'detail-version', 'detail-antiafk', 'console-log', 'clear-console',
   'chat-form', 'chat-message', 'account-dialog', 'account-form', 'dialog-title', 'account-id', 'label',
-  'username', 'host', 'port', 'version', 'anti-afk', 'anti-afk-interval', 'join-message', 'server-change-message',
+  'username', 'host', 'port', 'version', 'anti-afk', 'anti-afk-interval', 'auto-reconnect', 'auto-reconnect-delay', 'auto-reconnect-max', 'join-message', 'server-change-message',
   'message-delay', 'form-error', 'delete-account', 'login-dialog', 'login-code', 'open-login-private', 'open-login',
   'close-login', 'remote-dialog', 'close-remote', 'remote-local-url', 'open-dashboard', 'tailscale-command',
   'enable-tailscale', 'tailscale-result', 'remote-base-url', 'grant-label', 'grant-accounts', 'create-grant', 'generated-link', 'share-link',
@@ -101,11 +101,11 @@ function renderAccountList() {
 function renderStatus({ status, detail }) {
   const online = status === 'online'
   const canInteract = online || status === 'connected'
-  const active = online || status === 'connecting' || status === 'connected'
-  el['status-banner'].className = `status-banner ${status === 'connected' ? 'connecting' : status}`
+  const active = online || status === 'connecting' || status === 'connected' || status === 'reconnecting'
+  el['status-banner'].className = `status-banner ${['connected', 'reconnecting'].includes(status) ? 'connecting' : status}`
   el['status-name'].textContent = status
   el['status-detail'].textContent = detail
-  el['connection-button'].textContent = active ? 'Disconnect' : 'Connect'
+  el['connection-button'].textContent = status === 'reconnecting' ? 'Cancel reconnect' : active ? 'Disconnect' : 'Connect'
   el['connection-button'].className = `button ${active ? 'secondary' : 'primary'}`
   el['chat-message'].disabled = !canInteract
   el['chat-form'].querySelector('button').disabled = !canInteract
@@ -146,6 +146,9 @@ function openAccountDialog(account) {
   el.version.value = account?.version || ''
   el['anti-afk'].checked = account?.antiAfk !== false
   el['anti-afk-interval'].value = account?.antiAfkInterval || 45
+  el['auto-reconnect'].checked = account?.autoReconnect !== false
+  el['auto-reconnect-delay'].value = account?.autoReconnectDelay || 5
+  el['auto-reconnect-max'].value = account?.autoReconnectMaxAttempts ?? 0
   el['join-message'].value = account?.joinMessage || ''
   el['server-change-message'].value = account?.serverChangeMessage || ''
   el['message-delay'].value = account?.messageDelay ?? 2
@@ -166,6 +169,9 @@ async function saveAccount(event) {
     version: el.version.value,
     antiAfk: el['anti-afk'].checked,
     antiAfkInterval: Number(el['anti-afk-interval'].value),
+    autoReconnect: el['auto-reconnect'].checked,
+    autoReconnectDelay: Number(el['auto-reconnect-delay'].value),
+    autoReconnectMaxAttempts: Number(el['auto-reconnect-max'].value),
     joinMessage: el['join-message'].value,
     serverChangeMessage: el['server-change-message'].value,
     messageDelay: Number(el['message-delay'].value)
@@ -202,7 +208,7 @@ async function toggleConnection() {
   const account = selectedAccount()
   if (!account) return
   const status = getStatus(account.id).status
-  await run(() => ['online', 'connecting', 'connected'].includes(status) ? api.disconnect(account.id) : api.connect(account.id))
+  await run(() => ['online', 'connecting', 'connected', 'reconnecting'].includes(status) ? api.disconnect(account.id) : api.connect(account.id))
 }
 
 async function sendChat(event) {

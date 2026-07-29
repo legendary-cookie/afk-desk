@@ -48,7 +48,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .account-copy span { margin-top: 3px; color: var(--muted); font-size: 11px; }
 .mini-status, .status-dot { width: 8px; height: 8px; background: var(--subtle); border-radius: 50%; }
 .mini-status.online, .status-banner.online .status-dot { background: var(--accent); box-shadow: 0 0 0 3px rgb(96 211 148 / 12%); }
-.mini-status.connecting, .status-banner.connecting .status-dot { background: var(--warning); }
+.mini-status.connecting, .mini-status.connected, .mini-status.reconnecting, .status-banner.connecting .status-dot { background: var(--warning); }
 .sidebar-action { width: 100%; margin-top: 12px; }
 .browser-action { margin-top: 8px; }
 .privacy-note { margin: 12px 6px 0; color: var(--subtle); font-size: 10px; line-height: 1.5; }

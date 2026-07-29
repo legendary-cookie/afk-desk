@@ -6,15 +6,24 @@ const mineflayer = require('mineflayer')
 const PROXY_COMMANDS = new Set(['server', 'hub', 'lobby', 'switch'])
 
 class BotManager {
-  constructor({ profilesPath, emit, createBot = mineflayer.createBot }) {
+  constructor({ profilesPath, emit, createBot = mineflayer.createBot, scheduleReconnectTimer = setTimeout, clearReconnectTimer = clearTimeout }) {
     this.profilesPath = profilesPath
     this.emit = emit
     this.createBot = createBot
+    this.scheduleReconnectTimer = scheduleReconnectTimer
+    this.clearReconnectTimer = clearReconnectTimer
     this.sessions = new Map()
+    this.reconnects = new Map()
   }
 
-  connect(account) {
+  connect(account, { reconnecting = false } = {}) {
     if (this.sessions.has(account.id)) throw new Error('This account is already connecting or online.')
+    const reconnectState = this.reconnects.get(account.id) || { attempts: 0, timer: null, manual: false }
+    if (reconnectState.timer) this.clearReconnectTimer(reconnectState.timer)
+    reconnectState.timer = null
+    reconnectState.manual = false
+    reconnectState.account = account
+    this.reconnects.set(account.id, reconnectState)
 
     const bot = this.createBot({
       host: account.host,
@@ -29,11 +38,27 @@ class BotManager {
 
     const session = { bot, antiAfkTimer: null, jumpTimer: null, messageTimers: new Set(), ready: false, joinMessageSent: false }
     this.sessions.set(account.id, session)
-    this.status(account.id, 'connecting', `Connecting to ${account.host}…`)
+    this.status(account.id, 'connecting', reconnecting ? `Reconnect attempt ${reconnectState.attempts}…` : `Connecting to ${account.host}…`)
+
+    bot._client?.on?.('start_configuration', () => {
+      bot._client.write('settings', {
+        locale: 'en_us',
+        viewDistance: 10,
+        chatFlags: 0,
+        chatColors: true,
+        skinParts: 127,
+        mainHand: 1,
+        enableTextFiltering: false,
+        enableServerListing: true,
+        particleStatus: 'all'
+      })
+      this.status(account.id, 'connected', 'Switching servers…')
+    })
 
     const markReady = () => {
       if (session.ready || !this.sessions.has(account.id)) return
       session.ready = true
+      reconnectState.attempts = 0
       this.status(account.id, 'online', `Online as ${bot.username}`)
       if (account.antiAfk !== false) this.enableAntiAfk(account.id, account.antiAfkInterval)
       if (account.joinMessage && !session.joinMessageSent) {
@@ -55,21 +80,64 @@ class BotManager {
       markReady()
       this.emit('log', account.id, { kind: 'chat', message, at: Date.now() })
     })
-    bot.on('kicked', (reason) => this.emit('log', account.id, { kind: 'error', message: `Kicked: ${formatReason(reason)}`, at: Date.now() }))
+    bot.on('kicked', (reason) => {
+      session.lastKickReason = formatReason(reason)
+      this.emit('log', account.id, { kind: 'error', message: `Kicked: ${session.lastKickReason}`, at: Date.now() })
+    })
     bot.on('error', (error) => this.emit('log', account.id, { kind: 'error', message: error.message, at: Date.now() }))
     bot.on('end', (reason) => {
       this.clearSession(account.id)
-      this.status(account.id, 'offline', reason ? `Disconnected: ${reason}` : 'Disconnected')
+      if (account.autoReconnect !== false && !reconnectState.manual) {
+        this.scheduleReconnect(account, session.lastKickReason || reason)
+      } else {
+        this.reconnects.delete(account.id)
+        this.status(account.id, 'offline', reason ? `Disconnected: ${reason}` : 'Disconnected')
+      }
     })
   }
 
   disconnect(id) {
+    const reconnectState = this.reconnects.get(id)
+    if (reconnectState) {
+      reconnectState.manual = true
+      if (reconnectState.timer) this.clearReconnectTimer(reconnectState.timer)
+      this.reconnects.delete(id)
+    }
     const session = this.sessions.get(id)
-    if (!session) return
+    if (!session) {
+      this.status(id, 'offline', 'Disconnected')
+      return
+    }
     this.clearTimers(session)
     session.bot.quit('Disconnected from AFK Desk')
     this.sessions.delete(id)
     this.status(id, 'offline', 'Disconnected')
+  }
+
+  scheduleReconnect(account, reason) {
+    const state = this.reconnects.get(account.id) || { attempts: 0, timer: null, manual: false, account }
+    state.attempts += 1
+    const maximum = Math.max(0, Number(account.autoReconnectMaxAttempts) || 0)
+    if (maximum > 0 && state.attempts > maximum) {
+      this.reconnects.delete(account.id)
+      this.status(account.id, 'offline', `Auto-reconnect stopped after ${maximum} attempts.`)
+      return
+    }
+    const base = Math.max(1, Math.min(Number(account.autoReconnectDelay) || 5, 300))
+    const delay = Math.min(base * (2 ** Math.min(state.attempts - 1, 6)), 300)
+    state.manual = false
+    state.account = account
+    this.status(account.id, 'reconnecting', `Disconnected${reason ? `: ${String(reason).slice(0, 90)}` : ''}. Retrying in ${delay}s…`)
+    state.timer = this.scheduleReconnectTimer(() => {
+      state.timer = null
+      if (state.manual || this.sessions.has(account.id)) return
+      try { this.connect(state.account, { reconnecting: true }) }
+      catch (error) {
+        this.emit('log', account.id, { kind: 'error', message: `Reconnect failed: ${error.message}`, at: Date.now() })
+        this.scheduleReconnect(state.account, error.message)
+      }
+    }, delay * 1000)
+    this.reconnects.set(account.id, state)
   }
 
   sendChat(id, message) {

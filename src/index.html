@@ -129,6 +129,13 @@
             <span><strong>Enable anti-AFK</strong><small>Occasionally jumps and turns to keep the connection active.</small></span>
           </label>
           <label class="field full"><span>Anti-AFK interval (seconds)</span><input id="anti-afk-interval" type="number" min="15" max="3600" value="45" /></label>
+          <label class="toggle-row full">
+            <input id="auto-reconnect" type="checkbox" checked />
+            <span class="toggle" aria-hidden="true"></span>
+            <span><strong>Auto reconnect</strong><small>Reconnect after kicks or connection loss, with an increasing delay between attempts.</small></span>
+          </label>
+          <label class="field"><span>First retry (seconds)</span><input id="auto-reconnect-delay" type="number" min="1" max="300" value="5" /></label>
+          <label class="field"><span>Maximum retries</span><input id="auto-reconnect-max" type="number" min="0" max="1000" value="0" /><small>Use 0 to keep retrying.</small></label>
           <div class="form-section full">
             <h3>Automatic messages</h3>
             <p>Send a chat message or command when this account joins or changes server/world.</p>

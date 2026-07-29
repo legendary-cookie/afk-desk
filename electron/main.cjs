@@ -185,6 +185,9 @@ function validateAccount(input) {
     version: String(input?.version || '').trim(),
     antiAfk: input?.antiAfk !== false,
     antiAfkInterval: Math.max(15, Math.min(Number(input?.antiAfkInterval) || 45, 3600)),
+    autoReconnect: input?.autoReconnect !== false,
+    autoReconnectDelay: Math.max(1, Math.min(Number(input?.autoReconnectDelay) || 5, 300)),
+    autoReconnectMaxAttempts: Math.max(0, Math.min(Number(input?.autoReconnectMaxAttempts) || 0, 1000)),
     joinMessage: String(input?.joinMessage || '').trim().slice(0, 256),
     serverChangeMessage: String(input?.serverChangeMessage || '').trim().slice(0, 256),
     messageDelay: Math.max(0, Math.min(Number(input?.messageDelay) || 2, 30))
