@@ -1,6 +1,6 @@
 {
   "name": "afkdesk",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "A simple, local-first Minecraft AFK desktop client",
   "main": "electron/main.cjs",
   "author": "AFK Desk contributors",
@@ -11,7 +11,8 @@
     "dist": "electron-builder --win nsis"
   },
   "dependencies": {
-    "mineflayer": "^4.32.0"
+    "mineflayer": "^4.32.0",
+    "socks": "^2.8.9"
   },
   "devDependencies": {
     "electron": "^37.2.4",

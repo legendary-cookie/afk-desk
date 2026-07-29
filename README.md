@@ -10,6 +10,12 @@ AFK Desk is a local-first desktop client for keeping Minecraft Java accounts con
 - Server console and chat commands
 - Minecraft chat colors and text formatting
 - Authenticated player-head avatars using official Minecraft textures
+- Automatic IGN detection from the authenticated Minecraft profile
+- Persistent account ordering with drag-and-drop and keyboard-accessible controls
+- Per-account SOCKS5 and HTTP CONNECT proxies with Windows-encrypted passwords
+- Optional Windows sign-in startup and per-account automatic connection
+- Live HP, hunger, coordinates, dimension, and inventory views
+- Change-only player-state updates and reduced chunk distance for lower resource use
 - Quick movement controls
 - Configurable anti-AFK movement
 - Configurable automatic reconnect with exponential backoff
@@ -19,7 +25,7 @@ AFK Desk is a local-first desktop client for keeping Minecraft Java accounts con
 - Mobile-friendly browser dashboard
 - Revocable browser links scoped to selected accounts and permissions
 - Microsoft tokens cached locally by Prismarine authentication
-- No subscriptions, telemetry, or account-count limits
+- No subscriptions, analytics, or account-count limits
 
 ## Run from source
 
@@ -31,6 +37,8 @@ npm start
 ```
 
 When connecting an account for the first time, AFK Desk displays a Microsoft device code. Open the sign-in page, enter the code, and approve access. AFK Desk never requests or stores your Microsoft password.
+
+Optional proxy passwords are encrypted with Electron safe storage, backed by Windows credential protection. They are never returned to the desktop renderer or browser dashboard.
 
 Use **Sign in with a different account** to open a fresh in-app Microsoft window with no cookies from your normal browser. This makes choosing a different Microsoft account predictable.
 

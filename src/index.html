@@ -28,6 +28,7 @@
           <span aria-hidden="true">＋</span> Add account
         </button>
         <button id="browser-access" class="button secondary sidebar-action browser-action" type="button">Browser access</button>
+        <button id="open-settings" class="button secondary sidebar-action browser-action" type="button">Settings</button>
         <p class="privacy-note">Credentials stay in Microsoft’s sign-in flow. AFK Desk never stores your password.</p>
       </aside>
 
@@ -85,6 +86,10 @@
                   <div><dt>Server</dt><dd id="detail-server">—</dd></div>
                   <div><dt>Version</dt><dd id="detail-version">Auto-detect</dd></div>
                   <div><dt>Anti-AFK</dt><dd id="detail-antiafk">Every 45 seconds</dd></div>
+                  <div><dt>HP</dt><dd id="detail-health">—</dd></div>
+                  <div><dt>Hunger</dt><dd id="detail-hunger">—</dd></div>
+                  <div><dt>Coordinates</dt><dd id="detail-coordinates">—</dd></div>
+                  <div><dt>Dimension</dt><dd id="detail-dimension">—</dd></div>
                 </dl>
               </section>
 
@@ -106,6 +111,10 @@
               </section>
             </aside>
           </div>
+          <section class="panel inventory-panel" aria-labelledby="inventory-title">
+            <header class="panel-header"><div><h2 id="inventory-title">Inventory</h2><p id="inventory-count">Connect to view items</p></div></header>
+            <div id="inventory-grid" class="inventory-grid"><div class="inventory-empty">Inventory will appear while this account is online.</div></div>
+          </section>
         </section>
       </main>
     </div>
@@ -114,15 +123,37 @@
       <form id="account-form" method="dialog">
         <header class="dialog-header">
           <div><div class="eyebrow">Connection profile</div><h2 id="dialog-title">Add account</h2></div>
-          <button class="icon-button" value="cancel" aria-label="Close">×</button>
+          <button class="icon-button" value="cancel" formnovalidate aria-label="Close">×</button>
         </header>
         <input id="account-id" type="hidden" />
         <div class="form-grid">
-          <label class="field full"><span>Display name</span><input id="label" maxlength="50" placeholder="Main account" /></label>
+          <label class="field full"><span>Minecraft username</span><input id="label" maxlength="16" readonly placeholder="Detected after connecting" /><small>Filled automatically from the authenticated Minecraft account.</small></label>
           <label class="field full"><span>Microsoft account email</span><input id="username" type="email" required autocomplete="username" placeholder="name@example.com" /></label>
           <label class="field server-field"><span>Server address</span><input id="host" required placeholder="play.example.com" /></label>
           <label class="field port-field"><span>Port</span><input id="port" type="number" min="1" max="65535" value="25565" required /></label>
           <label class="field full"><span>Minecraft version</span><input id="version" placeholder="Auto-detect (recommended)" /><small>Leave blank unless the server needs a specific version.</small></label>
+          <label class="toggle-row full">
+            <input id="connect-on-startup" type="checkbox" />
+            <span class="toggle" aria-hidden="true"></span>
+            <span><strong>Connect when AFK Desk starts</strong><small>Automatically joins this account after the desktop app opens.</small></span>
+          </label>
+          <div class="form-section full">
+            <h3>Proxy</h3>
+            <p>Optionally route only this Minecraft account through a SOCKS5 or HTTP CONNECT proxy.</p>
+          </div>
+          <label class="toggle-row full">
+            <input id="proxy-enabled" type="checkbox" />
+            <span class="toggle" aria-hidden="true"></span>
+            <span><strong>Use a proxy for this account</strong><small>Microsoft sign-in remains direct; the Minecraft server connection uses the proxy.</small></span>
+          </label>
+          <div id="proxy-fields" class="proxy-grid full">
+            <label class="field"><span>Proxy type</span><select id="proxy-type"><option value="socks5">SOCKS5</option><option value="http">HTTP CONNECT</option></select></label>
+            <label class="field"><span>Proxy port</span><input id="proxy-port" type="number" min="1" max="65535" value="1080" /></label>
+            <label class="field full"><span>Proxy host</span><input id="proxy-host" maxlength="255" placeholder="proxy.example.com" /></label>
+            <label class="field"><span>Username (optional)</span><input id="proxy-username" maxlength="128" autocomplete="off" /></label>
+            <label class="field"><span>Password (optional)</span><input id="proxy-password" type="password" maxlength="512" autocomplete="new-password" placeholder="Not saved yet" /><small id="proxy-password-help">Encrypted with Windows protection.</small></label>
+            <label class="check-row full"><input id="proxy-clear-password" type="checkbox" /> Clear the previously saved proxy password</label>
+          </div>
           <label class="toggle-row full">
             <input id="anti-afk" type="checkbox" checked />
             <span class="toggle" aria-hidden="true"></span>
@@ -148,7 +179,7 @@
         <footer class="dialog-footer">
           <button id="delete-account" class="button danger" type="button" hidden>Delete</button>
           <span class="footer-spacer"></span>
-          <button class="button secondary" value="cancel">Cancel</button>
+          <button class="button secondary" value="cancel" formnovalidate>Cancel</button>
           <button id="save-account" class="button primary" type="submit">Save account</button>
         </footer>
       </form>
@@ -164,6 +195,26 @@
         <button id="open-login-private" class="button primary full-button" type="button">Sign in with a different account</button>
         <button id="open-login" class="button secondary full-button login-secondary" type="button">Use my default browser</button>
         <button id="close-login" class="text-button" type="button">Continue in background</button>
+      </div>
+    </dialog>
+
+    <dialog id="settings-dialog" aria-labelledby="settings-title">
+      <div>
+        <header class="dialog-header">
+          <div><div class="eyebrow">Application</div><h2 id="settings-title">Settings</h2></div>
+          <button id="close-settings" class="icon-button" type="button" aria-label="Close settings">×</button>
+        </header>
+        <div class="settings-body">
+          <label class="toggle-row">
+            <input id="start-with-windows" type="checkbox" />
+            <span class="toggle" aria-hidden="true"></span>
+            <span><strong>Start AFK Desk when Windows signs in</strong><small>Accounts with “Connect when AFK Desk starts” enabled will then join automatically.</small></span>
+          </label>
+        </div>
+        <footer class="dialog-footer">
+          <span class="footer-spacer"></span>
+          <button id="save-settings" class="button primary" type="button">Save settings</button>
+        </footer>
       </div>
     </dialog>
 

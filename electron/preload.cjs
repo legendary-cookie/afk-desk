@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('afkDesk', {
   listAccounts: () => ipcRenderer.invoke('accounts:list'),
   saveAccount: (account) => ipcRenderer.invoke('accounts:save', account),
   deleteAccount: (id) => ipcRenderer.invoke('accounts:delete', id),
+  reorderAccounts: (orderedIds) => ipcRenderer.invoke('accounts:reorder', orderedIds),
   connect: (id) => ipcRenderer.invoke('bot:connect', id),
   disconnect: (id) => ipcRenderer.invoke('bot:disconnect', id),
   sendChat: (id, message) => ipcRenderer.invoke('bot:chat', { id, message }),
@@ -17,6 +18,8 @@ contextBridge.exposeInMainWorld('afkDesk', {
   createRemoteGrant: (input) => ipcRenderer.invoke('remote:create-grant', input),
   revokeRemoteGrant: (id) => ipcRenderer.invoke('remote:revoke-grant', id),
   openExternal: (url) => ipcRenderer.invoke('system:open-external', url),
+  getSettings: () => ipcRenderer.invoke('settings:get'),
+  saveSettings: (settings) => ipcRenderer.invoke('settings:save', settings),
   onBotEvent: (callback) => {
     const listener = (_event, data) => callback(data)
     ipcRenderer.on('bot:event', listener)

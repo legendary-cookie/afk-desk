@@ -29,6 +29,22 @@ class AccountStore {
     this.write(this.list().filter((account) => account.id !== id))
   }
 
+  reorder(orderedIds) {
+    const accounts = this.list()
+    const byId = new Map(accounts.map((account) => [account.id, account]))
+    const seen = new Set()
+    const ordered = []
+    for (const value of Array.isArray(orderedIds) ? orderedIds : []) {
+      const id = String(value)
+      if (seen.has(id) || !byId.has(id)) continue
+      seen.add(id)
+      ordered.push(byId.get(id))
+    }
+    ordered.push(...accounts.filter((account) => !seen.has(account.id)))
+    this.write(ordered)
+    return ordered
+  }
+
   write(accounts) {
     fs.mkdirSync(path.dirname(this.file), { recursive: true })
     const temporaryFile = `${this.file}.tmp`

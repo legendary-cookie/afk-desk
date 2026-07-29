@@ -21,6 +21,7 @@ class RemoteAccessServer {
     this.ownerToken = crypto.randomBytes(32).toString('base64url')
     this.ownerHash = hashToken(this.ownerToken)
     this.rateLimits = new Map()
+    this.staticCache = new Map()
     this.server = null
     this.port = null
   }
@@ -87,7 +88,7 @@ class RemoteAccessServer {
     if (!grant) return this.sendError(response, 401, 'Access link required.')
     if (!this.allowRequest(request, grant.id)) return this.sendError(response, 429, 'Too many requests. Try again shortly.')
 
-    if (request.method === 'GET' && url.pathname === '/api/state') return this.sendJson(response, 200, this.buildState(grant))
+    if (request.method === 'GET' && url.pathname === '/api/state') return this.sendState(request, response, grant)
     if (request.method === 'POST' && url.pathname === '/api/action') {
       if (request.headers['x-afkdesk-request'] !== '1') return this.sendError(response, 403, 'Invalid request.')
       const input = await readJson(request)
@@ -137,10 +138,11 @@ class RemoteAccessServer {
           server: `${account.host}:${account.port}`,
           status: runtime.status,
           detail: runtime.detail,
-          logs: runtime.logs.slice(-150)
+          telemetry: runtime.telemetry || null,
+          logs: runtime.logs.slice(-100)
         }
       })
-    return { viewer: { label: grant.label, permissions: grant.permissions }, accounts, refreshedAt: Date.now() }
+    return { viewer: { label: grant.label, permissions: grant.permissions }, accounts }
   }
 
   async runAction(response, grant, input) {
@@ -171,8 +173,23 @@ class RemoteAccessServer {
   }
 
   serveStatic(response, filename, contentType) {
-    const body = fs.readFileSync(path.join(PUBLIC_DIR, filename))
+    let body = this.staticCache.get(filename)
+    if (!body) {
+      body = fs.readFileSync(path.join(PUBLIC_DIR, filename))
+      this.staticCache.set(filename, body)
+    }
     response.writeHead(200, { 'Content-Type': contentType, 'Content-Length': body.length, 'Cache-Control': 'no-store' })
+    response.end(body)
+  }
+
+  sendState(request, response, grant) {
+    const body = Buffer.from(JSON.stringify(this.buildState(grant)))
+    const etag = `"${crypto.createHash('sha256').update(body).digest('base64url').slice(0, 22)}"`
+    if (request.headers['if-none-match'] === etag) {
+      response.writeHead(304, { ETag: etag, 'Cache-Control': 'private, no-cache' })
+      return response.end()
+    }
+    response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': body.length, ETag: etag, 'Cache-Control': 'private, no-cache' })
     response.end(body)
   }
 

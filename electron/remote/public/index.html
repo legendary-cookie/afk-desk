@@ -31,20 +31,30 @@
             <div id="log" class="log" role="log" aria-live="polite"></div>
             <form id="chat-form"><label class="sr-only" for="chat">Message or command</label><input id="chat" placeholder="Message or /command" autocomplete="off" /><button type="submit">Send</button></form>
           </section>
-          <section id="movement" class="panel movement">
-            <header><h2>Movement</h2></header>
-            <div class="keys">
-              <button data-control="forward">W<span>Forward</span></button>
-              <button data-control="left">A<span>Left</span></button>
-              <button data-control="back">S<span>Back</span></button>
-              <button data-control="right">D<span>Right</span></button>
-            </div>
-            <div class="actions">
-              <button data-control="jump" class="button secondary">Jump</button>
-              <button data-look="left" class="button secondary">Look left</button>
-              <button data-look="right" class="button secondary">Look right</button>
-            </div>
-          </section>
+          <aside class="side-stack">
+            <section class="panel player-state">
+              <header><h2>Player state</h2></header>
+              <dl><div><dt>HP</dt><dd id="health">—</dd></div><div><dt>Hunger</dt><dd id="hunger">—</dd></div><div><dt>Coordinates</dt><dd id="coordinates">—</dd></div><div><dt>Dimension</dt><dd id="dimension">—</dd></div></dl>
+            </section>
+            <section id="movement" class="panel movement">
+              <header><h2>Movement</h2></header>
+              <div class="keys">
+                <button data-control="forward">W<span>Forward</span></button>
+                <button data-control="left">A<span>Left</span></button>
+                <button data-control="back">S<span>Back</span></button>
+                <button data-control="right">D<span>Right</span></button>
+              </div>
+              <div class="actions">
+                <button data-control="jump" class="button secondary">Jump</button>
+                <button data-look="left" class="button secondary">Look left</button>
+                <button data-look="right" class="button secondary">Look right</button>
+              </div>
+            </section>
+            <section class="panel inventory">
+              <header><h2>Inventory</h2><small id="inventory-count">—</small></header>
+              <div id="inventory" class="inventory-list"><div class="placeholder compact">Connect to view items.</div></div>
+            </section>
+          </aside>
         </div>
       </section>
     </main>

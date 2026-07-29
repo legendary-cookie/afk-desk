@@ -20,6 +20,12 @@ test('AccountStore saves, updates, and deletes profiles', (t) => {
     { id: 'two', label: 'Second' }
   ])
 
+  assert.deepEqual(store.reorder(['two', 'two', 'missing']), [
+    { id: 'two', label: 'Second' },
+    { id: 'one', label: 'Updated' }
+  ])
+  assert.deepEqual(store.list().map((account) => account.id), ['two', 'one'])
+
   store.delete('one')
   assert.deepEqual(store.list(), [{ id: 'two', label: 'Second' }])
 })

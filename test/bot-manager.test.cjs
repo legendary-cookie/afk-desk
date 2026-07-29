@@ -1,7 +1,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const { EventEmitter } = require('node:events')
-const { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, normalizeSkinUrl } = require('../electron/bot-manager.cjs')
+const { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, normalizeSkinUrl, buildTelemetry } = require('../electron/bot-manager.cjs')
 const { computeSignedChatChecksum } = require('../electron/protocol-fixes.cjs')
 
 class FakeBot extends EventEmitter {
@@ -10,6 +10,11 @@ class FakeBot extends EventEmitter {
     this.username = 'Player'
     this.uuid = '123456781234123412341234567890ab'
     this.players = {}
+    this.health = 20
+    this.food = 18
+    this.game = { dimension: 'overworld' }
+    this.inventory = new EventEmitter()
+    this.inventory.items = () => []
     this.entity = null
     this.controls = []
     this.messages = []
@@ -145,6 +150,23 @@ test('emits the authenticated Minecraft identity and official skin texture', () 
   manager.disconnect('skin')
 })
 
+test('builds a bounded player health, position, and inventory snapshot', () => {
+  const bot = new FakeBot()
+  bot.health = 17.5
+  bot.entity = { position: { x: 12.34, y: 64, z: -8.76 } }
+  bot.inventory.items = () => [{ slot: 36, name: 'diamond_sword', displayName: 'Diamond Sword', count: 1, nbt: { secret: true } }]
+  const snapshot = buildTelemetry(bot)
+  assert.equal(typeof snapshot.at, 'number')
+  delete snapshot.at
+  assert.deepEqual(snapshot, {
+    health: 17.5,
+    food: 18,
+    position: { x: 12.3, y: 64, z: -8.8 },
+    dimension: 'overworld',
+    inventory: [{ slot: 36, name: 'diamond_sword', displayName: 'Diamond Sword', count: 1 }]
+  })
+})
+
 test('resends client settings when Velocity switches backend servers', () => {
   const events = []
   const bot = new FakeBot()
@@ -157,7 +179,7 @@ test('resends client settings when Velocity switches backend servers', () => {
 
   assert.deepEqual(bot.writes.at(-1), ['settings', {
     locale: 'en_us',
-    viewDistance: 10,
+    viewDistance: 3,
     chatFlags: 0,
     chatColors: true,
     skinParts: 127,

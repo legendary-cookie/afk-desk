@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell } = require('electron')
+const { app, BrowserWindow, ipcMain, shell, safeStorage } = require('electron')
 const path = require('node:path')
 const crypto = require('node:crypto')
 const { execFile } = require('node:child_process')
@@ -7,6 +7,7 @@ const { AccountStore } = require('./store.cjs')
 const { BotManager, normalizeSkinUrl } = require('./bot-manager.cjs')
 const { AccessStore } = require('./remote/access-store.cjs')
 const { RemoteAccessServer } = require('./remote/server.cjs')
+const { sendToWindow } = require('./window-events.cjs')
 const execFileAsync = promisify(execFile)
 
 let mainWindow
@@ -51,6 +52,8 @@ app.whenReady().then(async () => {
   await remoteAccess.start()
   registerIpc()
   createWindow()
+  autoConnectConfiguredAccounts()
+  if (process.argv.includes('--smoke-test')) setTimeout(() => app.quit(), 5000)
 })
 
 app.on('window-all-closed', () => {
@@ -63,15 +66,17 @@ app.on('before-quit', () => {
 })
 
 function registerIpc() {
-  ipcMain.handle('accounts:list', () => store.list())
+  ipcMain.handle('accounts:list', () => store.list().map(publicAccount))
   ipcMain.handle('accounts:save', (_event, input) => {
-    const account = validateAccount(input)
-    return store.save(account)
+    const existing = store.list().find((account) => account.id === input?.id)
+    const account = validateAccount(input, existing)
+    return publicAccount(store.save(account))
   })
   ipcMain.handle('accounts:delete', (_event, id) => {
     bots.disconnect(id)
     store.delete(id)
   })
+  ipcMain.handle('accounts:reorder', (_event, orderedIds) => store.reorder(orderedIds).map(publicAccount))
   ipcMain.handle('bot:connect', (_event, id) => bots.connect(requireAccount(id)))
   ipcMain.handle('bot:disconnect', (_event, id) => bots.disconnect(id))
   ipcMain.handle('bot:chat', (_event, { id, message }) => bots.sendChat(id, message))
@@ -100,6 +105,24 @@ function registerIpc() {
     const parsed = new URL(url)
     if (!['https:', 'http:'].includes(parsed.protocol)) throw new Error('Unsupported link.')
     return shell.openExternal(parsed.toString())
+  })
+  ipcMain.handle('settings:get', () => ({ startWithWindows: app.getLoginItemSettings().openAtLogin }))
+  ipcMain.handle('settings:save', (_event, input) => {
+    const startWithWindows = input?.startWithWindows === true
+    app.setLoginItemSettings({ openAtLogin: startWithWindows })
+    return { startWithWindows: app.getLoginItemSettings().openAtLogin }
+  })
+}
+
+function autoConnectConfiguredAccounts() {
+  store.list().filter((account) => account.connectOnStartup).forEach((account, index) => {
+    setTimeout(() => {
+      try { bots.connect(withProxyPassword(account)) }
+      catch (error) {
+        emitBotEvent('log', account.id, { kind: 'error', message: `Startup connection failed: ${error.message}`, at: Date.now() })
+        emitBotEvent('status', account.id, { status: 'offline', detail: 'Startup connection failed' })
+      }
+    }, 700 + index * 800)
   })
 }
 
@@ -147,18 +170,21 @@ function emitBotEvent(type, id, payload) {
   const current = getRuntime(id)
   if (type === 'status') runtime.set(id, { ...current, status: payload.status, detail: payload.detail })
   if (type === 'log') runtime.set(id, { ...current, logs: [...current.logs.slice(-499), payload] })
+  if (type === 'telemetry') runtime.set(id, { ...current, telemetry: payload })
   if (type === 'identity') {
     const account = store.list().find((item) => item.id === id)
     if (account) {
+      const minecraftName = normalizeMinecraftName(payload.username) || account.minecraftName || ''
       store.save({
         ...account,
-        minecraftName: String(payload.username || account.minecraftName || '').slice(0, 16),
+        label: minecraftName || account.label,
+        minecraftName,
         minecraftUuid: normalizeUuid(payload.uuid) || account.minecraftUuid || '',
         skinUrl: normalizeSkinUrl(payload.skinUrl) || account.skinUrl || ''
       })
     }
   }
-  mainWindow?.webContents.send('bot:event', { type, id, payload })
+  sendToWindow(mainWindow, 'bot:event', { type, id, payload })
 }
 
 function getRuntime(id) {
@@ -177,24 +203,25 @@ function handleRemoteAction(id, action, payload) {
 function requireAccount(id) {
   const account = store.list().find((item) => item.id === id)
   if (!account) throw new Error('Account not found.')
-  return account
+  return withProxyPassword(account)
 }
 
-function validateAccount(input) {
+function validateAccount(input, existing) {
   const host = String(input?.host || '').trim()
   const username = String(input?.username || '').trim()
   if (!host) throw new Error('Server address is required.')
   if (!username) throw new Error('Microsoft account email is required.')
   const port = Number(input?.port) || 25565
   if (port < 1 || port > 65535) throw new Error('Port must be between 1 and 65535.')
+  const minecraftName = normalizeMinecraftName(input?.minecraftName)
   return {
     id: input?.id || crypto.randomUUID(),
-    label: String(input?.label || username.split('@')[0] || 'Minecraft account').trim().slice(0, 50),
+    label: minecraftName || String(input?.label || username.split('@')[0] || 'Minecraft account').trim().slice(0, 50),
     username,
     host,
     port,
     version: String(input?.version || '').trim(),
-    minecraftName: String(input?.minecraftName || '').trim().slice(0, 16),
+    minecraftName,
     minecraftUuid: normalizeUuid(input?.minecraftUuid),
     skinUrl: normalizeSkinUrl(input?.skinUrl),
     antiAfk: input?.antiAfk !== false,
@@ -202,6 +229,8 @@ function validateAccount(input) {
     autoReconnect: input?.autoReconnect !== false,
     autoReconnectDelay: Math.max(1, Math.min(Number(input?.autoReconnectDelay) || 5, 300)),
     autoReconnectMaxAttempts: Math.max(0, Math.min(Number(input?.autoReconnectMaxAttempts) || 0, 1000)),
+    connectOnStartup: input?.connectOnStartup === true,
+    proxy: validateProxy(input?.proxy, existing?.proxy),
     joinMessage: String(input?.joinMessage || '').trim().slice(0, 256),
     serverChangeMessage: String(input?.serverChangeMessage || '').trim().slice(0, 256),
     messageDelay: Math.max(0, Math.min(Number(input?.messageDelay) || 2, 30))
@@ -211,4 +240,44 @@ function validateAccount(input) {
 function normalizeUuid(value) {
   const uuid = String(value || '').replace(/-/g, '').toLowerCase()
   return /^[0-9a-f]{32}$/.test(uuid) ? uuid : ''
+}
+
+function normalizeMinecraftName(value) {
+  const name = String(value || '').trim()
+  return /^[A-Za-z0-9_]{1,16}$/.test(name) ? name : ''
+}
+
+function validateProxy(input, existing = {}) {
+  const enabled = input?.enabled === true
+  const type = input?.type === 'http' ? 'http' : 'socks5'
+  const host = String(input?.host || '').trim()
+  const port = Number(input?.port) || (type === 'http' ? 8080 : 1080)
+  const username = String(input?.username || '').trim()
+  if (enabled && (!host || host.length > 255 || /[\s\r\n]/.test(host))) throw new Error('Enter a valid proxy host.')
+  if (enabled && (port < 1 || port > 65535)) throw new Error('Proxy port must be between 1 and 65535.')
+  if (username.length > 128 || /[\r\n]/.test(username)) throw new Error('Proxy username is invalid.')
+  let passwordEncrypted = String(existing?.passwordEncrypted || '')
+  if (input?.clearPassword === true) passwordEncrypted = ''
+  const password = String(input?.password || '')
+  if (password) {
+    if (password.length > 512 || /[\r\n]/.test(password)) throw new Error('Proxy password is invalid.')
+    if (!safeStorage.isEncryptionAvailable()) throw new Error('Windows credential encryption is not available. Proxy password was not saved.')
+    passwordEncrypted = safeStorage.encryptString(password).toString('base64')
+  }
+  return { enabled, type, host, port, username, passwordEncrypted }
+}
+
+function withProxyPassword(account) {
+  const proxy = account.proxy || {}
+  let password = ''
+  if (proxy.passwordEncrypted) {
+    try { password = safeStorage.decryptString(Buffer.from(proxy.passwordEncrypted, 'base64')) }
+    catch { throw new Error('Could not decrypt this account’s proxy password. Re-enter it in account settings.') }
+  }
+  return { ...account, proxy: { ...proxy, password } }
+}
+
+function publicAccount(account) {
+  const { passwordEncrypted, password, ...proxy } = account.proxy || {}
+  return { ...account, proxy: { ...proxy, hasPassword: Boolean(passwordEncrypted) } }
 }

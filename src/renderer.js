@@ -3,17 +3,19 @@ const api = window.afkDesk
 const state = {
   accounts: [],
   selectedId: null,
+  draggedAccountId: null,
   statuses: new Map(),
   logs: new Map(),
+  telemetry: new Map(),
   login: { code: '', url: 'https://microsoft.com/link' }
 }
 
 const el = Object.fromEntries([
-  'account-list', 'account-count', 'add-account', 'browser-access', 'empty-state', 'dashboard', 'account-title',
+  'account-list', 'account-count', 'add-account', 'browser-access', 'open-settings', 'settings-dialog', 'close-settings', 'start-with-windows', 'save-settings', 'empty-state', 'dashboard', 'account-title',
   'edit-account', 'connection-button', 'status-banner', 'status-name', 'status-detail', 'server-address',
-  'detail-username', 'detail-server', 'detail-version', 'detail-antiafk', 'console-log', 'clear-console',
+  'detail-username', 'detail-server', 'detail-version', 'detail-antiafk', 'detail-health', 'detail-hunger', 'detail-coordinates', 'detail-dimension', 'inventory-count', 'inventory-grid', 'console-log', 'clear-console',
   'chat-form', 'chat-message', 'account-dialog', 'account-form', 'dialog-title', 'account-id', 'label',
-  'username', 'host', 'port', 'version', 'anti-afk', 'anti-afk-interval', 'auto-reconnect', 'auto-reconnect-delay', 'auto-reconnect-max', 'join-message', 'server-change-message',
+  'username', 'host', 'port', 'version', 'connect-on-startup', 'proxy-enabled', 'proxy-fields', 'proxy-type', 'proxy-host', 'proxy-port', 'proxy-username', 'proxy-password', 'proxy-password-help', 'proxy-clear-password', 'anti-afk', 'anti-afk-interval', 'auto-reconnect', 'auto-reconnect-delay', 'auto-reconnect-max', 'join-message', 'server-change-message',
   'message-delay', 'form-error', 'delete-account', 'login-dialog', 'login-code', 'open-login-private', 'open-login',
   'close-login', 'remote-dialog', 'close-remote', 'remote-local-url', 'open-dashboard', 'tailscale-command',
   'enable-tailscale', 'tailscale-result', 'remote-base-url', 'grant-label', 'grant-accounts', 'create-grant', 'generated-link', 'share-link',
@@ -31,11 +33,18 @@ async function init() {
 function bindEvents() {
   el['add-account'].addEventListener('click', () => openAccountDialog())
   el['browser-access'].addEventListener('click', openRemoteDialog)
+  el['open-settings'].addEventListener('click', openSettingsDialog)
+  el['close-settings'].addEventListener('click', () => el['settings-dialog'].close())
+  el['save-settings'].addEventListener('click', saveSettings)
   document.querySelector('[data-action="add"]').addEventListener('click', () => openAccountDialog())
   el['edit-account'].addEventListener('click', () => openAccountDialog(selectedAccount()))
   el['account-form'].addEventListener('submit', saveAccount)
   el['delete-account'].addEventListener('click', deleteAccount)
   el['connection-button'].addEventListener('click', toggleConnection)
+  el['proxy-enabled'].addEventListener('change', syncProxyFields)
+  el['proxy-type'].addEventListener('change', () => {
+    el['proxy-port'].value = el['proxy-type'].value === 'http' ? 8080 : 1080
+  })
   el['chat-form'].addEventListener('submit', sendChat)
   el['clear-console'].addEventListener('click', () => {
     state.logs.set(state.selectedId, [])
@@ -76,11 +85,16 @@ function render() {
   el['detail-antiafk'].textContent = account.antiAfk ? `Every ${account.antiAfkInterval} seconds` : 'Disabled'
   renderStatus(status)
   renderConsole()
+  renderTelemetry()
 }
 
 function renderAccountList() {
   el['account-count'].textContent = state.accounts.length
-  el['account-list'].replaceChildren(...state.accounts.map((account) => {
+  el['account-list'].replaceChildren(...state.accounts.map((account, index) => {
+    const row = document.createElement('div')
+    row.className = 'account-row'
+    row.draggable = state.accounts.length > 1
+    row.dataset.accountId = account.id
     const button = document.createElement('button')
     const status = getStatus(account.id).status
     button.type = 'button'
@@ -102,8 +116,87 @@ function renderAccountList() {
       state.selectedId = account.id
       render()
     })
-    return button
+    const controls = document.createElement('span')
+    controls.className = 'account-order-controls'
+    const up = createOrderButton(account, 'up', index === 0)
+    const down = createOrderButton(account, 'down', index === state.accounts.length - 1)
+    controls.append(up, down)
+    row.append(button, controls)
+    row.addEventListener('dragstart', (event) => {
+      if (state.accounts.length < 2) return event.preventDefault()
+      state.draggedAccountId = account.id
+      event.dataTransfer.effectAllowed = 'move'
+      event.dataTransfer.setData('text/plain', account.id)
+      requestAnimationFrame(() => row.classList.add('dragging'))
+    })
+    row.addEventListener('dragover', (event) => {
+      if (!state.draggedAccountId || state.draggedAccountId === account.id) return
+      event.preventDefault()
+      event.dataTransfer.dropEffect = 'move'
+      row.classList.toggle('drop-after', event.clientY > row.getBoundingClientRect().top + row.offsetHeight / 2)
+      row.classList.add('drag-over')
+    })
+    row.addEventListener('dragleave', (event) => {
+      if (!row.contains(event.relatedTarget)) row.classList.remove('drag-over', 'drop-after')
+    })
+    row.addEventListener('drop', (event) => {
+      event.preventDefault()
+      const draggedId = state.draggedAccountId || event.dataTransfer.getData('text/plain')
+      const after = row.classList.contains('drop-after')
+      clearDragStyles()
+      if (draggedId && draggedId !== account.id) run(() => dropAccount(draggedId, account.id, after))
+    })
+    row.addEventListener('dragend', clearDragStyles)
+    return row
   }))
+}
+
+function createOrderButton(account, direction, disabled) {
+  const button = document.createElement('button')
+  button.type = 'button'
+  button.className = 'account-order-button'
+  button.textContent = direction === 'up' ? '↑' : '↓'
+  button.title = `Move ${account.label} ${direction}`
+  button.setAttribute('aria-label', button.title)
+  button.disabled = disabled
+  button.draggable = false
+  button.addEventListener('click', (event) => {
+    event.stopPropagation()
+    run(() => moveAccount(account.id, direction === 'up' ? -1 : 1))
+  })
+  return button
+}
+
+async function moveAccount(id, offset) {
+  const from = state.accounts.findIndex((account) => account.id === id)
+  const to = from + offset
+  if (from < 0 || to < 0 || to >= state.accounts.length) return
+  const ordered = [...state.accounts]
+  const [account] = ordered.splice(from, 1)
+  ordered.splice(to, 0, account)
+  await persistAccountOrder(ordered)
+}
+
+async function dropAccount(draggedId, targetId, after) {
+  const dragged = state.accounts.find((account) => account.id === draggedId)
+  if (!dragged) return
+  const ordered = state.accounts.filter((account) => account.id !== draggedId)
+  let target = ordered.findIndex((account) => account.id === targetId)
+  if (target < 0) return
+  if (after) target += 1
+  ordered.splice(target, 0, dragged)
+  await persistAccountOrder(ordered)
+}
+
+async function persistAccountOrder(ordered) {
+  state.accounts = await api.reorderAccounts(ordered.map((account) => account.id))
+  render()
+  toast('Account order saved.')
+}
+
+function clearDragStyles() {
+  state.draggedAccountId = null
+  el['account-list'].querySelectorAll('.dragging, .drag-over, .drop-after').forEach((row) => row.classList.remove('dragging', 'drag-over', 'drop-after'))
 }
 
 function renderStatus({ status, detail }) {
@@ -143,15 +236,57 @@ function renderConsole() {
   el['console-log'].scrollTop = el['console-log'].scrollHeight
 }
 
+function renderTelemetry() {
+  const telemetry = state.telemetry.get(state.selectedId)
+  el['detail-health'].textContent = telemetry ? `${formatNumber(telemetry.health)} / 20` : '—'
+  el['detail-hunger'].textContent = telemetry ? `${formatNumber(telemetry.food)} / 20` : '—'
+  el['detail-coordinates'].textContent = telemetry?.position ? `${telemetry.position.x}, ${telemetry.position.y}, ${telemetry.position.z}` : '—'
+  el['detail-dimension'].textContent = telemetry ? String(telemetry.dimension || 'unknown').replace(/^minecraft:/, '') : '—'
+  const items = telemetry?.inventory || []
+  el['inventory-count'].textContent = telemetry ? `${items.length} occupied slot${items.length === 1 ? '' : 's'}` : 'Connect to view items'
+  if (!items.length) {
+    const empty = document.createElement('div')
+    empty.className = 'inventory-empty'
+    empty.textContent = telemetry ? 'Inventory is empty.' : 'Inventory will appear while this account is online.'
+    el['inventory-grid'].replaceChildren(empty)
+    return
+  }
+  el['inventory-grid'].replaceChildren(...items.map((item) => {
+    const slot = document.createElement('div')
+    slot.className = 'inventory-slot'
+    const name = document.createElement('strong')
+    name.textContent = item.displayName
+    const meta = document.createElement('span')
+    meta.textContent = `×${item.count} · slot ${item.slot}`
+    slot.append(name, meta)
+    return slot
+  }))
+}
+
+function formatNumber(value) {
+  return Number.isInteger(value) ? String(value) : Number(value || 0).toFixed(1)
+}
+
 function openAccountDialog(account) {
   el['account-form'].reset()
   el['form-error'].hidden = true
   el['account-id'].value = account?.id || ''
-  el.label.value = account?.label || ''
+  el.label.value = account?.minecraftName || ''
   el.username.value = account?.username || ''
   el.host.value = account?.host || ''
   el.port.value = account?.port || 25565
   el.version.value = account?.version || ''
+  el['connect-on-startup'].checked = account?.connectOnStartup === true
+  el['proxy-enabled'].checked = account?.proxy?.enabled === true
+  el['proxy-type'].value = account?.proxy?.type || 'socks5'
+  el['proxy-host'].value = account?.proxy?.host || ''
+  el['proxy-port'].value = account?.proxy?.port || (account?.proxy?.type === 'http' ? 8080 : 1080)
+  el['proxy-username'].value = account?.proxy?.username || ''
+  el['proxy-password'].value = ''
+  el['proxy-password'].placeholder = account?.proxy?.hasPassword ? 'Saved password unchanged' : 'Not saved yet'
+  el['proxy-password-help'].textContent = account?.proxy?.hasPassword ? 'A password is saved with Windows encryption. Enter a new one only to replace it.' : 'Encrypted with Windows protection when saved.'
+  el['proxy-clear-password'].checked = false
+  syncProxyFields()
   el['anti-afk'].checked = account?.antiAfk !== false
   el['anti-afk-interval'].value = account?.antiAfkInterval || 45
   el['auto-reconnect'].checked = account?.autoReconnect !== false
@@ -163,7 +298,7 @@ function openAccountDialog(account) {
   el['dialog-title'].textContent = account ? 'Edit account' : 'Add account'
   el['delete-account'].hidden = !account
   el['account-dialog'].showModal()
-  setTimeout(() => (account ? el.label : el.username).focus(), 0)
+  setTimeout(() => (account ? el.host : el.username).focus(), 0)
 }
 
 async function saveAccount(event) {
@@ -176,6 +311,16 @@ async function saveAccount(event) {
     host: el.host.value,
     port: Number(el.port.value),
     version: el.version.value,
+    connectOnStartup: el['connect-on-startup'].checked,
+    proxy: {
+      enabled: el['proxy-enabled'].checked,
+      type: el['proxy-type'].value,
+      host: el['proxy-host'].value,
+      port: Number(el['proxy-port'].value),
+      username: el['proxy-username'].value,
+      password: el['proxy-password'].value,
+      clearPassword: el['proxy-clear-password'].checked
+    },
     minecraftName: existing?.minecraftName || '',
     minecraftUuid: existing?.minecraftUuid || '',
     skinUrl: existing?.skinUrl || '',
@@ -210,6 +355,7 @@ async function deleteAccount() {
   state.accounts = state.accounts.filter((account) => account.id !== id)
   state.statuses.delete(id)
   state.logs.delete(id)
+  state.telemetry.delete(id)
   state.selectedId = state.accounts[0]?.id || null
   el['account-dialog'].close()
   render()
@@ -232,17 +378,34 @@ async function sendChat(event) {
 }
 
 function handleBotEvent({ type, id, payload }) {
-  if (type === 'status') state.statuses.set(id, payload)
+  if (type === 'status') {
+    state.statuses.set(id, payload)
+    renderAccountList()
+    if (id === state.selectedId) renderStatus(payload)
+  }
   if (type === 'log') {
     const logs = state.logs.get(id) || []
     state.logs.set(id, [...logs.slice(-499), payload])
+    if (id === state.selectedId) renderConsole()
+  }
+  if (type === 'telemetry') {
+    state.telemetry.set(id, payload)
+    if (id === state.selectedId) renderTelemetry()
   }
   if (type === 'identity') {
     const account = state.accounts.find((item) => item.id === id)
     if (account) {
-      if (payload.username) account.minecraftName = payload.username
+      if (/^[A-Za-z0-9_]{1,16}$/.test(payload.username || '')) {
+        account.minecraftName = payload.username
+        account.label = payload.username
+      }
       if (payload.uuid) account.minecraftUuid = payload.uuid
       if (validSkinUrl(payload.skinUrl)) account.skinUrl = payload.skinUrl
+      renderAccountList()
+      if (id === state.selectedId) {
+        el['account-title'].textContent = account.label
+        el['detail-username'].textContent = account.username
+      }
     }
   }
   if (type === 'login-code') {
@@ -254,7 +417,6 @@ function handleBotEvent({ type, id, payload }) {
     el['login-code'].textContent = payload.code || 'See console'
     if (!el['login-dialog'].open) el['login-dialog'].showModal()
   }
-  render()
 }
 
 async function openRemoteDialog() {
@@ -280,6 +442,22 @@ function renderGrantAccounts() {
     label.append(checkbox, text)
     return label
   }))
+}
+
+async function openSettingsDialog() {
+  try {
+    const settings = await api.getSettings()
+    el['start-with-windows'].checked = settings.startWithWindows === true
+    el['settings-dialog'].showModal()
+  } catch (error) { toast(cleanError(error), 'error') }
+}
+
+async function saveSettings() {
+  try {
+    await api.saveSettings({ startWithWindows: el['start-with-windows'].checked })
+    el['settings-dialog'].close()
+    toast('Settings saved.')
+  } catch (error) { toast(cleanError(error), 'error') }
 }
 
 async function createRemoteGrant() {
@@ -358,6 +536,12 @@ async function run(action) {
 
 function cleanError(error) {
   return String(error?.message || error).replace(/^Error invoking remote method '[^']+': Error: /, '')
+}
+
+function syncProxyFields() {
+  const disabled = !el['proxy-enabled'].checked
+  el['proxy-fields'].querySelectorAll('input, select').forEach((input) => { input.disabled = disabled })
+  el['proxy-fields'].classList.toggle('disabled', disabled)
 }
 
 function createPlayerHead(account, className) {

@@ -1,5 +1,6 @@
 const path = require('node:path')
 const { applyProtocolFixes } = require('./protocol-fixes.cjs')
+const { createProxyConnect } = require('./proxy-connect.cjs')
 applyProtocolFixes()
 const mineflayer = require('mineflayer')
 
@@ -32,11 +33,12 @@ class BotManager {
       auth: 'microsoft',
       version: account.version || false,
       profilesFolder: path.join(this.profilesPath, account.id),
+      connect: createProxyConnect(account.proxy, { host: account.host, port: Number(account.port) || 25565 }),
       hideErrors: true,
       onMsaCode: (code) => this.emit('login-code', account.id, normalizeLoginCode(code))
     })
 
-    const session = { bot, antiAfkTimer: null, jumpTimer: null, messageTimers: new Set(), ready: false, switching: false, joinMessageSent: false, identityKey: '' }
+    const session = { bot, antiAfkTimer: null, jumpTimer: null, telemetryTimer: null, messageTimers: new Set(), ready: false, switching: false, joinMessageSent: false, identityKey: '', telemetryKey: '' }
     this.sessions.set(account.id, session)
     this.status(account.id, 'connecting', reconnecting ? `Reconnect attempt ${reconnectState.attempts}…` : `Connecting to ${account.host}…`)
 
@@ -44,7 +46,7 @@ class BotManager {
       session.switching = true
       bot._client.write('settings', {
         locale: 'en_us',
-        viewDistance: 10,
+        viewDistance: 3,
         chatFlags: 0,
         chatColors: true,
         skinParts: 127,
@@ -66,6 +68,8 @@ class BotManager {
       reconnectState.attempts = 0
       this.status(account.id, 'online', `Online as ${bot.username}`)
       emitIdentity()
+      emitTelemetry()
+      if (!session.telemetryTimer) session.telemetryTimer = setInterval(emitTelemetry, 2000)
       if (firstReady && account.antiAfk !== false) this.enableAntiAfk(account.id, account.antiAfkInterval)
       if (firstReady && account.joinMessage && !session.joinMessageSent) {
         session.joinMessageSent = true
@@ -90,12 +94,24 @@ class BotManager {
       this.emit('identity', account.id, identity)
     }
 
+    const emitTelemetry = () => {
+      if (!this.sessions.has(account.id)) return
+      const snapshot = buildTelemetry(bot)
+      const { at: _at, ...stableSnapshot } = snapshot
+      const key = JSON.stringify(stableSnapshot)
+      if (key === session.telemetryKey) return
+      session.telemetryKey = key
+      this.emit('telemetry', account.id, snapshot)
+    }
+
     bot.on('login', () => {
       if (!session.ready) this.status(account.id, 'connected', 'Authenticated. Joining world…')
       emitIdentity()
     })
     bot.on('playerJoined', (player) => { if (player?.username === bot.username) emitIdentity() })
     bot.on('playerUpdated', (player) => { if (player?.username === bot.username) emitIdentity() })
+    bot.on('health', emitTelemetry)
+    bot.inventory?.on?.('updateSlot', emitTelemetry)
     bot.on('spawn', markReady)
     bot.on('forcedMove', markReady)
     bot.on('respawn', () => {
@@ -232,10 +248,12 @@ class BotManager {
   clearTimers(session) {
     if (session.antiAfkTimer) clearInterval(session.antiAfkTimer)
     if (session.jumpTimer) clearTimeout(session.jumpTimer)
+    if (session.telemetryTimer) clearInterval(session.telemetryTimer)
     for (const timer of session.messageTimers || []) clearTimeout(timer)
     session.messageTimers?.clear()
     session.antiAfkTimer = null
     session.jumpTimer = null
+    session.telemetryTimer = null
   }
 
   requireOnline(id) {
@@ -350,4 +368,27 @@ function normalizeSkinUrl(value) {
   } catch { return '' }
 }
 
-module.exports = { BotManager, normalizeLoginCode, extractText, shouldUseProxyCommandPacket, parseMinecraftFormatting, normalizeSkinUrl }
+function buildTelemetry(bot) {
+  const position = bot?.entity?.position
+  const finite = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback
+  const inventory = (bot?.inventory?.items?.() || []).slice(0, 46).map((item) => ({
+    slot: Math.max(0, Math.min(Number(item.slot) || 0, 255)),
+    name: String(item.name || '').slice(0, 80),
+    displayName: String(item.displayName || item.name || 'Unknown item').slice(0, 100),
+    count: Math.max(1, Math.min(Number(item.count) || 1, 127))
+  }))
+  return {
+    health: Math.max(0, Math.min(finite(bot?.health), 20)),
+    food: Math.max(0, Math.min(finite(bot?.food), 20)),
+    position: position ? {
+      x: Math.round(finite(position.x) * 10) / 10,
+      y: Math.round(finite(position.y) * 10) / 10,
+      z: Math.round(finite(position.z) * 10) / 10
+    } : null,
+    dimension: String(bot?.game?.dimension || 'unknown').slice(0, 80),
+    inventory,
+    at: Date.now()
+  }
+}
+
+module.exports = { BotManager, normalizeLoginCode, extractText, shouldUseProxyCommandPacket, parseMinecraftFormatting, normalizeSkinUrl, buildTelemetry }

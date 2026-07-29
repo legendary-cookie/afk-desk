@@ -1,12 +1,14 @@
-const state = { accounts: [], selectedId: null, viewer: null, clearedBefore: new Map() }
+const state = { accounts: [], selectedId: null, viewer: null, clearedBefore: new Map(), etag: '' }
 const byId = (id) => document.getElementById(id)
-const elements = Object.fromEntries(['viewer','error-state','empty-state','dashboard','accounts','title','server','connection','status','log','clear','chat-form','chat','movement','toast'].map((id) => [id, byId(id)]))
+const elements = Object.fromEntries(['viewer','error-state','empty-state','dashboard','accounts','title','server','connection','status','log','clear','chat-form','chat','movement','health','hunger','coordinates','dimension','inventory','inventory-count','toast'].map((id) => [id, byId(id)]))
 
 async function refresh() {
   try {
-    const response = await fetch('/api/state', { cache: 'no-store' })
+    const response = await fetch('/api/state', { cache: 'no-store', headers: state.etag ? { 'If-None-Match': state.etag } : {} })
+    if (response.status === 304) return
     if (!response.ok) throw new Error(response.status === 401 ? 'This browser session is not authorized. Open a fresh access link.' : 'Could not reach AFK Desk.')
     const value = await response.json()
+    state.etag = response.headers.get('etag') || ''
     state.accounts = value.accounts
     state.viewer = value.viewer
     if (!state.accounts.some((account) => account.id === state.selectedId)) state.selectedId = state.accounts[0]?.id || null
@@ -50,8 +52,28 @@ function render() {
   elements.chat.disabled = !permissions.has('chat') || !canInteract
   elements['chat-form'].querySelector('button').disabled = elements.chat.disabled
   elements.movement.querySelectorAll('button').forEach((button) => { button.disabled = !permissions.has('control') || !canInteract })
+  renderTelemetry(account.telemetry)
   renderLog(account)
 }
+
+function renderTelemetry(telemetry) {
+  elements.health.textContent = telemetry ? `${formatNumber(telemetry.health)} / 20` : '—'
+  elements.hunger.textContent = telemetry ? `${formatNumber(telemetry.food)} / 20` : '—'
+  elements.coordinates.textContent = telemetry?.position ? `${telemetry.position.x}, ${telemetry.position.y}, ${telemetry.position.z}` : '—'
+  elements.dimension.textContent = telemetry ? String(telemetry.dimension || 'unknown').replace(/^minecraft:/,'') : '—'
+  const items = telemetry?.inventory || []
+  elements['inventory-count'].textContent = telemetry ? `${items.length} slots` : '—'
+  if (!items.length) {
+    const empty=document.createElement('div'); empty.className='placeholder compact'; empty.textContent=telemetry?'Inventory is empty.':'Connect to view items.'; elements.inventory.replaceChildren(empty); return
+  }
+  elements.inventory.replaceChildren(...items.map((item) => {
+    const row=document.createElement('div'); row.className='inventory-item'
+    const name=document.createElement('strong'); name.textContent=item.displayName
+    const count=document.createElement('span'); count.textContent=`×${item.count}`
+    row.append(name,count); return row
+  }))
+}
+function formatNumber(value) { return Number.isInteger(value)?String(value):Number(value||0).toFixed(1) }
 
 function renderLog(account) {
   const cutoff = state.clearedBefore.get(account.id) || 0
@@ -133,4 +155,4 @@ async function run(fn) { try { await fn() } catch(error) { toast(error.message) 
 function toast(message) { elements.toast.textContent=message; elements.toast.hidden=false; clearTimeout(toast.timer); toast.timer=setTimeout(() => { elements.toast.hidden=true },4000) }
 
 refresh()
-setInterval(refresh,2000)
+setInterval(refresh,2500)
