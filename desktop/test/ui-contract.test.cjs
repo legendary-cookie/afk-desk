@@ -29,3 +29,10 @@ test('desktop bridge exposes inventory actions and accounts default automatic de
   assert.match(main, /autoDepositToChest:\s*input\?\.autoDepositToChest === true/)
   assert.match(main, /messageDelay:.*\? 5 :/)
 })
+
+test('browser player state shows the closest chest coordinates', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'electron', 'remote', 'public', 'index.html'), 'utf8')
+  const script = fs.readFileSync(path.join(__dirname, '..', 'electron', 'remote', 'public', 'app.js'), 'utf8')
+  assert.match(html, /id="chest"/)
+  assert.match(script, /telemetry\?\.nearestChest/)
+})

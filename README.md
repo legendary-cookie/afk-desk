@@ -15,6 +15,7 @@ AFK Desk is a free, local-first Minecraft Java connection client for Windows, An
 - Per-account SOCKS5 and HTTP CONNECT proxies
 - Per-account startup connections
 - Health, hunger, coordinates, dimension, and inventory views
+- Desktop inventory stack selection and optional nearby-chest auto-deposit with coordinate tracking
 - Modern Velocity server-switch compatibility
 - Revocable, permission-scoped browser access from the desktop client
 - Android foreground service for background connections
