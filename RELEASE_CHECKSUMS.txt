@@ -23,3 +23,8 @@ be76c79a5b4e1bdcabc2ffd6e18cdc773a572dcad64f423e9fe36f1fd745b148  AFK-Desk-Setup
 
 bdb4b5668ae15d78d09385e430b9a1ad502933d10330bd5914c1fadc5afb7d14  AFK-Desk-Mobile-0.1.0.apk
 a890a395a96db88e4cb2cc50a73c60a84ca4a23d54250a9426d878f55f38587f  AFK-Desk-Mobile-Source-0.1.0.zip
+
+# Desktop 0.5.0
+
+3a0cbd11b12d5747b851034a6c4cfe157541181692a44625cbca3e55742991b6  AFK-Desk-Setup-0.5.0.exe
+8b0ad3cc86dfb80f3ff66d3dfaa7fceab0968f6bd8ccd5dc809b97bee6778297  AFK-Desk-Source-0.5.0.zip
