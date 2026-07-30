@@ -3,6 +3,7 @@ const api = window.afkDesk
 const state = {
   accounts: [],
   selectedId: null,
+  selectedInventorySlot: null,
   draggedAccountId: null,
   statuses: new Map(),
   logs: new Map(),
@@ -13,9 +14,9 @@ const state = {
 const el = Object.fromEntries([
   'account-list', 'account-count', 'add-account', 'browser-access', 'open-settings', 'settings-dialog', 'close-settings', 'start-with-windows', 'save-settings', 'empty-state', 'dashboard', 'account-title',
   'edit-account', 'connection-button', 'status-banner', 'status-name', 'status-detail', 'server-address',
-  'detail-username', 'detail-server', 'detail-version', 'detail-antiafk', 'detail-health', 'detail-hunger', 'detail-coordinates', 'detail-dimension', 'inventory-count', 'inventory-grid', 'console-log', 'clear-console',
+  'detail-username', 'detail-server', 'detail-version', 'detail-antiafk', 'detail-health', 'detail-hunger', 'detail-coordinates', 'detail-chest', 'detail-dimension', 'inventory-count', 'inventory-grid', 'auto-deposit-toggle', 'drop-selected', 'console-log', 'clear-console',
   'chat-form', 'chat-message', 'account-dialog', 'account-form', 'dialog-title', 'account-id', 'label',
-  'username', 'host', 'port', 'version', 'connect-on-startup', 'proxy-enabled', 'proxy-fields', 'proxy-type', 'proxy-host', 'proxy-port', 'proxy-username', 'proxy-password', 'proxy-password-help', 'proxy-clear-password', 'anti-afk', 'anti-afk-interval', 'auto-reconnect', 'auto-reconnect-delay', 'auto-reconnect-max', 'join-message', 'server-change-message',
+  'username', 'host', 'port', 'version', 'connect-on-startup', 'proxy-enabled', 'proxy-fields', 'proxy-type', 'proxy-host', 'proxy-port', 'proxy-username', 'proxy-password', 'proxy-password-help', 'proxy-clear-password', 'anti-afk', 'anti-afk-interval', 'auto-reconnect', 'auto-reconnect-delay', 'auto-reconnect-max', 'auto-deposit-setting', 'join-message', 'server-change-message',
   'message-delay', 'form-error', 'delete-account', 'login-dialog', 'login-code', 'open-login-private', 'open-login',
   'close-login', 'remote-dialog', 'close-remote', 'remote-local-url', 'open-dashboard', 'tailscale-command',
   'enable-tailscale', 'tailscale-result', 'remote-base-url', 'grant-label', 'grant-accounts', 'create-grant', 'generated-link', 'share-link',
@@ -41,6 +42,8 @@ function bindEvents() {
   el['account-form'].addEventListener('submit', saveAccount)
   el['delete-account'].addEventListener('click', deleteAccount)
   el['connection-button'].addEventListener('click', toggleConnection)
+  el['drop-selected'].addEventListener('click', dropSelectedStack)
+  el['auto-deposit-toggle'].addEventListener('change', toggleAutoDeposit)
   el['proxy-enabled'].addEventListener('change', syncProxyFields)
   el['proxy-type'].addEventListener('change', () => {
     el['proxy-port'].value = el['proxy-type'].value === 'http' ? 8080 : 1080
@@ -83,6 +86,7 @@ function render() {
   el['detail-server'].textContent = `${account.host}:${account.port}`
   el['detail-version'].textContent = account.version || 'Auto-detect'
   el['detail-antiafk'].textContent = account.antiAfk ? `Every ${account.antiAfkInterval} seconds` : 'Disabled'
+  el['auto-deposit-toggle'].checked = account.autoDepositToChest === true
   renderStatus(status)
   renderConsole()
   renderTelemetry()
@@ -114,6 +118,7 @@ function renderAccountList() {
     button.append(avatar, copy, indicator)
     button.addEventListener('click', () => {
       state.selectedId = account.id
+      state.selectedInventorySlot = null
       render()
     })
     const controls = document.createElement('span')
@@ -211,6 +216,7 @@ function renderStatus({ status, detail }) {
   el['chat-message'].disabled = !canInteract
   el['chat-form'].querySelector('button').disabled = !canInteract
   document.querySelectorAll('[data-control], [data-look]').forEach((button) => { button.disabled = !canInteract })
+  updateInventoryActions(canInteract)
 }
 
 function renderConsole() {
@@ -241,19 +247,28 @@ function renderTelemetry() {
   el['detail-health'].textContent = telemetry ? `${formatNumber(telemetry.health)} / 20` : '—'
   el['detail-hunger'].textContent = telemetry ? `${formatNumber(telemetry.food)} / 20` : '—'
   el['detail-coordinates'].textContent = telemetry?.position ? `${telemetry.position.x}, ${telemetry.position.y}, ${telemetry.position.z}` : '—'
+  el['detail-chest'].textContent = telemetry?.nearestChest ? `${telemetry.nearestChest.x}, ${telemetry.nearestChest.y}, ${telemetry.nearestChest.z} (${formatNumber(telemetry.nearestChest.distance)} blocks)` : telemetry ? 'Not found within 5 blocks' : '—'
   el['detail-dimension'].textContent = telemetry ? String(telemetry.dimension || 'unknown').replace(/^minecraft:/, '') : '—'
   const items = telemetry?.inventory || []
+  if (!items.some((item) => item.slot === state.selectedInventorySlot)) state.selectedInventorySlot = null
   el['inventory-count'].textContent = telemetry ? `${items.length} occupied slot${items.length === 1 ? '' : 's'}` : 'Connect to view items'
   if (!items.length) {
     const empty = document.createElement('div')
     empty.className = 'inventory-empty'
     empty.textContent = telemetry ? 'Inventory is empty.' : 'Inventory will appear while this account is online.'
     el['inventory-grid'].replaceChildren(empty)
+    updateInventoryActions()
     return
   }
   el['inventory-grid'].replaceChildren(...items.map((item) => {
-    const slot = document.createElement('div')
-    slot.className = 'inventory-slot'
+    const slot = document.createElement('button')
+    slot.type = 'button'
+    slot.className = `inventory-slot${item.slot === state.selectedInventorySlot ? ' selected' : ''}`
+    slot.setAttribute('aria-pressed', item.slot === state.selectedInventorySlot ? 'true' : 'false')
+    slot.addEventListener('click', () => {
+      state.selectedInventorySlot = state.selectedInventorySlot === item.slot ? null : item.slot
+      renderTelemetry()
+    })
     const name = document.createElement('strong')
     name.textContent = item.displayName
     const meta = document.createElement('span')
@@ -261,6 +276,41 @@ function renderTelemetry() {
     slot.append(name, meta)
     return slot
   }))
+  updateInventoryActions()
+}
+
+function updateInventoryActions(canInteract = ['online', 'connected'].includes(getStatus(state.selectedId).status)) {
+  const telemetry = state.telemetry.get(state.selectedId)
+  const item = telemetry?.inventory?.find((entry) => entry.slot === state.selectedInventorySlot)
+  el['drop-selected'].disabled = !canInteract || !item
+  el['drop-selected'].textContent = item ? `Drop ${item.count} × ${item.displayName}` : 'Drop selected stack'
+}
+
+async function dropSelectedStack() {
+  const slot = state.selectedInventorySlot
+  if (slot == null) return
+  el['drop-selected'].disabled = true
+  try {
+    await api.dropStack(state.selectedId, slot)
+    state.selectedInventorySlot = null
+    toast('Selected stack dropped.')
+  } catch (error) { toast(cleanError(error), 'error') }
+  renderTelemetry()
+}
+
+async function toggleAutoDeposit() {
+  const account = selectedAccount()
+  if (!account) return
+  const enabled = el['auto-deposit-toggle'].checked
+  el['auto-deposit-toggle'].disabled = true
+  try {
+    const saved = await api.setAutoDeposit(account.id, enabled)
+    Object.assign(account, saved)
+    toast(enabled ? 'Auto-deposit enabled.' : 'Auto-deposit disabled.')
+  } catch (error) {
+    el['auto-deposit-toggle'].checked = account.autoDepositToChest === true
+    toast(cleanError(error), 'error')
+  } finally { el['auto-deposit-toggle'].disabled = false }
 }
 
 function formatNumber(value) {
@@ -292,9 +342,10 @@ function openAccountDialog(account) {
   el['auto-reconnect'].checked = account?.autoReconnect !== false
   el['auto-reconnect-delay'].value = account?.autoReconnectDelay || 5
   el['auto-reconnect-max'].value = account?.autoReconnectMaxAttempts ?? 0
+  el['auto-deposit-setting'].checked = account?.autoDepositToChest === true
   el['join-message'].value = account?.joinMessage || ''
   el['server-change-message'].value = account?.serverChangeMessage || ''
-  el['message-delay'].value = account?.messageDelay ?? 2
+  el['message-delay'].value = account?.messageDelay ?? 5
   el['dialog-title'].textContent = account ? 'Edit account' : 'Add account'
   el['delete-account'].hidden = !account
   el['account-dialog'].showModal()
@@ -329,6 +380,7 @@ async function saveAccount(event) {
     autoReconnect: el['auto-reconnect'].checked,
     autoReconnectDelay: Number(el['auto-reconnect-delay'].value),
     autoReconnectMaxAttempts: Number(el['auto-reconnect-max'].value),
+    autoDepositToChest: el['auto-deposit-setting'].checked,
     joinMessage: el['join-message'].value,
     serverChangeMessage: el['server-change-message'].value,
     messageDelay: Number(el['message-delay'].value)
@@ -339,6 +391,7 @@ async function saveAccount(event) {
     if (index === -1) state.accounts.push(saved)
     else state.accounts[index] = saved
     state.selectedId = saved.id
+    state.selectedInventorySlot = null
     el['account-dialog'].close()
     render()
     toast('Account saved.')
@@ -357,6 +410,7 @@ async function deleteAccount() {
   state.logs.delete(id)
   state.telemetry.delete(id)
   state.selectedId = state.accounts[0]?.id || null
+  state.selectedInventorySlot = null
   el['account-dialog'].close()
   render()
   toast('Account deleted.')

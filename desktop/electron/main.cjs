@@ -67,10 +67,12 @@ app.on('before-quit', () => {
 
 function registerIpc() {
   ipcMain.handle('accounts:list', () => store.list().map(publicAccount))
-  ipcMain.handle('accounts:save', (_event, input) => {
+  ipcMain.handle('accounts:save', async (_event, input) => {
     const existing = store.list().find((account) => account.id === input?.id)
     const account = validateAccount(input, existing)
-    return publicAccount(store.save(account))
+    const saved = store.save(account)
+    if (existing && existing.autoDepositToChest !== saved.autoDepositToChest) await bots.setAutoDeposit(saved.id, saved.autoDepositToChest)
+    return publicAccount(saved)
   })
   ipcMain.handle('accounts:delete', (_event, id) => {
     bots.disconnect(id)
