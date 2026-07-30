@@ -67,10 +67,12 @@ app.on('before-quit', () => {
 
 function registerIpc() {
   ipcMain.handle('accounts:list', () => store.list().map(publicAccount))
-  ipcMain.handle('accounts:save', (_event, input) => {
+  ipcMain.handle('accounts:save', async (_event, input) => {
     const existing = store.list().find((account) => account.id === input?.id)
     const account = validateAccount(input, existing)
-    return publicAccount(store.save(account))
+    const saved = store.save(account)
+    if (existing && existing.autoDepositToChest !== saved.autoDepositToChest) await bots.setAutoDeposit(saved.id, saved.autoDepositToChest)
+    return publicAccount(saved)
   })
   ipcMain.handle('accounts:delete', (_event, id) => {
     bots.disconnect(id)
@@ -82,6 +84,14 @@ function registerIpc() {
   ipcMain.handle('bot:chat', (_event, { id, message }) => bots.sendChat(id, message))
   ipcMain.handle('bot:control', (_event, { id, control, duration }) => bots.control(id, control, duration))
   ipcMain.handle('bot:look', (_event, { id, direction }) => bots.look(id, direction))
+  ipcMain.handle('bot:drop-stack', (_event, { id, slot }) => bots.dropStack(id, slot))
+  ipcMain.handle('bot:auto-deposit', async (_event, { id, enabled }) => {
+    const account = store.list().find((item) => item.id === id)
+    if (!account) throw new Error('Account not found.')
+    const updated = store.save({ ...account, autoDepositToChest: enabled === true })
+    await bots.setAutoDeposit(id, updated.autoDepositToChest)
+    return publicAccount(updated)
+  })
   ipcMain.handle('auth:open-isolated', (_event, { id, url, code }) => openIsolatedLogin(id, url, code))
   ipcMain.handle('remote:status', () => remoteAccess.status())
   ipcMain.handle('remote:open-owner', () => shell.openExternal(remoteAccess.ownerUrl()))
@@ -230,10 +240,11 @@ function validateAccount(input, existing) {
     autoReconnectDelay: Math.max(1, Math.min(Number(input?.autoReconnectDelay) || 5, 300)),
     autoReconnectMaxAttempts: Math.max(0, Math.min(Number(input?.autoReconnectMaxAttempts) || 0, 1000)),
     connectOnStartup: input?.connectOnStartup === true,
+    autoDepositToChest: input?.autoDepositToChest === true,
     proxy: validateProxy(input?.proxy, existing?.proxy),
     joinMessage: String(input?.joinMessage || '').trim().slice(0, 256),
     serverChangeMessage: String(input?.serverChangeMessage || '').trim().slice(0, 256),
-    messageDelay: Math.max(0, Math.min(Number(input?.messageDelay) || 2, 30))
+    messageDelay: Math.max(0, Math.min(input?.messageDelay === '' || input?.messageDelay == null ? 5 : Number(input.messageDelay) || 0, 30))
   }
 }
 

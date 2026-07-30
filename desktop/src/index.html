@@ -89,6 +89,7 @@
                   <div><dt>HP</dt><dd id="detail-health">—</dd></div>
                   <div><dt>Hunger</dt><dd id="detail-hunger">—</dd></div>
                   <div><dt>Coordinates</dt><dd id="detail-coordinates">—</dd></div>
+                  <div><dt>Closest chest</dt><dd id="detail-chest">Not found</dd></div>
                   <div><dt>Dimension</dt><dd id="detail-dimension">—</dd></div>
                 </dl>
               </section>
@@ -112,7 +113,13 @@
             </aside>
           </div>
           <section class="panel inventory-panel" aria-labelledby="inventory-title">
-            <header class="panel-header"><div><h2 id="inventory-title">Inventory</h2><p id="inventory-count">Connect to view items</p></div></header>
+            <header class="panel-header inventory-header">
+              <div><h2 id="inventory-title">Inventory</h2><p id="inventory-count">Connect to view items</p></div>
+              <div class="inventory-toolbar">
+                <label class="compact-toggle"><input id="auto-deposit-toggle" type="checkbox" /><span>Auto-deposit to closest chest</span></label>
+                <button id="drop-selected" class="button danger" type="button" disabled>Drop selected stack</button>
+              </div>
+            </header>
             <div id="inventory-grid" class="inventory-grid"><div class="inventory-empty">Inventory will appear while this account is online.</div></div>
           </section>
         </section>
@@ -167,13 +174,18 @@
           </label>
           <label class="field"><span>First retry (seconds)</span><input id="auto-reconnect-delay" type="number" min="1" max="300" value="5" /></label>
           <label class="field"><span>Maximum retries</span><input id="auto-reconnect-max" type="number" min="0" max="1000" value="0" /><small>Use 0 to keep retrying.</small></label>
+          <label class="toggle-row full">
+            <input id="auto-deposit-setting" type="checkbox" />
+            <span class="toggle" aria-hidden="true"></span>
+            <span><strong>Auto-deposit inventory</strong><small>Off by default. While connected, moves all inventory stacks into the closest chest within five blocks and records its coordinates.</small></span>
+          </label>
           <div class="form-section full">
             <h3>Automatic messages</h3>
             <p>Send a chat message or command when this account joins or changes server/world.</p>
           </div>
           <label class="field full"><span>On server join</span><textarea id="join-message" maxlength="256" rows="2" placeholder="Example: /login password or Hello!"></textarea></label>
           <label class="field full"><span>On server/world change</span><textarea id="server-change-message" maxlength="256" rows="2" placeholder="Example: /server survival"></textarea></label>
-          <label class="field full"><span>Wait before sending (seconds)</span><input id="message-delay" type="number" min="0" max="30" value="2" /></label>
+          <label class="field full"><span>Wait before sending (seconds)</span><input id="message-delay" type="number" min="0" max="30" value="5" /></label>
         </div>
         <p id="form-error" class="form-error" role="alert" hidden></p>
         <footer class="dialog-footer">

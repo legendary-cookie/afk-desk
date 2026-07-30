@@ -15,6 +15,7 @@ class FakeBot extends EventEmitter {
     this.game = { dimension: 'overworld' }
     this.inventory = new EventEmitter()
     this.inventory.items = () => []
+    this.inventory.slots = []
     this.entity = null
     this.controls = []
     this.messages = []
@@ -25,6 +26,7 @@ class FakeBot extends EventEmitter {
   chat(message) { this.messages.push(message) }
   setControlState(control, value) { this.controls.push([control, value]) }
   look() { return Promise.resolve() }
+  tossStack(item) { this.tossed = item; return Promise.resolve() }
   quit() { this.emit('end', 'quit') }
   supportFeature(name) { return name === 'seperateSignedChatCommandPacket' }
 }
@@ -163,8 +165,61 @@ test('builds a bounded player health, position, and inventory snapshot', () => {
     food: 18,
     position: { x: 12.3, y: 64, z: -8.8 },
     dimension: 'overworld',
+    nearestChest: null,
     inventory: [{ slot: 36, name: 'diamond_sword', displayName: 'Diamond Sword', count: 1 }]
   })
+})
+
+test('drops only the inventory stack selected by slot', async () => {
+  const events = []
+  const bot = new FakeBot()
+  const selected = { slot: 37, type: 264, metadata: 0, name: 'diamond', displayName: 'Diamond', count: 3 }
+  bot.inventory.items = () => [selected]
+  bot.inventory.slots[37] = selected
+  const manager = new BotManager({ profilesPath: 'profiles', emit: (...event) => events.push(event), createBot: () => bot })
+  manager.connect({ id: 'drop', username: 'user@example.com', host: 'localhost', antiAfk: false, autoReconnect: false })
+  bot.entity = { position: { x: 0, y: 64, z: 0 } }
+
+  await manager.dropStack('drop', 37)
+
+  assert.equal(bot.tossed, selected)
+  assert.match(events.find(([type]) => type === 'log')?.[2].message, /Dropped 3 × Diamond/)
+  await assert.rejects(manager.dropStack('drop', 38), /no longer available/i)
+  manager.disconnect('drop')
+})
+
+test('finds the closest chest and deposits all inventory stacks only when enabled', async () => {
+  const events = []
+  const bot = new FakeBot()
+  const items = [
+    { slot: 36, type: 4, metadata: 0, nbt: null, name: 'cobblestone', displayName: 'Cobblestone', count: 64 },
+    { slot: 37, type: 264, metadata: 0, nbt: null, name: 'diamond', displayName: 'Diamond', count: 2 }
+  ]
+  bot.inventory.items = () => items
+  bot.entity = { position: { x: 10, y: 64, z: 10 } }
+  bot.findBlock = ({ matching, maxDistance }) => {
+    assert.equal(maxDistance, 5)
+    const block = { name: 'chest', position: { x: 11, y: 64, z: 10 } }
+    return matching(block) ? block : null
+  }
+  const deposits = []
+  let closed = false
+  bot.openChest = async () => ({
+    deposit: async (...args) => deposits.push(args),
+    close: () => { closed = true }
+  })
+  const manager = new BotManager({ profilesPath: 'profiles', emit: (...event) => events.push(event), createBot: () => bot })
+  manager.connect({ id: 'chest', username: 'user@example.com', host: 'localhost', antiAfk: false, autoReconnect: false, autoDepositToChest: false })
+
+  await manager.refreshChest('chest')
+  assert.deepEqual(deposits, [])
+  assert.deepEqual(events.filter(([type]) => type === 'telemetry').at(-1)[2].nearestChest, { x: 11, y: 64, z: 10, distance: 1 })
+
+  await manager.setAutoDeposit('chest', true)
+  assert.deepEqual(deposits, [[4, 0, 64, null], [264, 0, 2, null]])
+  assert.equal(closed, true)
+  assert.match(events.filter(([type]) => type === 'log').at(-1)[2].message, /Deposited 66 items into chest at 11, 64, 10/)
+  manager.disconnect('chest')
 })
 
 test('resends client settings when Velocity switches backend servers', () => {

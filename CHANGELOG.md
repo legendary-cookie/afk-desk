@@ -2,6 +2,13 @@
 
 For the complete desktop history from 0.1.0 onward, including source tags, installers, and comparisons, see [HISTORY.md](HISTORY.md).
 
+## Desktop 0.5.0 — Unreleased
+
+- Added selection and explicit dropping of individual inventory stacks.
+- Added optional per-account auto-deposit into the closest chest within five blocks; it is off by default.
+- Added nearby chest coordinates to the desktop and browser player-state views.
+- Changed the default automatic-message delay for new accounts to five seconds.
+
 ## Desktop 0.4.1 / Mobile 0.1.0 — 2026-07-30
 
 ### Desktop

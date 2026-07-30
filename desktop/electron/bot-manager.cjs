@@ -5,6 +5,9 @@ applyProtocolFixes()
 const mineflayer = require('mineflayer')
 
 const PROXY_COMMANDS = new Set(['server', 'hub', 'lobby', 'switch'])
+const CHEST_NAMES = new Set(['chest', 'trapped_chest'])
+const CHEST_SCAN_INTERVAL = 5000
+const CHEST_MAX_DISTANCE = 5
 
 class BotManager {
   constructor({ profilesPath, emit, createBot = mineflayer.createBot, scheduleReconnectTimer = setTimeout, clearReconnectTimer = clearTimeout }) {
@@ -38,7 +41,22 @@ class BotManager {
       onMsaCode: (code) => this.emit('login-code', account.id, normalizeLoginCode(code))
     })
 
-    const session = { bot, antiAfkTimer: null, jumpTimer: null, telemetryTimer: null, messageTimers: new Set(), ready: false, switching: false, joinMessageSent: false, identityKey: '', telemetryKey: '' }
+    const session = {
+      bot,
+      account: { ...account },
+      antiAfkTimer: null,
+      jumpTimer: null,
+      telemetryTimer: null,
+      chestScanTimer: null,
+      messageTimers: new Set(),
+      ready: false,
+      switching: false,
+      depositing: false,
+      joinMessageSent: false,
+      nearestChest: null,
+      identityKey: '',
+      telemetryKey: ''
+    }
     this.sessions.set(account.id, session)
     this.status(account.id, 'connecting', reconnecting ? `Reconnect attempt ${reconnectState.attempts}…` : `Connecting to ${account.host}…`)
 
@@ -70,6 +88,10 @@ class BotManager {
       emitIdentity()
       emitTelemetry()
       if (!session.telemetryTimer) session.telemetryTimer = setInterval(emitTelemetry, 2000)
+      if (!session.chestScanTimer) {
+        void this.refreshChest(account.id)
+        session.chestScanTimer = setInterval(() => { void this.refreshChest(account.id) }, CHEST_SCAN_INTERVAL)
+      }
       if (firstReady && account.antiAfk !== false) this.enableAntiAfk(account.id, account.antiAfkInterval)
       if (firstReady && account.joinMessage && !session.joinMessageSent) {
         session.joinMessageSent = true
@@ -96,7 +118,7 @@ class BotManager {
 
     const emitTelemetry = () => {
       if (!this.sessions.has(account.id)) return
-      const snapshot = buildTelemetry(bot)
+      const snapshot = buildTelemetry(bot, session.nearestChest)
       const { at: _at, ...stableSnapshot } = snapshot
       const key = JSON.stringify(stableSnapshot)
       if (key === session.telemetryKey) return
@@ -211,6 +233,64 @@ class BotManager {
     bot.look(bot.entity.yaw + delta, bot.entity.pitch, true)
   }
 
+  async dropStack(id, slot) {
+    const bot = this.requireOnline(id)
+    const safeSlot = Math.max(0, Math.min(Number(slot) || 0, 255))
+    const item = bot.inventory?.slots?.[safeSlot] || bot.inventory?.items?.().find((entry) => entry.slot === safeSlot)
+    if (!item) throw new Error('That inventory stack is no longer available.')
+    await bot.tossStack(item)
+    this.emit('log', id, { kind: 'sent', message: `Dropped ${item.count} × ${item.displayName || item.name}`, at: Date.now() })
+    this.emitTelemetry(id)
+  }
+
+  async setAutoDeposit(id, enabled) {
+    const session = this.sessions.get(id)
+    if (!session) return
+    session.account.autoDepositToChest = enabled === true
+    if (enabled) await this.refreshChest(id)
+    else this.emitTelemetry(id)
+  }
+
+  async refreshChest(id) {
+    const session = this.sessions.get(id)
+    if (!session?.bot?.entity || session.depositing) return
+    const block = findNearestChest(session.bot)
+    session.nearestChest = block ? chestLocation(session.bot, block) : null
+    this.emitTelemetry(id)
+    if (!session.account.autoDepositToChest || !block) return
+    const items = session.bot.inventory?.items?.() || []
+    if (!items.length) return
+    session.depositing = true
+    let chest
+    try {
+      chest = await session.bot.openChest(block)
+      let deposited = 0
+      for (const item of items) {
+        await chest.deposit(item.type, item.metadata ?? null, item.count, item.nbt)
+        deposited += item.count
+      }
+      const { x, y, z } = session.nearestChest
+      this.emit('log', id, { kind: 'sent', message: `Deposited ${deposited} items into chest at ${x}, ${y}, ${z}.`, at: Date.now() })
+    } catch (error) {
+      this.emit('log', id, { kind: 'error', message: `Auto-deposit failed: ${String(error?.message || error).slice(0, 160)}`, at: Date.now() })
+    } finally {
+      try { chest?.close() } catch {}
+      session.depositing = false
+      this.emitTelemetry(id)
+    }
+  }
+
+  emitTelemetry(id) {
+    const session = this.sessions.get(id)
+    if (!session) return
+    const snapshot = buildTelemetry(session.bot, session.nearestChest)
+    const { at: _at, ...stableSnapshot } = snapshot
+    const key = JSON.stringify(stableSnapshot)
+    if (key === session.telemetryKey) return
+    session.telemetryKey = key
+    this.emit('telemetry', id, snapshot)
+  }
+
   scheduleMessage(id, message, delaySeconds = 2) {
     const session = this.sessions.get(id)
     if (!session) return
@@ -249,11 +329,13 @@ class BotManager {
     if (session.antiAfkTimer) clearInterval(session.antiAfkTimer)
     if (session.jumpTimer) clearTimeout(session.jumpTimer)
     if (session.telemetryTimer) clearInterval(session.telemetryTimer)
+    if (session.chestScanTimer) clearInterval(session.chestScanTimer)
     for (const timer of session.messageTimers || []) clearTimeout(timer)
     session.messageTimers?.clear()
     session.antiAfkTimer = null
     session.jumpTimer = null
     session.telemetryTimer = null
+    session.chestScanTimer = null
   }
 
   requireOnline(id) {
@@ -368,7 +450,27 @@ function normalizeSkinUrl(value) {
   } catch { return '' }
 }
 
-function buildTelemetry(bot) {
+function findNearestChest(bot) {
+  if (!bot?.entity?.position || typeof bot.findBlock !== 'function') return null
+  return bot.findBlock({ matching: (block) => CHEST_NAMES.has(block?.name), maxDistance: CHEST_MAX_DISTANCE })
+}
+
+function chestLocation(bot, block) {
+  const position = block?.position
+  const player = bot?.entity?.position
+  if (!position || !player) return null
+  const deltaX = Number(position.x) - Number(player.x)
+  const deltaY = Number(position.y) - Number(player.y)
+  const deltaZ = Number(position.z) - Number(player.z)
+  return {
+    x: Math.round(Number(position.x)),
+    y: Math.round(Number(position.y)),
+    z: Math.round(Number(position.z)),
+    distance: Math.round(Math.sqrt(deltaX ** 2 + deltaY ** 2 + deltaZ ** 2) * 10) / 10
+  }
+}
+
+function buildTelemetry(bot, nearestChest = null) {
   const position = bot?.entity?.position
   const finite = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback
   const inventory = (bot?.inventory?.items?.() || []).slice(0, 46).map((item) => ({
@@ -386,9 +488,10 @@ function buildTelemetry(bot) {
       z: Math.round(finite(position.z) * 10) / 10
     } : null,
     dimension: String(bot?.game?.dimension || 'unknown').slice(0, 80),
+    nearestChest,
     inventory,
     at: Date.now()
   }
 }
 
-module.exports = { BotManager, normalizeLoginCode, extractText, shouldUseProxyCommandPacket, parseMinecraftFormatting, normalizeSkinUrl, buildTelemetry }
+module.exports = { BotManager, normalizeLoginCode, extractText, shouldUseProxyCommandPacket, parseMinecraftFormatting, normalizeSkinUrl, findNearestChest, buildTelemetry }
