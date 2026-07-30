@@ -1,5 +1,7 @@
 # Changelog
 
+For the complete desktop history from 0.1.0 onward, including source tags, installers, and comparisons, see [HISTORY.md](HISTORY.md).
+
 ## Desktop 0.4.1 / Mobile 0.1.0 — 2026-07-30
 
 ### Desktop

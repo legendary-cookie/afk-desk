@@ -2,7 +2,7 @@
 
 AFK Desk is a free, local-first Minecraft Java connection client for Windows, Android, and iOS source builds. It keeps multiple Microsoft-authenticated accounts connected without launching the full game and has no subscriptions, analytics, or account-count limits.
 
-> [Download the latest Windows installer and Android APK](https://github.com/legendary-cookie/afk-desk/releases/latest)
+> [Download the latest Windows installer and Android APK](https://github.com/legendary-cookie/afk-desk/releases/latest) · [Browse every version and source comparison](HISTORY.md)
 
 ## Highlights
 

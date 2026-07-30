@@ -1,0 +1,20 @@
+# SHA-256 checksums for preserved AFK Desk desktop artifacts
+
+0f2945ca2e3e6cc20a762f7183eefab15ee552c9c7c009adf97a573b0f151306  AFK-Desk-Setup-0.1.0.exe
+51156e737440e08cad954ce3fb695d82ec1a20987539c600feb451003a2cd61b  AFK-Desk-Source-0.1.0.zip
+29e1720e1bc840b362151ff88f3ecb768a7bf5b48a6e8ca3d76d084e29644627  AFK-Desk-Setup-0.2.0.exe
+b2ae73bbe0c65dc3532cdecdf3a7b9ff5060998be4a28abee80667f50c86f858  AFK-Desk-Source-0.2.0.zip
+7de0a606a8296ce71bf798f2e00f42db6bab231431ead54de0e44f9ad68a984c  AFK-Desk-Setup-0.2.1.exe
+ae48d81211cbf15979fb7cedb7371a8f6508f3f0295e1ad5d73e71e2a001f897  AFK-Desk-Source-0.2.1.zip
+478ba71f44cfbbf804dff8aa06780d40b4b4f96f2acc8dd084f9fbc64ecbe333  AFK-Desk-Setup-0.2.2.exe
+36de0e64ac4e8dc12944125e4332c17d33c84021befbfbe48777ab032557d7f4  AFK-Desk-Source-0.2.2.zip
+b2a82739e292c6ac1b3b72fda81d0fdc2b1bdea9abfe3a94e85554bf02dfd8b5  AFK-Desk-Setup-0.2.3.exe
+b9252d0a0cd753b4d595bb5bc4a0aa91e19cf5c9f1412986d0995cb8e8727739  AFK-Desk-Source-0.2.3.zip
+44c355a48f2532397f8fb31318ba2adbecdfc054ac0cd9c54a13553403fd53f3  AFK-Desk-Setup-0.2.4.exe
+4b8786113aeedc432e7052b965df04308eb860c0f83bae878edd8ef800e6e62b  AFK-Desk-Source-0.2.4.zip
+90a1679d378496c30f3caf0343cbe0759b2e904805873b0f6dd399ade5e4081d  AFK-Desk-Setup-0.3.0.exe
+d09c6cbeae7ced25e48c94cb3be2202ae4f56b1ab0f5975cb77d26feb8ae7757  AFK-Desk-Source-0.3.0.zip
+36a8955cc642e235e03eee34556247386df33d8d5aacac96e951432722278067  AFK-Desk-Setup-0.4.0.exe
+74d02546a6bd004285f934af8ff325cfd95e8a1b955635f903ef33c9381917a2  AFK-Desk-Source-0.4.0.zip
+be76c79a5b4e1bdcabc2ffd6e18cdc773a572dcad64f423e9fe36f1fd745b148  AFK-Desk-Setup-0.4.1.exe
+97556d2d17d8951a52d57a98bec70548199a7d3bbbeeb580022a03174efe782b  AFK-Desk-Source-0.4.1.zip

@@ -1,0 +1,27 @@
+# AFK Desk version history
+
+This archive preserves the actual desktop source snapshot and Windows installer produced for each AFK Desk release. The snapshots form a chronological Git history on the [`historical/desktop`](https://github.com/legendary-cookie/afk-desk/tree/historical/desktop) branch, so GitHub can show the real code changes between versions.
+
+## Timeline
+
+| Version | Built | Main changes | Links |
+| --- | --- | --- | --- |
+| 0.1.0 | 2026-07-29 12:21 +08:00 | First local-first desktop client: Microsoft accounts, server profiles, chat, movement, and anti-AFK. | [source](https://github.com/legendary-cookie/afk-desk/tree/v0.1.0) · [release](https://github.com/legendary-cookie/afk-desk/releases/tag/v0.1.0) |
+| 0.2.0 | 2026-07-29 12:42 +08:00 | Added isolated Microsoft sign-in, join/server-change messages, and permission-scoped browser access. | [source](https://github.com/legendary-cookie/afk-desk/tree/v0.2.0) · [changes](https://github.com/legendary-cookie/afk-desk/compare/v0.1.0...v0.2.0) · [release](https://github.com/legendary-cookie/afk-desk/releases/tag/v0.2.0) |
+| 0.2.1 | 2026-07-29 13:42 +08:00 | Fixed chat and movement controls while the client is authenticated but still completing world readiness; improved join/switch event handling. | [source](https://github.com/legendary-cookie/afk-desk/tree/v0.2.1) · [changes](https://github.com/legendary-cookie/afk-desk/compare/v0.2.0...v0.2.1) · [release](https://github.com/legendary-cookie/afk-desk/releases/tag/v0.2.1) |
+| 0.2.2 | 2026-07-29 13:49 +08:00 | Added modern proxy-command packets, Minecraft 1.21.11 chat checksum compatibility, and readable kick reasons. | [source](https://github.com/legendary-cookie/afk-desk/tree/v0.2.2) · [changes](https://github.com/legendary-cookie/afk-desk/compare/v0.2.1...v0.2.2) · [release](https://github.com/legendary-cookie/afk-desk/releases/tag/v0.2.2) |
+| 0.2.3 | 2026-07-29 14:05 +08:00 | Added automatic reconnect with backoff and improved Velocity backend-switch handling. | [source](https://github.com/legendary-cookie/afk-desk/tree/v0.2.3) · [changes](https://github.com/legendary-cookie/afk-desk/compare/v0.2.2...v0.2.3) · [release](https://github.com/legendary-cookie/afk-desk/releases/tag/v0.2.3) |
+| 0.2.4 | 2026-07-29 14:16 +08:00 | Fixed the UI remaining stuck on “Switching servers…” after Velocity configuration completes. | [source](https://github.com/legendary-cookie/afk-desk/tree/v0.2.4) · [changes](https://github.com/legendary-cookie/afk-desk/compare/v0.2.3...v0.2.4) · [release](https://github.com/legendary-cookie/afk-desk/releases/tag/v0.2.4) |
+| 0.3.0 | 2026-07-29 14:25 +08:00 | Added Minecraft chat formatting and authenticated player-head avatars. | [source](https://github.com/legendary-cookie/afk-desk/tree/v0.3.0) · [changes](https://github.com/legendary-cookie/afk-desk/compare/v0.2.4...v0.3.0) · [release](https://github.com/legendary-cookie/afk-desk/releases/tag/v0.3.0) |
+| 0.4.0 | 2026-07-29 15:23 +08:00 | Added automatic IGN discovery, account ordering, proxies, startup connections, inventory, coordinates, health, hunger, and resource-use improvements. | [source](https://github.com/legendary-cookie/afk-desk/tree/v0.4.0) · [changes](https://github.com/legendary-cookie/afk-desk/compare/v0.3.0...v0.4.0) · [release](https://github.com/legendary-cookie/afk-desk/releases/tag/v0.4.0) |
+| 0.4.1 | 2026-07-30 13:53 +08:00 | Fixed the desktop console viewport and scrolling, hardened shutdown, updated Electron packaging, and introduced the Android/iOS-source mobile client. | [desktop snapshot](https://github.com/legendary-cookie/afk-desk/tree/desktop-v0.4.1) · [desktop changes](https://github.com/legendary-cookie/afk-desk/compare/v0.4.0...desktop-v0.4.1) · [monorepo changes](https://github.com/legendary-cookie/afk-desk/compare/desktop-v0.4.1...main) · [release](https://github.com/legendary-cookie/afk-desk/releases/tag/v0.4.1) |
+
+## Archive layout
+
+- Tags `v0.1.0` through `v0.4.0` point to exact desktop source commits.
+- Tag `desktop-v0.4.1` preserves the final desktop-only snapshot.
+- Tag `v0.4.1` points to the current desktop/mobile monorepo release.
+- Every historical release includes its original Windows installer and an explicit desktop source ZIP.
+- [RELEASE_CHECKSUMS.txt](RELEASE_CHECKSUMS.txt) contains SHA-256 hashes for the preserved artifacts.
+
+The historical Git commit and tag dates use the original local build timestamps. GitHub release pages may show a later publication date because the archive was published after the builds were recovered.
