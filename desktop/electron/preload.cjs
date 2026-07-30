@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld('afkDesk', {
   sendChat: (id, message) => ipcRenderer.invoke('bot:chat', { id, message }),
   control: (id, control, duration) => ipcRenderer.invoke('bot:control', { id, control, duration }),
   look: (id, direction) => ipcRenderer.invoke('bot:look', { id, direction }),
+  dropStack: (id, slot) => ipcRenderer.invoke('bot:drop-stack', { id, slot }),
+  setAutoDeposit: (id, enabled) => ipcRenderer.invoke('bot:auto-deposit', { id, enabled }),
   openIsolatedLogin: (id, url, code) => ipcRenderer.invoke('auth:open-isolated', { id, url, code }),
   remoteStatus: () => ipcRenderer.invoke('remote:status'),
   openRemoteDashboard: () => ipcRenderer.invoke('remote:open-owner'),

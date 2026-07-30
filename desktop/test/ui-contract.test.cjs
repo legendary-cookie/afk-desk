@@ -19,3 +19,12 @@ test('desktop console has a fixed viewport and scrolls messages internally', () 
   assert.match(css, /\.console-panel\s*\{[^}]*height:\s*560px;[^}]*min-height:\s*0;/s)
   assert.match(css, /\.console-log\s*\{[^}]*min-height:\s*0;[^}]*overflow-y:\s*auto;/s)
 })
+
+test('desktop bridge exposes inventory actions and accounts default automatic deposits off', () => {
+  const preload = fs.readFileSync(path.join(__dirname, '..', 'electron', 'preload.cjs'), 'utf8')
+  const main = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
+  assert.match(preload, /dropStack:.*bot:drop-stack/)
+  assert.match(preload, /setAutoDeposit:.*bot:auto-deposit/)
+  assert.match(main, /autoDepositToChest:\s*input\?\.autoDepositToChest === true/)
+  assert.match(main, /messageDelay:.*\? 5 :/)
+})
