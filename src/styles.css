@@ -95,15 +95,15 @@ h1, h2, p { margin-top: 0; }
 .status-banner strong, .status-banner span { display: block; }
 .status-banner strong { font-size: 12px; text-transform: capitalize; }
 .status-banner div span { margin-top: 2px; color: var(--muted); font-size: 11px; }
-.workspace-grid { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; min-height: 560px; }
+.workspace-grid { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; min-height: 0; }
 .panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; }
 .panel-header { display: flex; justify-content: space-between; align-items: center; min-height: 64px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
 .panel-header h2 { margin: 0; font-size: 14px; }
 .panel-header p { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
 .text-button, .icon-button { padding: 5px; background: transparent; border: 0; color: var(--muted); cursor: pointer; }
 .text-button:hover, .icon-button:hover { color: var(--text); }
-.console-panel { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-height: 560px; }
-.console-log { overflow: auto; padding: 14px 16px; font-family: "Cascadia Code", Consolas, monospace; font-size: 12px; line-height: 1.6; }
+.console-panel { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; height: 560px; min-height: 0; }
+.console-log { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 14px 16px; font-family: "Cascadia Code", Consolas, monospace; font-size: 12px; line-height: 1.6; }
 .console-placeholder { display: grid; place-items: center; height: 100%; color: var(--subtle); font-family: Inter, "Segoe UI", sans-serif; text-align: center; }
 .log-line { display: grid; grid-template-columns: 60px minmax(0,1fr); gap: 10px; padding: 3px 0; color: #c5cbd3; overflow-wrap: anywhere; }
 .log-line time { color: var(--subtle); }
@@ -221,6 +221,7 @@ legend { margin-bottom: 8px; color: #c8cdd4; font-size: 11px; font-weight: 700; 
   .privacy-note { display: none; }
   .main-content { padding: 18px 14px; }
   .topbar { align-items: center; }
+  .console-panel { height: min(560px, calc(100vh - 140px)); min-height: 400px; }
   .controls-column { grid-template-columns: 1fr; }
   .check-grid { grid-template-columns: 1fr; }
   .generated-link { grid-template-columns: 1fr; }
