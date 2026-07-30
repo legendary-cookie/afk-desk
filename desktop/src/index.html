@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https://textures.minecraft.net; connect-src 'none'" />
+    <title>AFK Desk</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Accounts">
+        <header class="brand">
+          <div class="brand-mark" aria-hidden="true">A</div>
+          <div>
+            <strong>AFK Desk</strong>
+            <span>Local Minecraft client</span>
+          </div>
+        </header>
+
+        <div class="sidebar-heading">
+          <span>Accounts</span>
+          <span id="account-count" class="count">0</span>
+        </div>
+        <nav id="account-list" class="account-list" aria-label="Minecraft accounts"></nav>
+
+        <button id="add-account" class="button primary sidebar-action" type="button">
+          <span aria-hidden="true">＋</span> Add account
+        </button>
+        <button id="browser-access" class="button secondary sidebar-action browser-action" type="button">Browser access</button>
+        <button id="open-settings" class="button secondary sidebar-action browser-action" type="button">Settings</button>
+        <p class="privacy-note">Credentials stay in Microsoft’s sign-in flow. AFK Desk never stores your password.</p>
+      </aside>
+
+      <main id="main-content" class="main-content">
+        <section id="empty-state" class="empty-state" aria-labelledby="empty-title">
+          <div class="empty-illustration" aria-hidden="true">
+            <span></span><span></span><span></span>
+          </div>
+          <h1 id="empty-title">Your quiet corner of Minecraft</h1>
+          <p>Add an account, pick a server, and stay connected without running the full game.</p>
+          <button class="button primary" data-action="add" type="button">Add your first account</button>
+        </section>
+
+        <section id="dashboard" class="dashboard" hidden>
+          <header class="topbar">
+            <div>
+              <div class="eyebrow">Selected account</div>
+              <h1 id="account-title">Account</h1>
+            </div>
+            <div class="topbar-actions">
+              <button id="edit-account" class="button secondary" type="button">Edit</button>
+              <button id="connection-button" class="button primary" type="button">Connect</button>
+            </div>
+          </header>
+
+          <div id="status-banner" class="status-banner" role="status" aria-live="polite">
+            <span class="status-dot" aria-hidden="true"></span>
+            <div><strong id="status-name">Offline</strong><span id="status-detail">Ready to connect</span></div>
+          </div>
+
+          <div class="workspace-grid">
+            <section class="panel console-panel" aria-labelledby="console-title">
+              <header class="panel-header">
+                <div>
+                  <h2 id="console-title">Console</h2>
+                  <p id="server-address">server.example.com</p>
+                </div>
+                <button id="clear-console" class="text-button" type="button">Clear</button>
+              </header>
+              <div id="console-log" class="console-log" role="log" aria-live="polite" aria-label="Server messages">
+                <div class="console-placeholder">Server messages will appear here after you connect.</div>
+              </div>
+              <form id="chat-form" class="chat-form">
+                <label class="sr-only" for="chat-message">Message or command</label>
+                <input id="chat-message" autocomplete="off" placeholder="Message or /command" disabled />
+                <button class="send-button" type="submit" disabled aria-label="Send message">Send</button>
+              </form>
+            </section>
+
+            <aside class="controls-column">
+              <section class="panel details-panel" aria-labelledby="details-title">
+                <header class="panel-header"><h2 id="details-title">Connection</h2></header>
+                <dl class="details-list">
+                  <div><dt>Account</dt><dd id="detail-username">—</dd></div>
+                  <div><dt>Server</dt><dd id="detail-server">—</dd></div>
+                  <div><dt>Version</dt><dd id="detail-version">Auto-detect</dd></div>
+                  <div><dt>Anti-AFK</dt><dd id="detail-antiafk">Every 45 seconds</dd></div>
+                  <div><dt>HP</dt><dd id="detail-health">—</dd></div>
+                  <div><dt>Hunger</dt><dd id="detail-hunger">—</dd></div>
+                  <div><dt>Coordinates</dt><dd id="detail-coordinates">—</dd></div>
+                  <div><dt>Dimension</dt><dd id="detail-dimension">—</dd></div>
+                </dl>
+              </section>
+
+              <section class="panel movement-panel" aria-labelledby="movement-title">
+                <header class="panel-header">
+                  <div><h2 id="movement-title">Movement</h2><p>Quick taps while online</p></div>
+                </header>
+                <div class="movement-grid" aria-label="Movement controls">
+                  <button data-control="forward" class="move-button forward" disabled aria-label="Move forward">W</button>
+                  <button data-control="left" class="move-button" disabled aria-label="Move left">A</button>
+                  <button data-control="back" class="move-button" disabled aria-label="Move backward">S</button>
+                  <button data-control="right" class="move-button" disabled aria-label="Move right">D</button>
+                </div>
+                <div class="movement-actions">
+                  <button data-control="jump" class="button secondary" disabled>Jump</button>
+                  <button data-look="left" class="button secondary" disabled>Look left</button>
+                  <button data-look="right" class="button secondary" disabled>Look right</button>
+                </div>
+              </section>
+            </aside>
+          </div>
+          <section class="panel inventory-panel" aria-labelledby="inventory-title">
+            <header class="panel-header"><div><h2 id="inventory-title">Inventory</h2><p id="inventory-count">Connect to view items</p></div></header>
+            <div id="inventory-grid" class="inventory-grid"><div class="inventory-empty">Inventory will appear while this account is online.</div></div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="account-dialog" aria-labelledby="dialog-title">
+      <form id="account-form" method="dialog">
+        <header class="dialog-header">
+          <div><div class="eyebrow">Connection profile</div><h2 id="dialog-title">Add account</h2></div>
+          <button class="icon-button" value="cancel" formnovalidate aria-label="Close">×</button>
+        </header>
+        <input id="account-id" type="hidden" />
+        <div class="form-grid">
+          <label class="field full"><span>Minecraft username</span><input id="label" maxlength="16" readonly placeholder="Detected after connecting" /><small>Filled automatically from the authenticated Minecraft account.</small></label>
+          <label class="field full"><span>Microsoft account email</span><input id="username" type="email" required autocomplete="username" placeholder="name@example.com" /></label>
+          <label class="field server-field"><span>Server address</span><input id="host" required placeholder="play.example.com" /></label>
+          <label class="field port-field"><span>Port</span><input id="port" type="number" min="1" max="65535" value="25565" required /></label>
+          <label class="field full"><span>Minecraft version</span><input id="version" placeholder="Auto-detect (recommended)" /><small>Leave blank unless the server needs a specific version.</small></label>
+          <label class="toggle-row full">
+            <input id="connect-on-startup" type="checkbox" />
+            <span class="toggle" aria-hidden="true"></span>
+            <span><strong>Connect when AFK Desk starts</strong><small>Automatically joins this account after the desktop app opens.</small></span>
+          </label>
+          <div class="form-section full">
+            <h3>Proxy</h3>
+            <p>Optionally route only this Minecraft account through a SOCKS5 or HTTP CONNECT proxy.</p>
+          </div>
+          <label class="toggle-row full">
+            <input id="proxy-enabled" type="checkbox" />
+            <span class="toggle" aria-hidden="true"></span>
+            <span><strong>Use a proxy for this account</strong><small>Microsoft sign-in remains direct; the Minecraft server connection uses the proxy.</small></span>
+          </label>
+          <div id="proxy-fields" class="proxy-grid full">
+            <label class="field"><span>Proxy type</span><select id="proxy-type"><option value="socks5">SOCKS5</option><option value="http">HTTP CONNECT</option></select></label>
+            <label class="field"><span>Proxy port</span><input id="proxy-port" type="number" min="1" max="65535" value="1080" /></label>
+            <label class="field full"><span>Proxy host</span><input id="proxy-host" maxlength="255" placeholder="proxy.example.com" /></label>
+            <label class="field"><span>Username (optional)</span><input id="proxy-username" maxlength="128" autocomplete="off" /></label>
+            <label class="field"><span>Password (optional)</span><input id="proxy-password" type="password" maxlength="512" autocomplete="new-password" placeholder="Not saved yet" /><small id="proxy-password-help">Encrypted with Windows protection.</small></label>
+            <label class="check-row full"><input id="proxy-clear-password" type="checkbox" /> Clear the previously saved proxy password</label>
+          </div>
+          <label class="toggle-row full">
+            <input id="anti-afk" type="checkbox" checked />
+            <span class="toggle" aria-hidden="true"></span>
+            <span><strong>Enable anti-AFK</strong><small>Occasionally jumps and turns to keep the connection active.</small></span>
+          </label>
+          <label class="field full"><span>Anti-AFK interval (seconds)</span><input id="anti-afk-interval" type="number" min="15" max="3600" value="45" /></label>
+          <label class="toggle-row full">
+            <input id="auto-reconnect" type="checkbox" checked />
+            <span class="toggle" aria-hidden="true"></span>
+            <span><strong>Auto reconnect</strong><small>Reconnect after kicks or connection loss, with an increasing delay between attempts.</small></span>
+          </label>
+          <label class="field"><span>First retry (seconds)</span><input id="auto-reconnect-delay" type="number" min="1" max="300" value="5" /></label>
+          <label class="field"><span>Maximum retries</span><input id="auto-reconnect-max" type="number" min="0" max="1000" value="0" /><small>Use 0 to keep retrying.</small></label>
+          <div class="form-section full">
+            <h3>Automatic messages</h3>
+            <p>Send a chat message or command when this account joins or changes server/world.</p>
+          </div>
+          <label class="field full"><span>On server join</span><textarea id="join-message" maxlength="256" rows="2" placeholder="Example: /login password or Hello!"></textarea></label>
+          <label class="field full"><span>On server/world change</span><textarea id="server-change-message" maxlength="256" rows="2" placeholder="Example: /server survival"></textarea></label>
+          <label class="field full"><span>Wait before sending (seconds)</span><input id="message-delay" type="number" min="0" max="30" value="2" /></label>
+        </div>
+        <p id="form-error" class="form-error" role="alert" hidden></p>
+        <footer class="dialog-footer">
+          <button id="delete-account" class="button danger" type="button" hidden>Delete</button>
+          <span class="footer-spacer"></span>
+          <button class="button secondary" value="cancel" formnovalidate>Cancel</button>
+          <button id="save-account" class="button primary" type="submit">Save account</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog id="login-dialog" aria-labelledby="login-title">
+      <div class="login-content">
+        <div class="login-icon" aria-hidden="true">M</div>
+        <div class="eyebrow">Microsoft sign-in</div>
+        <h2 id="login-title">Connect your account</h2>
+        <p>Open Microsoft’s device page, then enter this one-time code.</p>
+        <button id="login-code" class="login-code" type="button" title="Copy code">Waiting…</button>
+        <button id="open-login-private" class="button primary full-button" type="button">Sign in with a different account</button>
+        <button id="open-login" class="button secondary full-button login-secondary" type="button">Use my default browser</button>
+        <button id="close-login" class="text-button" type="button">Continue in background</button>
+      </div>
+    </dialog>
+
+    <dialog id="settings-dialog" aria-labelledby="settings-title">
+      <div>
+        <header class="dialog-header">
+          <div><div class="eyebrow">Application</div><h2 id="settings-title">Settings</h2></div>
+          <button id="close-settings" class="icon-button" type="button" aria-label="Close settings">×</button>
+        </header>
+        <div class="settings-body">
+          <label class="toggle-row">
+            <input id="start-with-windows" type="checkbox" />
+            <span class="toggle" aria-hidden="true"></span>
+            <span><strong>Start AFK Desk when Windows signs in</strong><small>Accounts with “Connect when AFK Desk starts” enabled will then join automatically.</small></span>
+          </label>
+        </div>
+        <footer class="dialog-footer">
+          <span class="footer-spacer"></span>
+          <button id="save-settings" class="button primary" type="button">Save settings</button>
+        </footer>
+      </div>
+    </dialog>
+
+    <dialog id="remote-dialog" class="wide-dialog" aria-labelledby="remote-title">
+      <div>
+        <header class="dialog-header">
+          <div><div class="eyebrow">Secure sharing</div><h2 id="remote-title">Browser access</h2></div>
+          <button id="close-remote" class="icon-button" type="button" aria-label="Close">×</button>
+        </header>
+        <div class="remote-body">
+          <section class="remote-intro">
+            <div><strong>Local dashboard</strong><span id="remote-local-url">Starting…</span></div>
+            <button id="open-dashboard" class="button secondary" type="button">Open dashboard</button>
+          </section>
+          <section class="remote-section">
+            <h3>Make it available remotely</h3>
+            <p>AFK Desk listens only on your computer. Tailscale can privately carry it to your phone or invited people without opening a public port.</p>
+            <code id="tailscale-command">tailscale serve --bg 37123</code>
+            <button id="enable-tailscale" class="button secondary" type="button">Enable with Tailscale</button>
+            <p id="tailscale-result" class="inline-result" hidden role="status"></p>
+            <label class="field"><span>Your Tailscale HTTPS address (optional)</span><input id="remote-base-url" type="url" placeholder="https://your-pc.your-tailnet.ts.net" /></label>
+          </section>
+          <section class="remote-section">
+            <h3>Create shared access</h3>
+            <label class="field"><span>Person or access name</span><input id="grant-label" maxlength="60" placeholder="Alex" /></label>
+            <fieldset><legend>Accounts they can use</legend><div id="grant-accounts" class="check-grid"></div></fieldset>
+            <fieldset><legend>Permissions</legend><div class="check-grid permissions-grid">
+              <label><input type="checkbox" data-permission="view" checked disabled /> View status and console</label>
+              <label><input type="checkbox" data-permission="chat" checked /> Send chat and commands</label>
+              <label><input type="checkbox" data-permission="control" /> Movement controls</label>
+              <label><input type="checkbox" data-permission="connect" /> Connect and disconnect</label>
+            </div></fieldset>
+            <button id="create-grant" class="button primary" type="button">Create access link</button>
+            <div id="generated-link" class="generated-link" hidden>
+              <label class="field"><span>Copy this link now — it is shown only once</span><input id="share-link" readonly /></label>
+              <button id="copy-share-link" class="button secondary" type="button">Copy link</button>
+            </div>
+          </section>
+          <section class="remote-section">
+            <h3>Active and revoked access</h3>
+            <div id="grant-list" class="grant-list"></div>
+          </section>
+        </div>
+      </div>
+    </dialog>
+
+    <div id="toast-region" class="toast-region" aria-live="polite"></div>
+    <script src="renderer.js"></script>
+  </body>
+</html>

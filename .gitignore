@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+.gradle/
+.cxx/
+DerivedData/
+Pods/
+*.apk
+*.aab
+*.ipa
+*.exe
+*.blockmap
+
+# Local SDK and signing configuration
+local.properties
+*.jks
+*.keystore
+*.p12
+*.mobileprovision
+
+# Runtime account and authentication data
+profiles/
+minecraft-profiles/
+*.token
+*.tokens
+
+# Editors and operating systems
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.log

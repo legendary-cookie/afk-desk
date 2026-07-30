@@ -1,0 +1,46 @@
+{
+  "name": "afkdesk",
+  "version": "0.4.1",
+  "description": "A simple, local-first Minecraft AFK desktop client",
+  "main": "electron/main.cjs",
+  "author": "AFK Desk contributors",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test",
+    "dist": "electron-builder --win nsis"
+  },
+  "dependencies": {
+    "mineflayer": "^4.32.0",
+    "socks": "^2.8.9"
+  },
+  "devDependencies": {
+    "electron": "^43.2.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "dev.afkdesk.app",
+    "productName": "AFK Desk",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron/**/*",
+      "src/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis",
+      "artifactName": "AFK-Desk-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  }
+}
