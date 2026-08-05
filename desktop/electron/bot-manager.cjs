@@ -59,6 +59,7 @@ class BotManager {
       checkTimeoutInterval: 45_000,
       onMsaCode: (code) => this.emit('login-code', account.id, normalizeLoginCode(code))
     })
+    installMovementPacketCompatibility(bot)
 
     const session = {
       bot,
@@ -746,15 +747,10 @@ function applyFluidCurrentPush(bot, motionState = null) {
         motionState.stagnantTicks = 0
         motionState.forcing = false
       }
-      if (motionState.stagnantTicks >= 2) motionState.forcing = true
-      if (motionState.forcing) {
-        const target = player.position.offset(directionX * minimumCurrent, 0, directionZ * minimumCurrent)
-        if (canOccupyFluidPosition(bot, target)) {
-          player.position.x = target.x
-          player.position.z = target.z
-          motionState.status = 'fallback'
-        }
-      }
+      // Never force coordinates here. Mineflayer sends the simulated position
+      // after this event, and moving even slightly into a solid block causes
+      // authoritative servers to correct the client every tick.
+      motionState.forcing = false
       motionState.x = player.position.x
       motionState.z = player.position.z
     }
@@ -827,26 +823,6 @@ function fluidCurrentAtBlock(bot, water) {
   return length > 0.001 ? { x: flowX / length, z: flowZ / length } : { x: 0, z: 0 }
 }
 
-function canOccupyFluidPosition(bot, position) {
-  const minX = Math.floor(position.x - 0.299)
-  const maxX = Math.floor(position.x + 0.299)
-  const minZ = Math.floor(position.z - 0.299)
-  const maxZ = Math.floor(position.z + 0.299)
-  const cursor = position.floored()
-  for (let y = Math.floor(position.y); y <= Math.floor(position.y + 1.799); y++) {
-    for (let z = minZ; z <= maxZ; z++) {
-      for (let x = minX; x <= maxX; x++) {
-        cursor.x = x
-        cursor.y = y
-        cursor.z = z
-        const block = bot.blockAt(cursor, false)
-        if (!block || (block.boundingBox !== 'empty' && waterDepth(block) < 0)) return false
-      }
-    }
-  }
-  return true
-}
-
 function resetFluidMotion(state, status = 'dry') {
   if (!state) return
   delete state.x
@@ -858,6 +834,25 @@ function resetFluidMotion(state, status = 'dry') {
   state.stagnantTicks = 0
   state.forcing = false
   state.status = status
+}
+
+function installMovementPacketCompatibility(bot) {
+  const client = bot?._client
+  if (!client || typeof client.write !== 'function' || client.__afkDeskMovementCompatibility) return
+  const write = client.write.bind(client)
+  client.write = (name, payload) => {
+    if (['position', 'look', 'position_look'].includes(name) && payload?.flags) {
+      payload = {
+        ...payload,
+        flags: {
+          ...payload.flags,
+          hasHorizontalCollision: bot.entity?.isCollidedHorizontally === true
+        }
+      }
+    }
+    return write(name, payload)
+  }
+  client.__afkDeskMovementCompatibility = true
 }
 
 function waterDepth(block) {
@@ -908,4 +903,4 @@ function buildTelemetry(bot, nearestChest = null, environmentalMovement, fluidMo
   }
 }
 
-module.exports = { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, normalizeSkinUrl, findNearestChest, buildTelemetry, describeNetworkError, normalizeAntiAfkSettings, applyEntityCollisionPush, applyFluidCurrentPush }
+module.exports = { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, normalizeSkinUrl, findNearestChest, buildTelemetry, describeNetworkError, normalizeAntiAfkSettings, applyEntityCollisionPush, applyFluidCurrentPush, installMovementPacketCompatibility }

@@ -2,7 +2,7 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const { EventEmitter } = require('node:events')
 const { Vec3 } = require('vec3')
-const { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, normalizeSkinUrl, buildTelemetry, describeNetworkError, applyEntityCollisionPush, applyFluidCurrentPush } = require('../electron/bot-manager.cjs')
+const { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, normalizeSkinUrl, buildTelemetry, describeNetworkError, applyEntityCollisionPush, applyFluidCurrentPush, installMovementPacketCompatibility } = require('../electron/bot-manager.cjs')
 const { computeSignedChatChecksum } = require('../electron/protocol-fixes.cjs')
 
 class FakeBot extends EventEmitter {
@@ -415,7 +415,7 @@ test('flowing water intersecting the player bounding box applies its current', (
   assert.notEqual(bot.entity.velocity.x, 0)
 })
 
-test('flowing water advances a client that remains position-stalled', () => {
+test('flowing water never forces client coordinates when normal physics is stalled', () => {
   const bot = new FakeBot()
   bot.entity = { position: new Vec3(0.5, 64, 0.5), velocity: new Vec3(0, 0, 0) }
   bot.blockAt = (position) => {
@@ -429,7 +429,38 @@ test('flowing water advances a client that remains position-stalled', () => {
 
   for (let tick = 0; tick < 5; tick++) applyFluidCurrentPush(bot, motionState)
 
-  assert.ok(bot.entity.position.x > 0.5)
+  assert.deepEqual(bot.entity.position, new Vec3(0.5, 64, 0.5))
+  assert.ok(bot.entity.velocity.x > 0)
+})
+
+test('modern movement packets report the collision state calculated by physics', () => {
+  const bot = new FakeBot()
+  bot.entity = { isCollidedHorizontally: true }
+  installMovementPacketCompatibility(bot)
+
+  bot._client.write('position', {
+    x: 1,
+    y: 64,
+    z: 2,
+    flags: { onGround: false, hasHorizontalCollision: undefined }
+  })
+
+  assert.deepEqual(bot.writes, [['position', {
+    x: 1,
+    y: 64,
+    z: 2,
+    flags: { onGround: false, hasHorizontalCollision: true }
+  }]])
+})
+
+test('legacy movement packets are left unchanged', () => {
+  const bot = new FakeBot()
+  bot.entity = { isCollidedHorizontally: true }
+  installMovementPacketCompatibility(bot)
+
+  bot._client.write('position', { x: 1, y: 64, z: 2, onGround: false })
+
+  assert.deepEqual(bot.writes, [['position', { x: 1, y: 64, z: 2, onGround: false }]])
 })
 
 test('flowing-water blocks override a stale dry-player flag', () => {
