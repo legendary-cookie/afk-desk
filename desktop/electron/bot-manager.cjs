@@ -10,12 +10,22 @@ const CHEST_SCAN_INTERVAL = 5000
 const CHEST_MAX_DISTANCE = 5
 
 class BotManager {
-  constructor({ profilesPath, emit, createBot = mineflayer.createBot, scheduleReconnectTimer = setTimeout, clearReconnectTimer = clearTimeout }) {
+  constructor({
+    profilesPath,
+    emit,
+    createBot = mineflayer.createBot,
+    scheduleReconnectTimer = setTimeout,
+    clearReconnectTimer = clearTimeout,
+    scheduleNetworkTimer = setTimeout,
+    clearNetworkTimer = clearTimeout
+  }) {
     this.profilesPath = profilesPath
     this.emit = emit
     this.createBot = createBot
     this.scheduleReconnectTimer = scheduleReconnectTimer
     this.clearReconnectTimer = clearReconnectTimer
+    this.scheduleNetworkTimer = scheduleNetworkTimer
+    this.clearNetworkTimer = clearNetworkTimer
     this.sessions = new Map()
     this.reconnects = new Map()
   }
@@ -38,6 +48,7 @@ class BotManager {
       profilesFolder: path.join(this.profilesPath, account.id),
       connect: createProxyConnect(account.proxy, { host: account.host, port: Number(account.port) || 25565 }),
       hideErrors: true,
+      checkTimeoutInterval: 45_000,
       onMsaCode: (code) => this.emit('login-code', account.id, normalizeLoginCode(code))
     })
 
@@ -48,6 +59,8 @@ class BotManager {
       jumpTimer: null,
       telemetryTimer: null,
       chestScanTimer: null,
+      connectionTimer: null,
+      networkRecoveryTimer: null,
       messageTimers: new Set(),
       ready: false,
       switching: false,
@@ -59,6 +72,13 @@ class BotManager {
     }
     this.sessions.set(account.id, session)
     this.status(account.id, 'connecting', reconnecting ? `Reconnect attempt ${reconnectState.attempts}…` : `Connecting to ${account.host}…`)
+    session.connectionTimer = this.scheduleNetworkTimer(() => {
+      session.connectionTimer = null
+      if (!this.sessions.has(account.id) || session.ready) return
+      session.lastNetworkReason = 'ETIMEDOUT: The connection did not finish within 60 seconds.'
+      this.emit('log', account.id, { kind: 'error', message: 'Network error (ETIMEDOUT): The connection did not finish within 60 seconds. Auto-reconnect will retry.', at: Date.now() })
+      bot.end('connectTimeout')
+    }, 60_000)
 
     bot._client?.on?.('start_configuration', () => {
       session.switching = true
@@ -83,6 +103,8 @@ class BotManager {
       const firstReady = !session.ready
       session.ready = true
       session.switching = false
+      if (session.connectionTimer) this.clearNetworkTimer(session.connectionTimer)
+      session.connectionTimer = null
       reconnectState.attempts = 0
       this.status(account.id, 'online', `Online as ${bot.username}`)
       emitIdentity()
@@ -149,11 +171,31 @@ class BotManager {
       session.lastKickReason = formatReason(reason)
       this.emit('log', account.id, { kind: 'error', message: `Kicked: ${session.lastKickReason}`, at: Date.now() })
     })
-    bot.on('error', (error) => this.emit('log', account.id, { kind: 'error', message: error.message, at: Date.now() }))
+    bot.on('error', (error) => {
+      const diagnostic = describeNetworkError(error)
+      if (!diagnostic.retryable) {
+        this.emit('log', account.id, { kind: 'error', message: String(error?.message || error).slice(0, 180), at: Date.now() })
+        return
+      }
+      session.lastNetworkReason = `${diagnostic.code}: ${diagnostic.message}`
+      const key = `${diagnostic.code}:${diagnostic.message}`
+      const now = Date.now()
+      if (key !== session.lastNetworkKey || now - (session.lastNetworkAt || 0) > 2000) {
+        this.emit('log', account.id, { kind: 'error', message: `Network error (${diagnostic.code}): ${diagnostic.message} Auto-reconnect will retry.`, at: now })
+        session.lastNetworkKey = key
+        session.lastNetworkAt = now
+      }
+      if (account.autoReconnect !== false && !reconnectState.manual && !session.networkRecoveryTimer) {
+        session.networkRecoveryTimer = this.scheduleNetworkTimer(() => {
+          session.networkRecoveryTimer = null
+          if (this.sessions.get(account.id) === session) bot.end('networkError')
+        }, 1000)
+      }
+    })
     bot.on('end', (reason) => {
       this.clearSession(account.id)
       if (account.autoReconnect !== false && !reconnectState.manual) {
-        this.scheduleReconnect(account, session.lastKickReason || reason)
+        this.scheduleReconnect(account, session.lastKickReason || session.lastNetworkReason || reason)
       } else {
         this.reconnects.delete(account.id)
         this.status(account.id, 'offline', reason ? `Disconnected: ${reason}` : 'Disconnected')
@@ -330,12 +372,16 @@ class BotManager {
     if (session.jumpTimer) clearTimeout(session.jumpTimer)
     if (session.telemetryTimer) clearInterval(session.telemetryTimer)
     if (session.chestScanTimer) clearInterval(session.chestScanTimer)
+    if (session.connectionTimer) this.clearNetworkTimer(session.connectionTimer)
+    if (session.networkRecoveryTimer) this.clearNetworkTimer(session.networkRecoveryTimer)
     for (const timer of session.messageTimers || []) clearTimeout(timer)
     session.messageTimers?.clear()
     session.antiAfkTimer = null
     session.jumpTimer = null
     session.telemetryTimer = null
     session.chestScanTimer = null
+    session.connectionTimer = null
+    session.networkRecoveryTimer = null
   }
 
   requireOnline(id) {
@@ -355,6 +401,29 @@ function normalizeLoginCode(code) {
     code: code?.user_code || code?.userCode || code?.code || '',
     verificationUri: code?.verification_uri || code?.verificationUri || code?.verification_uri_complete || 'https://microsoft.com/link',
     expiresIn: code?.expires_in || code?.expiresIn
+  }
+}
+
+function describeNetworkError(error) {
+  const raw = String(error?.message || error || '')
+  const detected = raw.match(/\b(EAI_AGAIN|ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|EPIPE)\b/i)?.[1]
+  let code = String(error?.code || detected || '').toUpperCase()
+  if (!code && /timed out|timeout/i.test(raw)) code = 'ETIMEDOUT'
+  const messages = {
+    EAI_AGAIN: 'DNS lookup temporarily failed. Check the network connection or DNS service.',
+    ENOTFOUND: 'Could not resolve the server address. Check DNS and the server name.',
+    ECONNREFUSED: 'The server refused the connection. It may be offline or the port may be incorrect.',
+    ECONNRESET: 'Connection was reset by the server or network.',
+    ETIMEDOUT: 'The server stopped responding before the connection completed.',
+    EHOSTUNREACH: 'The server host is unreachable from this network.',
+    ENETUNREACH: 'The network is unreachable. Check the active internet connection.',
+    EPIPE: 'The connection closed while AFK Desk was sending data.'
+  }
+  if (!messages[code] && /socket hang up/i.test(raw)) code = 'ECONNRESET'
+  return {
+    code: code || 'UNKNOWN',
+    message: messages[code] || raw.slice(0, 180) || 'Unknown connection error.',
+    retryable: Boolean(messages[code])
   }
 }
 
@@ -494,4 +563,4 @@ function buildTelemetry(bot, nearestChest = null) {
   }
 }
 
-module.exports = { BotManager, normalizeLoginCode, extractText, shouldUseProxyCommandPacket, parseMinecraftFormatting, normalizeSkinUrl, findNearestChest, buildTelemetry }
+module.exports = { BotManager, normalizeLoginCode, extractText, shouldUseProxyCommandPacket, parseMinecraftFormatting, normalizeSkinUrl, findNearestChest, buildTelemetry, describeNetworkError }

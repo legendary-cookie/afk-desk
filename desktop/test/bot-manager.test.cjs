@@ -1,7 +1,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const { EventEmitter } = require('node:events')
-const { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, normalizeSkinUrl, buildTelemetry } = require('../electron/bot-manager.cjs')
+const { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, normalizeSkinUrl, buildTelemetry, describeNetworkError } = require('../electron/bot-manager.cjs')
 const { computeSignedChatChecksum } = require('../electron/protocol-fixes.cjs')
 
 class FakeBot extends EventEmitter {
@@ -27,6 +27,7 @@ class FakeBot extends EventEmitter {
   setControlState(control, value) { this.controls.push([control, value]) }
   look() { return Promise.resolve() }
   tossStack(item) { this.tossed = item; return Promise.resolve() }
+  end(reason) { this.emit('end', reason) }
   quit() { this.emit('end', 'quit') }
   supportFeature(name) { return name === 'seperateSignedChatCommandPacket' }
 }
@@ -281,4 +282,42 @@ test('automatically reconnects after a kick and manual disconnect cancels retrie
   manager.disconnect('retry')
   assert.equal(events.at(-1)[2].status, 'offline')
   assert.deepEqual(cleared, [])
+})
+
+test('classifies common network failures with useful retry details', () => {
+  assert.deepEqual(describeNetworkError(Object.assign(new Error('getaddrinfo ENOTFOUND play.invalid'), { code: 'ENOTFOUND' })), {
+    code: 'ENOTFOUND',
+    message: 'Could not resolve the server address. Check DNS and the server name.',
+    retryable: true
+  })
+  assert.deepEqual(describeNetworkError(new Error('client timed out after 45000 milliseconds')), {
+    code: 'ETIMEDOUT',
+    message: 'The server stopped responding before the connection completed.',
+    retryable: true
+  })
+})
+
+test('ends a stuck network session so auto-reconnect can recover it', () => {
+  const events = []
+  const bot = new FakeBot()
+  const networkTimers = []
+  let reconnectTimer
+  const manager = new BotManager({
+    profilesPath: 'profiles',
+    emit: (...event) => events.push(event),
+    createBot: () => bot,
+    scheduleNetworkTimer: (callback, delay) => { networkTimers.push({ callback, delay }); return `network-${networkTimers.length}` },
+    clearNetworkTimer: () => {},
+    scheduleReconnectTimer: (callback, delay) => { reconnectTimer = { callback, delay }; return 'reconnect' }
+  })
+  manager.connect({ id: 'network', username: 'user@example.com', host: 'localhost', antiAfk: false, autoReconnect: true, autoReconnectDelay: 5 })
+  const error = Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' })
+  bot.emit('error', error)
+
+  assert.equal(networkTimers[0].delay, 60_000)
+  assert.equal(networkTimers[1].delay, 1_000)
+  assert.match(events.find(([type]) => type === 'log')?.[2].message, /Connection was reset/)
+  networkTimers[1].callback()
+  assert.equal(reconnectTimer.delay, 5000)
+  assert.equal(events.filter(([type]) => type === 'status').at(-1)[2].status, 'reconnecting')
 })
