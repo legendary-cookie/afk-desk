@@ -1,6 +1,16 @@
 const path = require('node:path')
 const { applyProtocolFixes } = require('./protocol-fixes.cjs')
 const { createProxyConnect } = require('./proxy-connect.cjs')
+const {
+  CONFIGURATION_PACKET_NAMES,
+  installMovementPacketCompatibility,
+  installModernPlayerInputCompatibility,
+  roundDiagnostic,
+  vectorSnapshot,
+  vectorDelta,
+  safeMovementFlags,
+  snapshotNearbyBlocks
+} = require('./movement-compatibility.cjs')
 applyProtocolFixes()
 const mineflayer = require('mineflayer')
 
@@ -10,7 +20,6 @@ const WATERLIKE_NAMES = new Set(['bubble_column', 'seagrass', 'tall_seagrass', '
 const FLOW_DIRECTIONS = [[0, 1], [-1, 0], [0, -1], [1, 0]]
 const CHEST_SCAN_INTERVAL = 5000
 const CHEST_MAX_DISTANCE = 5
-
 class BotManager {
   constructor({
     profilesPath,
@@ -22,7 +31,8 @@ class BotManager {
     clearNetworkTimer = clearTimeout,
     scheduleAntiAfkTimer = setTimeout,
     clearAntiAfkTimer = clearTimeout,
-    random = Math.random
+    random = Math.random,
+    diagnose = () => {}
   }) {
     this.profilesPath = profilesPath
     this.emit = emit
@@ -34,6 +44,7 @@ class BotManager {
     this.scheduleAntiAfkTimer = scheduleAntiAfkTimer
     this.clearAntiAfkTimer = clearAntiAfkTimer
     this.random = random
+    this.diagnose = diagnose
     this.sessions = new Map()
     this.reconnects = new Map()
   }
@@ -60,6 +71,7 @@ class BotManager {
       onMsaCode: (code) => this.emit('login-code', account.id, normalizeLoginCode(code))
     })
     installMovementPacketCompatibility(bot)
+    installModernPlayerInputCompatibility(bot)
 
     const session = {
       bot,
@@ -68,8 +80,11 @@ class BotManager {
       telemetryTimer: null,
       chestScanTimer: null,
       connectionTimer: null,
+      reconnectResetTimer: null,
       networkRecoveryTimer: null,
       physicsRestoreTimer: null,
+      fluidAssistTimer: null,
+      fluidAssistControls: [],
       antiAfkActionTimers: new Set(),
       messageTimers: new Set(),
       ready: false,
@@ -78,9 +93,17 @@ class BotManager {
       joinMessageSent: false,
       nearestChest: null,
       fluidMotion: { status: account.environmentalMovement === false ? 'disabled' : 'checking' },
+      pendingServerPosition: null,
+      lastMovementDiagnosticAt: 0,
       identityKey: '',
       telemetryKey: ''
     }
+    bot.__afkDeskPacketDiagnostic = (entry) => this.diagnose({ ...entry, accountId: account.id, version: bot.version || account.version || 'auto' })
+    bot._client?.on?.('packet', (_data, meta) => {
+      if (CONFIGURATION_PACKET_NAMES.has(meta?.name)) {
+        bot.__afkDeskPacketDiagnostic({ event: 'protocol_packet', direction: 'in', name: meta.name, at: Date.now() })
+      }
+    })
     bot.physicsEnabled = account.environmentalMovement !== false
     this.sessions.set(account.id, session)
     this.status(account.id, 'connecting', reconnecting ? `Reconnect attempt ${reconnectState.attempts}…` : `Connecting to ${account.host}…`)
@@ -94,17 +117,6 @@ class BotManager {
 
     bot._client?.on?.('start_configuration', () => {
       session.switching = true
-      bot._client.write('settings', {
-        locale: 'en_us',
-        viewDistance: 3,
-        chatFlags: 0,
-        chatColors: true,
-        skinParts: 127,
-        mainHand: 1,
-        enableTextFiltering: false,
-        enableServerListing: true,
-        particleStatus: 'all'
-      })
       this.status(account.id, 'connected', 'Switching servers…')
     })
 
@@ -117,7 +129,13 @@ class BotManager {
       session.switching = false
       if (session.connectionTimer) this.clearNetworkTimer(session.connectionTimer)
       session.connectionTimer = null
-      reconnectState.attempts = 0
+      if (session.reconnectResetTimer) this.clearNetworkTimer(session.reconnectResetTimer)
+      session.reconnectResetTimer = this.scheduleNetworkTimer(() => {
+        session.reconnectResetTimer = null
+        if (this.sessions.get(account.id) === session && session.ready && !session.switching) {
+          reconnectState.attempts = 0
+        }
+      }, 60_000)
       this.status(account.id, 'online', `Online as ${bot.username}`)
       emitIdentity()
       emitTelemetry()
@@ -134,7 +152,25 @@ class BotManager {
     }
 
     bot._client?.on?.('finish_configuration', () => {
-      if (session.switching) markReady()
+      if (session.switching) this.status(account.id, 'connected', 'Joining world…')
+    })
+
+    // Mineflayer applies this packet before emitting forcedMove. Prepending lets
+    // diagnostics retain the client position and velocity that caused a server
+    // correction without recording credentials, chat, or inventory contents.
+    bot._client?.prependListener?.('position', (packet) => {
+      session.pendingServerPosition = {
+        at: Date.now(),
+        clientPosition: vectorSnapshot(bot.entity?.position),
+        serverPosition: vectorSnapshot(packet),
+        velocity: vectorSnapshot(bot.entity?.velocity),
+        onGround: bot.entity?.onGround === true,
+        collidedHorizontally: bot.entity?.isCollidedHorizontally === true,
+        collidedVertically: bot.entity?.isCollidedVertically === true,
+        flags: safeMovementFlags(packet?.flags),
+        teleportId: Number.isFinite(Number(packet?.teleportId)) ? Number(packet.teleportId) : null,
+        lastSent: bot.__afkDeskMovementTrace?.lastSent || null
+      }
     })
 
     const emitIdentity = () => {
@@ -161,7 +197,8 @@ class BotManager {
     }
 
     bot.on('login', () => {
-      if (!session.ready) this.status(account.id, 'connected', 'Authenticated. Joining world…')
+      if (session.switching) markReady()
+      else if (!session.ready) this.status(account.id, 'connected', 'Authenticated. Joining world…')
       emitIdentity()
     })
     bot.on('playerJoined', (player) => { if (player?.username === bot.username) emitIdentity() })
@@ -169,7 +206,8 @@ class BotManager {
     bot.on('health', emitTelemetry)
     bot.on('physicsTick', () => {
       if (session.account.environmentalMovement !== false) {
-        inspectFluidCurrent(bot, session.fluidMotion)
+        if (inspectFluidCurrent(bot, session.fluidMotion)) this.assistRejectedFluidCurrent(session)
+        else this.stopFluidAssist(session)
       }
     })
     bot.inventory?.on?.('updateSlot', emitTelemetry)
@@ -179,6 +217,9 @@ class BotManager {
       markReady()
       if (wasReady && ['flowing', 'fallback'].includes(session.fluidMotion.status)) {
         session.fluidMotion.serverCorrections = (session.fluidMotion.serverCorrections || 0) + 1
+      }
+      if (wasReady && session.account.environmentalMovement !== false) {
+        this.emitMovementDiagnostic(account.id, session)
       }
     })
     bot.on('respawn', () => {
@@ -253,8 +294,7 @@ class BotManager {
       this.status(account.id, 'offline', `Auto-reconnect stopped after ${maximum} attempts.`)
       return
     }
-    const base = Math.max(1, Math.min(Number(account.autoReconnectDelay) || 5, 300))
-    const delay = Math.min(base * (2 ** Math.min(state.attempts - 1, 6)), 300)
+    const delay = reconnectDelaySeconds(account, reason, state.attempts)
     state.manual = false
     state.account = account
     this.status(account.id, 'reconnecting', `Disconnected${reason ? `: ${String(reason).slice(0, 90)}` : ''}. Retrying in ${delay}s…`)
@@ -274,7 +314,11 @@ class BotManager {
     const bot = this.requireOnline(id)
     const trimmed = String(message || '').trim()
     if (!trimmed) return
-    bot.chat(trimmed)
+    if (/^\/server(?:\s|$)/i.test(trimmed) && typeof bot._client?.write === 'function') {
+      bot._client.write('chat_command', { command: trimmed.slice(1) })
+    } else {
+      bot.chat(trimmed)
+    }
     this.emit('log', id, { kind: 'sent', message: trimmed, at: Date.now() })
   }
 
@@ -283,6 +327,8 @@ class BotManager {
     const bot = this.requireOnline(id)
     const allowed = new Set(['forward', 'back', 'left', 'right', 'jump', 'sprint', 'sneak'])
     if (!allowed.has(control)) throw new Error('Unknown movement control.')
+    this.stopFluidAssist(session)
+    session.fluidMotion.nextAssistAt = Date.now() + Math.max(100, Math.min(Number(duration) || 350, 3000)) + 500
     this.temporarilyEnablePhysics(session, Math.max(100, Math.min(Number(duration) || 350, 3000)) + 200)
     bot.setControlState(control, true)
     setTimeout(() => {
@@ -377,6 +423,51 @@ class BotManager {
     this.scheduleAntiAfk(id)
   }
 
+  emitMovementDiagnostic(accountId, session) {
+    const pending = session.pendingServerPosition
+    session.pendingServerPosition = null
+    if (!pending) return
+    const now = Date.now()
+    if (now - session.lastMovementDiagnosticAt < 250) return
+    session.lastMovementDiagnosticAt = now
+    const appliedPosition = vectorSnapshot(session.bot?.entity?.position)
+    const clientPosition = pending.clientPosition
+    const delta = clientPosition && appliedPosition ? vectorDelta(appliedPosition, clientPosition) : null
+    const entry = {
+      event: 'movement_correction',
+      at: now,
+      accountId: String(accountId || '').slice(0, 80),
+      version: String(session.bot?.version || session.account?.version || 'auto').slice(0, 32),
+      clientPosition,
+      serverPosition: pending.serverPosition,
+      appliedPosition,
+      delta,
+      velocity: pending.velocity,
+      serverFlags: pending.flags,
+      teleportId: pending.teleportId,
+      lastSent: pending.lastSent,
+      preCorrection: {
+        onGround: pending.onGround,
+        collidedHorizontally: pending.collidedHorizontally,
+        collidedVertically: pending.collidedVertically
+      },
+      onGround: session.bot?.entity?.onGround === true,
+      collidedHorizontally: session.bot?.entity?.isCollidedHorizontally === true,
+      isInWater: session.bot?.entity?.isInWater === true,
+      flow: Number.isFinite(session.fluidMotion?.currentX) && Number.isFinite(session.fluidMotion?.currentZ)
+        ? { x: roundDiagnostic(session.fluidMotion.currentX), z: roundDiagnostic(session.fluidMotion.currentZ) }
+        : null,
+      correctionCount: Math.max(0, Number(session.fluidMotion?.serverCorrections) || 0)
+    }
+    if (!session.movementBlocksCaptured && clientPosition && entry.flow) {
+      entry.nearbyBlocks = snapshotNearbyBlocks(session.bot, clientPosition)
+      session.movementBlocksCaptured = true
+    }
+    try {
+      this.diagnose(entry)
+    } catch {}
+  }
+
   scheduleAntiAfk(id) {
     const session = this.sessions.get(id)
     if (!session) return
@@ -466,6 +557,7 @@ class BotManager {
     const session = this.sessions.get(id)
     if (!session) return
     session.account.environmentalMovement = enabled !== false
+    if (enabled === false) this.stopFluidAssist(session)
     if (session.physicsRestoreTimer) this.clearAntiAfkTimer(session.physicsRestoreTimer)
     session.physicsRestoreTimer = null
     session.bot.physicsEnabled = enabled !== false
@@ -488,6 +580,39 @@ class BotManager {
     if (account.antiAfk !== false && session.bot.entity) this.enableAntiAfk(id, account)
   }
 
+  assistRejectedFluidCurrent(session) {
+    const motion = session?.fluidMotion
+    const bot = session?.bot
+    if (!motion || !bot?.entity || (motion.serverCorrections || 0) < 3 || session.fluidAssistTimer) return
+    if (Date.now() < (motion.nextAssistAt || 0)) return
+    const controls = fluidControlsForCurrent(bot.entity.yaw, motion.currentX, motion.currentZ)
+    if (controls.length === 0) return
+    session.fluidAssistControls = controls
+    motion.assisting = true
+    motion.status = 'fallback'
+    for (const control of controls) bot.setControlState(control, true)
+    session.fluidAssistTimer = this.scheduleAntiAfkTimer(() => {
+      session.fluidAssistTimer = null
+      if (this.sessions.get(session.account.id) !== session) return
+      for (const control of session.fluidAssistControls) bot.setControlState(control, false)
+      session.fluidAssistControls = []
+      motion.assisting = false
+      motion.nextAssistAt = Date.now() + 850
+      if (motion.status === 'fallback') motion.status = 'flowing'
+    }, 150)
+  }
+
+  stopFluidAssist(session) {
+    if (!session) return
+    if (session.fluidAssistTimer) this.clearAntiAfkTimer(session.fluidAssistTimer)
+    session.fluidAssistTimer = null
+    for (const control of session.fluidAssistControls || []) {
+      try { session.bot?.setControlState?.(control, false) } catch {}
+    }
+    session.fluidAssistControls = []
+    if (session.fluidMotion) session.fluidMotion.assisting = false
+  }
+
   clearSession(id) {
     const session = this.sessions.get(id)
     if (session) this.clearTimers(session)
@@ -495,10 +620,12 @@ class BotManager {
   }
 
   clearTimers(session) {
+    this.stopFluidAssist(session)
     if (session.antiAfkTimer) this.clearAntiAfkTimer(session.antiAfkTimer)
     if (session.telemetryTimer) clearInterval(session.telemetryTimer)
     if (session.chestScanTimer) clearInterval(session.chestScanTimer)
     if (session.connectionTimer) this.clearNetworkTimer(session.connectionTimer)
+    if (session.reconnectResetTimer) this.clearNetworkTimer(session.reconnectResetTimer)
     if (session.networkRecoveryTimer) this.clearNetworkTimer(session.networkRecoveryTimer)
     if (session.physicsRestoreTimer) this.clearAntiAfkTimer(session.physicsRestoreTimer)
     for (const timer of session.antiAfkActionTimers || []) this.clearAntiAfkTimer(timer)
@@ -509,8 +636,10 @@ class BotManager {
     session.telemetryTimer = null
     session.chestScanTimer = null
     session.connectionTimer = null
+    session.reconnectResetTimer = null
     session.networkRecoveryTimer = null
     session.physicsRestoreTimer = null
+    session.fluidAssistTimer = null
   }
 
   requireOnline(id) {
@@ -555,6 +684,14 @@ function describeNetworkError(error) {
     message: messages[code] || raw.slice(0, 180) || 'Unknown connection error.',
     retryable: Boolean(messages[code])
   }
+}
+
+function reconnectDelaySeconds(account, reason, attempts) {
+  const base = Math.max(1, Math.min(Number(account?.autoReconnectDelay) || 5, 300))
+  const exponential = Math.min(base * (2 ** Math.min(Math.max(0, Number(attempts) - 1), 6)), 300)
+  const text = String(reason || '')
+  if (/logging in too fast|too many connection attempts|rate.?limit/i.test(text)) return Math.max(exponential, 30)
+  return exponential
 }
 
 function formatReason(reason) {
@@ -704,7 +841,7 @@ function inspectFluidCurrent(bot, motionState = null) {
     const { x: directionX, z: directionZ } = current
 
     if (motionState) {
-      motionState.status = 'flowing'
+      motionState.status = motionState.assisting ? 'fallback' : 'flowing'
       motionState.waterBlocks = current.waterBlocks
       motionState.currentX = directionX
       motionState.currentZ = directionZ
@@ -802,26 +939,19 @@ function resetFluidMotion(state, status = 'dry') {
   delete state.mineflayerInWater
   state.stagnantTicks = 0
   state.forcing = false
+  state.assisting = false
   state.status = status
 }
 
-function installMovementPacketCompatibility(bot) {
-  const client = bot?._client
-  if (!client || typeof client.write !== 'function' || client.__afkDeskMovementCompatibility) return
-  const write = client.write.bind(client)
-  client.write = (name, payload) => {
-    if (['position', 'look', 'position_look'].includes(name) && payload?.flags) {
-      payload = {
-        ...payload,
-        flags: {
-          ...payload.flags,
-          hasHorizontalCollision: bot.entity?.isCollidedHorizontally === true
-        }
-      }
-    }
-    return write(name, payload)
-  }
-  client.__afkDeskMovementCompatibility = true
+function fluidControlsForCurrent(yaw, currentX, currentZ) {
+  const angle = Number(yaw)
+  const x = Number(currentX)
+  const z = Number(currentZ)
+  if (![angle, x, z].every(Number.isFinite) || Math.hypot(x, z) < 0.001) return []
+  const forward = -x * Math.sin(angle) - z * Math.cos(angle)
+  const strafe = x * Math.cos(angle) - z * Math.sin(angle)
+  if (Math.abs(forward) >= Math.abs(strafe)) return [forward >= 0 ? 'forward' : 'back']
+  return [strafe >= 0 ? 'right' : 'left']
 }
 
 function waterDepth(block) {
@@ -852,7 +982,7 @@ function buildTelemetry(bot, nearestChest = null, environmentalMovement, fluidMo
     current: Number.isFinite(fluidMotion?.currentX) && Number.isFinite(fluidMotion?.currentZ)
       ? { x: Math.round(fluidMotion.currentX * 100) / 100, z: Math.round(fluidMotion.currentZ * 100) / 100 }
       : null,
-    fallbackActive: fluidMotion?.status === 'fallback',
+      fallbackActive: fluidMotion?.assisting === true,
     mineflayerInWater: fluidMotion?.mineflayerInWater === true,
     serverCorrections: Math.max(0, Number(fluidMotion?.serverCorrections) || 0)
   }
@@ -872,4 +1002,4 @@ function buildTelemetry(bot, nearestChest = null, environmentalMovement, fluidMo
   }
 }
 
-module.exports = { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, normalizeSkinUrl, findNearestChest, buildTelemetry, describeNetworkError, normalizeAntiAfkSettings, inspectFluidCurrent, installMovementPacketCompatibility }
+module.exports = { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, normalizeSkinUrl, findNearestChest, buildTelemetry, describeNetworkError, reconnectDelaySeconds, normalizeAntiAfkSettings, inspectFluidCurrent, fluidControlsForCurrent, installMovementPacketCompatibility, installModernPlayerInputCompatibility }

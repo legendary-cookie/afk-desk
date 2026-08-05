@@ -9,6 +9,7 @@ const { AccessStore } = require('./remote/access-store.cjs')
 const { RemoteAccessServer } = require('./remote/server.cjs')
 const { sendToWindow } = require('./window-events.cjs')
 const execFileAsync = promisify(execFile)
+const movementDiagnosticsEnabled = process.env.AFK_DESK_MOVEMENT_DIAGNOSTICS === '1'
 
 let mainWindow
 let store
@@ -43,7 +44,10 @@ app.whenReady().then(async () => {
   accessStore = new AccessStore(app.getPath('userData'))
   bots = new BotManager({
     profilesPath: path.join(app.getPath('userData'), 'profiles'),
-    emit: emitBotEvent
+    emit: emitBotEvent,
+    diagnose: movementDiagnosticsEnabled
+      ? (entry) => console.log(`[movement-diagnostic] ${JSON.stringify(entry)}`)
+      : undefined
   })
   remoteAccess = new RemoteAccessServer({
     accessStore,
@@ -188,6 +192,15 @@ function openIsolatedLogin(id, rawUrl, code) {
 }
 
 function emitBotEvent(type, id, payload) {
+  if (movementDiagnosticsEnabled && type === 'status') {
+    console.log(`[movement-status] ${JSON.stringify({ accountId: id, status: payload.status })}`)
+  }
+  if (movementDiagnosticsEnabled && type === 'telemetry') {
+    console.log(`[movement-telemetry] ${JSON.stringify({ accountId: id, position: payload.position, environment: payload.environment })}`)
+  }
+  if (movementDiagnosticsEnabled && type === 'log' && payload.kind === 'error') {
+    console.log(`[movement-error] ${JSON.stringify({ accountId: id, message: String(payload.message || '').slice(0, 240) })}`)
+  }
   const current = getRuntime(id)
   if (type === 'status') runtime.set(id, { ...current, status: payload.status, detail: payload.detail })
   if (type === 'log') runtime.set(id, { ...current, logs: [...current.logs.slice(-499), payload] })

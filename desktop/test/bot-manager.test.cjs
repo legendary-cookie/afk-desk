@@ -1,8 +1,10 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const { EventEmitter } = require('node:events')
+const fs = require('node:fs')
+const path = require('node:path')
 const { Vec3 } = require('vec3')
-const { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, normalizeSkinUrl, buildTelemetry, describeNetworkError, inspectFluidCurrent, installMovementPacketCompatibility } = require('../electron/bot-manager.cjs')
+const { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, normalizeSkinUrl, buildTelemetry, describeNetworkError, reconnectDelaySeconds, inspectFluidCurrent, fluidControlsForCurrent, installMovementPacketCompatibility, installModernPlayerInputCompatibility } = require('../electron/bot-manager.cjs')
 const { computeSignedChatChecksum } = require('../electron/protocol-fixes.cjs')
 
 class FakeBot extends EventEmitter {
@@ -83,8 +85,8 @@ test('sends separate join and server-change messages', async () => {
   await new Promise((resolve) => setTimeout(resolve, 5))
   bot.emit('respawn')
   await new Promise((resolve) => setTimeout(resolve, 5))
-  assert.deepEqual(bot.messages, ['joined', '/server survival'])
-  assert.deepEqual(bot.writes, [])
+  assert.deepEqual(bot.messages, ['joined'])
+  assert.deepEqual(bot.writes, [['chat_command', { command: 'server survival' }]])
   manager.disconnect('messages')
 })
 
@@ -105,16 +107,16 @@ test('live chat marks a session online and a late login event cannot downgrade i
   manager.disconnect('ordering')
 })
 
-test('uses the complete protocol chat path for modern proxy-switch commands', () => {
+test('uses the unsigned command packet for proxy switches without signable arguments', () => {
   const bot = new FakeBot()
   const manager = new BotManager({ profilesPath: 'profiles', emit: () => {}, createBot: () => bot })
   manager.connect({ id: 'proxy', username: 'user@example.com', host: 'localhost', port: 25565, antiAfk: false, autoReconnect: false })
   bot.entity = { yaw: 0, pitch: 0 }
   manager.sendChat('proxy', '/server towny')
-  assert.deepEqual(bot.writes, [])
-  assert.deepEqual(bot.messages, ['/server towny'])
+  assert.deepEqual(bot.writes, [['chat_command', { command: 'server towny' }]])
+  assert.deepEqual(bot.messages, [])
   manager.sendChat('proxy', '/home')
-  assert.deepEqual(bot.messages, ['/server towny', '/home'])
+  assert.deepEqual(bot.messages, ['/home'])
   manager.disconnect('proxy')
 })
 
@@ -224,7 +226,7 @@ test('finds the closest chest and deposits all inventory stacks only when enable
   manager.disconnect('chest')
 })
 
-test('resends client settings when Velocity switches backend servers', () => {
+test('lets the protocol client own the Velocity configuration handshake', () => {
   const events = []
   const bot = new FakeBot()
   const manager = new BotManager({ profilesPath: 'profiles', emit: (...event) => events.push(event), createBot: () => bot })
@@ -232,21 +234,14 @@ test('resends client settings when Velocity switches backend servers', () => {
 
   bot.entity = { yaw: 0, pitch: 0 }
   bot.emit('spawn')
+  bot._client.on('start_configuration', () => bot._client.write('configuration_acknowledged', {}))
   bot._client.emit('start_configuration')
 
-  assert.deepEqual(bot.writes.at(-1), ['settings', {
-    locale: 'en_us',
-    viewDistance: 3,
-    chatFlags: 0,
-    chatColors: true,
-    skinParts: 127,
-    mainHand: 1,
-    enableTextFiltering: false,
-    enableServerListing: true,
-    particleStatus: 'all'
-  }])
+  assert.deepEqual(bot.writes.map(([name]) => name), ['configuration_acknowledged'])
   assert.equal(events.at(-1)[2].detail, 'Switching servers…')
   bot._client.emit('finish_configuration')
+  assert.equal(events.filter(([type]) => type === 'status').at(-1)[2].detail, 'Joining world…')
+  bot.emit('login')
   assert.equal(events.filter(([type]) => type === 'status').at(-1)[2].status, 'online')
   bot.emit('messagestr', 'Towny is ready')
   assert.equal(events.filter(([type]) => type === 'status').at(-1)[2].status, 'online')
@@ -283,6 +278,33 @@ test('automatically reconnects after a kick and manual disconnect cancels retrie
   manager.disconnect('retry')
   assert.equal(events.at(-1)[2].status, 'offline')
   assert.deepEqual(cleared, [])
+})
+
+test('only resets reconnect backoff after a stable minute online', () => {
+  const bot = new FakeBot()
+  const networkTimers = []
+  let reconnectTimer
+  const manager = new BotManager({
+    profilesPath: 'profiles', emit: () => {}, createBot: () => bot,
+    scheduleNetworkTimer: (callback, delay) => { networkTimers.push({ callback, delay }); return `network-${networkTimers.length}` },
+    clearNetworkTimer: () => {},
+    scheduleReconnectTimer: (callback, delay) => { reconnectTimer = { callback, delay }; return 'reconnect' }
+  })
+  const account = { id: 'stable', username: 'user@example.com', host: 'localhost', antiAfk: false, autoReconnect: true, autoReconnectDelay: 5 }
+  manager.reconnects.set(account.id, { attempts: 1, timer: null, manual: false, account })
+  manager.connect(account, { reconnecting: true })
+  bot.entity = { yaw: 0, pitch: 0 }
+  bot.emit('spawn')
+  bot.emit('kicked', 'Backend switch failed')
+  bot.emit('end', 'socketClosed')
+
+  assert.equal(networkTimers.some(({ delay }) => delay === 60_000), true)
+  assert.equal(reconnectTimer.delay, 10_000)
+})
+
+test('rate-limit reconnects wait at least thirty seconds', () => {
+  assert.equal(reconnectDelaySeconds({ autoReconnectDelay: 5 }, 'You are logging in too fast, try again later.', 1), 30)
+  assert.equal(reconnectDelaySeconds({ autoReconnectDelay: 5 }, 'socketClosed', 2), 10)
 })
 
 test('classifies common network failures with useful retry details', () => {
@@ -443,6 +465,54 @@ test('repeated water diagnostics never force client coordinates or velocity', ()
   assert.deepEqual(bot.entity.velocity, new Vec3(0, 0, 0))
 })
 
+test('maps a rejected world-current direction to the closest normal movement input', () => {
+  assert.deepEqual(fluidControlsForCurrent(0, 1, 0), ['right'])
+  assert.deepEqual(fluidControlsForCurrent(0, 0, -1), ['forward'])
+  assert.deepEqual(fluidControlsForCurrent(Math.PI / 2, 1, 0), ['back'])
+})
+
+test('stopping water assistance tolerates a client destroyed during shutdown', () => {
+  const manager = new BotManager({ profilesPath: 'profiles', emit: () => {} })
+  const session = {
+    bot: { setControlState: () => { throw new Error('Object has been destroyed') } },
+    fluidAssistControls: ['forward'],
+    fluidMotion: { assisting: true },
+    fluidAssistTimer: null
+  }
+
+  assert.doesNotThrow(() => manager.stopFluidAssist(session))
+  assert.deepEqual(session.fluidAssistControls, [])
+  assert.equal(session.fluidMotion.assisting, false)
+})
+
+test('uses a brief normal input pulse after repeated server water corrections', (t) => {
+  const bot = new FakeBot()
+  const timers = []
+  const manager = new BotManager({
+    profilesPath: 'profiles', emit: () => {}, createBot: () => bot,
+    scheduleAntiAfkTimer: (callback, delay) => { timers.push({ callback, delay }); return `fluid-${timers.length}` },
+    clearAntiAfkTimer: () => {}
+  })
+  manager.connect({ id: 'fluid-assist', username: 'user@example.com', host: 'localhost', antiAfk: false, autoReconnect: false, environmentalMovement: true })
+  t.after(() => manager.disconnect('fluid-assist'))
+  bot.entity = { yaw: 0, position: new Vec3(0.5, 64, 0.5), velocity: new Vec3(0, 0, 0) }
+  bot.blockAt = (position) => {
+    const x = Math.floor(position.x)
+    const y = Math.floor(position.y)
+    const z = Math.floor(position.z)
+    const metadata = x === 1 && y === 64 && z === 0 ? 2 : 1
+    return { name: 'water', metadata, position: new Vec3(x, y, z), boundingBox: 'empty' }
+  }
+  manager.sessions.get('fluid-assist').fluidMotion.serverCorrections = 3
+
+  bot.emit('physicsTick')
+
+  assert.deepEqual(bot.controls.at(-1), ['right', true])
+  assert.equal(timers.at(-1).delay, 150)
+  timers.at(-1).callback()
+  assert.deepEqual(bot.controls.at(-1), ['right', false])
+})
+
 test('modern movement packets report the collision state calculated by physics', () => {
   const bot = new FakeBot()
   bot.entity = { isCollidedHorizontally: true }
@@ -471,6 +541,68 @@ test('legacy movement packets are left unchanged', () => {
   bot._client.write('position', { x: 1, y: 64, z: 2, onGround: false })
 
   assert.deepEqual(bot.writes, [['position', { x: 1, y: 64, z: 2, onGround: false }]])
+})
+
+test('modern prediction servers receive complete initial and changed player input', () => {
+  const bot = new FakeBot()
+  bot.supportFeature = (name) => name === 'newPlayerInputPacket'
+  const states = new Map()
+  bot.getControlState = (control) => states.get(control) === true
+  bot.setControlState = (control, state) => states.set(control, state)
+  installModernPlayerInputCompatibility(bot)
+
+  bot.emit('spawn')
+  bot.setControlState('forward', true)
+
+  assert.deepEqual(bot.writes, [
+    ['player_input', { inputs: { forward: false, backward: false, left: false, right: false, jump: false, shift: false, sprint: false } }],
+    ['player_input', { inputs: { forward: true, backward: false, left: false, right: false, jump: false, shift: false, sprint: false } }]
+  ])
+})
+
+test('installed Mineflayer closes modern client ticks and sends complete input state', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'node_modules', 'mineflayer', 'lib', 'plugins', 'physics.js'), 'utf8')
+  assert.match(source, /finally \{\s*if \(supportsClientTickEnd\) bot\._client\.write\('tick_end'/)
+  assert.match(source, /backward: controlState\.back/)
+  assert.match(source, /sprint: controlState\.sprint/)
+})
+
+test('movement corrections emit structured packet diagnostics without account credentials', (t) => {
+  const diagnostics = []
+  const bot = new FakeBot()
+  bot.version = '1.21.1'
+  const manager = new BotManager({
+    profilesPath: 'profiles',
+    emit: () => {},
+    diagnose: (entry) => diagnostics.push(entry),
+    createBot: () => bot
+  })
+  manager.connect({ id: 'trace-account', username: 'user@example.com', host: 'private.example', antiAfk: false, autoReconnect: false, environmentalMovement: true })
+  t.after(() => manager.disconnect('trace-account'))
+  bot.entity = {
+    position: new Vec3(10.12, 64, 20.25),
+    velocity: new Vec3(0.0112, -0.02, 0.003),
+    onGround: false,
+    isCollidedHorizontally: true,
+    isInWater: true
+  }
+  bot.emit('spawn')
+  bot._client.write('position', { x: 10.12, y: 64, z: 20.25, onGround: false })
+  bot._client.emit('position', { x: 10, y: 64, z: 20, flags: 0, teleportId: 7 })
+  bot.entity.position = new Vec3(10, 64, 20)
+  bot.emit('forcedMove')
+
+  assert.equal(diagnostics.length, 1)
+  assert.equal(diagnostics[0].event, 'movement_correction')
+  assert.equal(diagnostics[0].accountId, 'trace-account')
+  assert.equal(diagnostics[0].version, '1.21.1')
+  assert.deepEqual(diagnostics[0].clientPosition, { x: 10.12, y: 64, z: 20.25 })
+  assert.deepEqual(diagnostics[0].serverPosition, { x: 10, y: 64, z: 20 })
+  assert.deepEqual(diagnostics[0].delta, { x: -0.12, y: 0, z: -0.25 })
+  assert.deepEqual(diagnostics[0].velocity, { x: 0.0112, y: -0.02, z: 0.003 })
+  assert.deepEqual(diagnostics[0].lastSent.position, { x: 10.12, y: 64, z: 20.25 })
+  assert.equal(JSON.stringify(diagnostics[0]).includes('user@example.com'), false)
+  assert.equal(JSON.stringify(diagnostics[0]).includes('private.example'), false)
 })
 
 test('flowing-water blocks override a stale dry-player flag', () => {
@@ -511,7 +643,7 @@ test('environment diagnostics expose detected current and fallback state', () =>
   bot.physicsEnabled = true
   bot.entity = { position: new Vec3(1.25, 64, -2.5) }
   const snapshot = buildTelemetry(bot, null, true, {
-    status: 'fallback', waterBlocks: 2, currentX: 1, currentZ: 0, mineflayerInWater: false
+    status: 'fallback', waterBlocks: 2, currentX: 1, currentZ: 0, mineflayerInWater: false, assisting: true
   })
 
   assert.deepEqual(snapshot.environment, {
