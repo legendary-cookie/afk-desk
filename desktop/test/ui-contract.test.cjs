@@ -5,7 +5,7 @@ const path = require('node:path')
 
 test('desktop UI exposes cancellable account setup, settings, proxy, startup, and inventory controls', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'src', 'index.html'), 'utf8')
-  assert.equal((html.match(/formnovalidate/g) || []).length, 2)
+  assert.equal((html.match(/data-close-account/g) || []).length, 2)
   for (const id of [
     'open-settings', 'start-with-windows', 'connect-on-startup', 'proxy-enabled', 'proxy-type',
     'proxy-host', 'proxy-port', 'proxy-username', 'proxy-password', 'detail-health',
@@ -19,6 +19,18 @@ test('desktop console has a fixed viewport and scrolls messages internally', () 
   const css = fs.readFileSync(path.join(__dirname, '..', 'src', 'styles.css'), 'utf8')
   assert.match(css, /\.console-panel\s*\{[^}]*height:\s*560px;[^}]*min-height:\s*0;/s)
   assert.match(css, /\.console-log\s*\{[^}]*min-height:\s*0;[^}]*overflow-y:\s*auto;/s)
+})
+
+test('account editor has explicit cancel controls and only its fields scroll', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'src', 'index.html'), 'utf8')
+  const css = fs.readFileSync(path.join(__dirname, '..', 'src', 'styles.css'), 'utf8')
+  const script = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer.js'), 'utf8')
+  assert.equal((html.match(/data-close-account/g) || []).length, 2)
+  assert.doesNotMatch(html, /data-close-account[^>]*type="submit"/)
+  assert.match(css, /#account-dialog\s*\{[^}]*overflow:\s*hidden;/s)
+  assert.match(css, /#account-form\s*\{[^}]*overflow:\s*hidden;/s)
+  assert.match(css, /\.form-grid\s*\{[^}]*overflow-y:\s*auto;/s)
+  assert.match(script, /querySelectorAll\('\[data-close-account\]'\)/)
 })
 
 test('desktop bridge exposes inventory actions and accounts default automatic deposits off', () => {

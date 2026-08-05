@@ -147,13 +147,15 @@ h1, h2, p { margin-top: 0; }
 .inventory-slot span { margin-top: 4px; color: var(--muted); font-size: 9px; }
 .inventory-empty { grid-column: 1 / -1; align-self: center; color: var(--muted); font-size: 11px; text-align: center; }
 
-dialog { width: min(540px, calc(100vw - 32px)); padding: 0; background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius-md); color: var(--text); box-shadow: var(--shadow); }
+dialog { width: min(540px, calc(100vw - 32px)); max-height: calc(100vh - 32px); padding: 0; overflow: hidden; background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius-md); color: var(--text); box-shadow: var(--shadow); }
 dialog::backdrop { background: rgb(3 5 8 / 78%); backdrop-filter: blur(3px); }
 .wide-dialog { width: min(720px, calc(100vw - 32px)); }
+#account-dialog { overflow: hidden; }
+#account-form { display: flex; max-height: calc(100vh - 34px); overflow: hidden; flex-direction: column; }
 .dialog-header { display: flex; justify-content: space-between; align-items: flex-start; padding: 20px 20px 14px; border-bottom: 1px solid var(--border); }
 .dialog-header h2 { margin: 0; font-size: 20px; }
 .icon-button { font-size: 25px; line-height: 1; }
-.form-grid { display: grid; grid-template-columns: minmax(0,1fr) 110px; gap: 15px 12px; max-height: min(610px, calc(100vh - 190px)); overflow: auto; padding: 20px; }
+.form-grid { display: grid; min-height: 0; grid-template-columns: minmax(0,1fr) 110px; gap: 15px 12px; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 20px; }
 .field { display: block; }
 .field > span { display: block; margin-bottom: 7px; color: #c8cdd4; font-size: 11px; font-weight: 700; }
 .field small, .toggle-row small { display: block; margin-top: 6px; color: var(--muted); font-size: 10px; line-height: 1.45; }

@@ -130,7 +130,7 @@
       <form id="account-form" method="dialog">
         <header class="dialog-header">
           <div><div class="eyebrow">Connection profile</div><h2 id="dialog-title">Add account</h2></div>
-          <button class="icon-button" value="cancel" formnovalidate aria-label="Close">×</button>
+          <button class="icon-button" type="button" data-close-account aria-label="Close account editor">×</button>
         </header>
         <input id="account-id" type="hidden" />
         <div class="form-grid">
@@ -191,7 +191,7 @@
         <footer class="dialog-footer">
           <button id="delete-account" class="button danger" type="button" hidden>Delete</button>
           <span class="footer-spacer"></span>
-          <button class="button secondary" value="cancel" formnovalidate>Cancel</button>
+          <button class="button secondary" type="button" data-close-account>Cancel</button>
           <button id="save-account" class="button primary" type="submit">Save account</button>
         </footer>
       </form>

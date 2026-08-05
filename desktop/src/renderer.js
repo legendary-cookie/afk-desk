@@ -40,6 +40,7 @@ function bindEvents() {
   document.querySelector('[data-action="add"]').addEventListener('click', () => openAccountDialog())
   el['edit-account'].addEventListener('click', () => openAccountDialog(selectedAccount()))
   el['account-form'].addEventListener('submit', saveAccount)
+  document.querySelectorAll('[data-close-account]').forEach((button) => button.addEventListener('click', () => el['account-dialog'].close()))
   el['delete-account'].addEventListener('click', deleteAccount)
   el['connection-button'].addEventListener('click', toggleConnection)
   el['drop-selected'].addEventListener('click', dropSelectedStack)
