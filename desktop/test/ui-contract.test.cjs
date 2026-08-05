@@ -16,6 +16,7 @@ test('desktop UI exposes cancellable account setup, settings, proxy, startup, an
   ]) assert.match(html, new RegExp(`id="${id}"`))
   assert.match(html, /id="proxy-password" type="password"/)
   assert.match(html, /id="message-delay"[^>]*value="5"/)
+  assert.match(html, /id="anti-afk-duration"[^>]*step="0\.05"[^>]*value="0\.25"/)
 })
 
 test('desktop console has a fixed viewport and scrolls messages internally', () => {

@@ -399,3 +399,45 @@ test('flowing water supplies a minimum horizontal current when normal physics st
   assert.equal(applyFluidCurrentPush(bot), false)
   assert.deepEqual(bot.entity.velocity, new Vec3(0, 0, 0))
 })
+
+test('flowing water intersecting the player bounding box applies its current', () => {
+  const bot = new FakeBot()
+  bot.entity = { position: new Vec3(0.8, 64, 0.5), velocity: new Vec3(0, 0, 0) }
+  bot.blockAt = (position) => {
+    const x = Math.floor(position.x)
+    const y = Math.floor(position.y)
+    const z = Math.floor(position.z)
+    if ((x !== 1 && x !== 2) || y !== 64 || z !== 0) return { name: 'stone', metadata: 0, position: new Vec3(x, y, z), boundingBox: 'block' }
+    return { name: 'water', metadata: x === 1 ? 1 : 2, position: new Vec3(x, y, z), boundingBox: 'empty' }
+  }
+
+  assert.equal(applyFluidCurrentPush(bot), true)
+  assert.notEqual(bot.entity.velocity.x, 0)
+})
+
+test('flowing water advances a client that remains position-stalled', () => {
+  const bot = new FakeBot()
+  bot.entity = { position: new Vec3(0.5, 64, 0.5), velocity: new Vec3(0, 0, 0) }
+  bot.blockAt = (position) => {
+    const x = Math.floor(position.x)
+    const y = Math.floor(position.y)
+    const z = Math.floor(position.z)
+    const metadata = x === 1 && y === 64 && z === 0 ? 2 : 1
+    return { name: 'water', metadata, position: new Vec3(x, y, z), boundingBox: 'empty' }
+  }
+  const motionState = {}
+
+  for (let tick = 0; tick < 5; tick++) applyFluidCurrentPush(bot, motionState)
+
+  assert.ok(bot.entity.position.x > 0.5)
+})
+
+test('known dry players skip fluid block scans', () => {
+  const bot = new FakeBot()
+  let blockReads = 0
+  bot.entity = { isInWater: false, position: new Vec3(0.5, 64, 0.5), velocity: new Vec3(0, 0, 0) }
+  bot.blockAt = () => { blockReads++; return null }
+
+  assert.equal(applyFluidCurrentPush(bot, {}), false)
+  assert.equal(blockReads, 0)
+})

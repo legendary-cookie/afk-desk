@@ -76,6 +76,7 @@ class BotManager {
       depositing: false,
       joinMessageSent: false,
       nearestChest: null,
+      fluidMotion: {},
       identityKey: '',
       telemetryKey: ''
     }
@@ -168,7 +169,7 @@ class BotManager {
     bot.on('physicsTick', () => {
       if (session.account.environmentalMovement !== false) {
         applyEntityCollisionPush(bot)
-        applyFluidCurrentPush(bot)
+        applyFluidCurrentPush(bot, session.fluidMotion)
       }
     })
     bot.inventory?.on?.('updateSlot', emitTelemetry)
@@ -697,40 +698,20 @@ function applyEntityCollisionPush(bot) {
   return collisions
 }
 
-function applyFluidCurrentPush(bot) {
+function applyFluidCurrentPush(bot, motionState = null) {
   const player = bot?.entity
   if (!player?.position?.floored || !player?.velocity || typeof bot.blockAt !== 'function') return false
+  if (player.isInWater === false) {
+    resetFluidMotion(motionState)
+    return false
+  }
   try {
-    const position = player.position.floored()
-    const feetBlock = bot.blockAt(position, false)
-    const water = waterDepth(feetBlock) >= 0 ? feetBlock : bot.blockAt(position.offset(0, 1, 0), false)
-    if (waterDepth(water) < 0) return false
-
-    const currentDepth = waterDepth(water)
-    let flowX = 0
-    let flowZ = 0
-    for (const [dx, dz] of FLOW_DIRECTIONS) {
-      const adjacentPosition = water.position.offset(dx, 0, dz)
-      const adjacent = bot.blockAt(adjacentPosition, false)
-      const adjacentDepth = waterDepth(adjacent)
-      if (adjacentDepth >= 0) {
-        const difference = adjacentDepth - currentDepth
-        flowX += dx * difference
-        flowZ += dz * difference
-      } else if (!adjacent || adjacent.boundingBox === 'empty') {
-        const belowDepth = waterDepth(bot.blockAt(adjacentPosition.offset(0, -1, 0), false))
-        if (belowDepth >= 0) {
-          const difference = belowDepth - (currentDepth - 8)
-          flowX += dx * difference
-          flowZ += dz * difference
-        }
-      }
+    const current = fluidCurrentAtPlayer(bot, player.position)
+    if (!current) {
+      resetFluidMotion(motionState)
+      return false
     }
-
-    const length = Math.hypot(flowX, flowZ)
-    if (length <= 0.001) return false
-    const directionX = flowX / length
-    const directionZ = flowZ / length
+    const { x: directionX, z: directionZ } = current
     const minimumCurrent = 0.014
     const currentSpeed = Number(player.velocity.x) * directionX + Number(player.velocity.z) * directionZ
     if (currentSpeed < minimumCurrent) {
@@ -738,10 +719,119 @@ function applyFluidCurrentPush(bot) {
       player.velocity.x += directionX * missingSpeed
       player.velocity.z += directionZ * missingSpeed
     }
+
+    if (motionState) {
+      const moved = Number.isFinite(motionState.x)
+        ? Math.hypot(player.position.x - motionState.x, player.position.z - motionState.z)
+        : Infinity
+      if (moved < 0.002) motionState.stagnantTicks = (motionState.stagnantTicks || 0) + 1
+      else {
+        motionState.stagnantTicks = 0
+        motionState.forcing = false
+      }
+      if (motionState.stagnantTicks >= 2) motionState.forcing = true
+      if (motionState.forcing) {
+        const target = player.position.offset(directionX * minimumCurrent, 0, directionZ * minimumCurrent)
+        if (canOccupyFluidPosition(bot, target)) {
+          player.position.x = target.x
+          player.position.z = target.z
+        }
+      }
+      motionState.x = player.position.x
+      motionState.z = player.position.z
+    }
     return true
   } catch {
+    resetFluidMotion(motionState)
     return false
   }
+}
+
+// Follow prismarine-physics 1.11.1's player bounding-box and per-block flow model.
+// Source: https://github.com/PrismarineJS/prismarine-physics/blob/1.11.1/index.js#L628-L700
+function fluidCurrentAtPlayer(bot, position) {
+  let flowX = 0
+  let flowZ = 0
+  let waterBlocks = 0
+  const cursor = position.floored()
+  const minX = Math.floor(position.x - 0.299)
+  const maxX = Math.floor(position.x + 0.299)
+  const minY = Math.floor(position.y)
+  const maxY = Math.floor(position.y + 1.399)
+  const minZ = Math.floor(position.z - 0.299)
+  const maxZ = Math.floor(position.z + 0.299)
+
+  for (let y = minY; y <= maxY; y++) {
+    for (let z = minZ; z <= maxZ; z++) {
+      for (let x = minX; x <= maxX; x++) {
+        cursor.x = x
+        cursor.y = y
+        cursor.z = z
+        const water = bot.blockAt(cursor, false)
+        if (waterDepth(water) < 0) continue
+        waterBlocks++
+        const blockFlow = fluidCurrentAtBlock(bot, water)
+        flowX += blockFlow.x
+        flowZ += blockFlow.z
+      }
+    }
+  }
+
+  const length = Math.hypot(flowX, flowZ)
+  return waterBlocks > 0 && length > 0.001 ? { x: flowX / length, z: flowZ / length } : null
+}
+
+function fluidCurrentAtBlock(bot, water) {
+  const currentDepth = waterDepth(water)
+  let flowX = 0
+  let flowZ = 0
+  for (const [dx, dz] of FLOW_DIRECTIONS) {
+    const adjacentPosition = water.position.offset(dx, 0, dz)
+    const adjacent = bot.blockAt(adjacentPosition, false)
+    const adjacentDepth = waterDepth(adjacent)
+    if (adjacentDepth >= 0) {
+      const difference = adjacentDepth - currentDepth
+      flowX += dx * difference
+      flowZ += dz * difference
+    } else if (adjacent && adjacent.boundingBox !== 'empty') {
+      const belowDepth = waterDepth(bot.blockAt(adjacentPosition.offset(0, -1, 0), false))
+      if (belowDepth >= 0) {
+        const difference = belowDepth - (currentDepth - 8)
+        flowX += dx * difference
+        flowZ += dz * difference
+      }
+    }
+  }
+  const length = Math.hypot(flowX, flowZ)
+  return length > 0.001 ? { x: flowX / length, z: flowZ / length } : { x: 0, z: 0 }
+}
+
+function canOccupyFluidPosition(bot, position) {
+  const minX = Math.floor(position.x - 0.299)
+  const maxX = Math.floor(position.x + 0.299)
+  const minZ = Math.floor(position.z - 0.299)
+  const maxZ = Math.floor(position.z + 0.299)
+  const cursor = position.floored()
+  for (let y = Math.floor(position.y); y <= Math.floor(position.y + 1.799); y++) {
+    for (let z = minZ; z <= maxZ; z++) {
+      for (let x = minX; x <= maxX; x++) {
+        cursor.x = x
+        cursor.y = y
+        cursor.z = z
+        const block = bot.blockAt(cursor, false)
+        if (!block || (block.boundingBox !== 'empty' && waterDepth(block) < 0)) return false
+      }
+    }
+  }
+  return true
+}
+
+function resetFluidMotion(state) {
+  if (!state) return
+  delete state.x
+  delete state.z
+  state.stagnantTicks = 0
+  state.forcing = false
 }
 
 function waterDepth(block) {

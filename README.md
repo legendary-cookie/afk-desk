@@ -25,7 +25,7 @@ AFK Desk is a free, local-first Minecraft Java connection client for Windows, An
 
 | Project | Stack | Current version | Notes |
 | --- | --- | --- | --- |
-| [`desktop/`](desktop/) | Electron + Mineflayer | 0.6.1 | Windows installer and local browser dashboard |
+| [`desktop/`](desktop/) | Electron + Mineflayer | 0.6.2 | Windows installer and local browser dashboard |
 | [`mobile/`](mobile/) | React Native + embedded Node.js | 0.1.0 | Standalone Android app and iOS Xcode source |
 
 ## Development

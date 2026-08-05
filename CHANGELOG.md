@@ -2,6 +2,13 @@
 
 For the complete desktop history from 0.1.0 onward, including source tags, installers, and comparisons, see [HISTORY.md](HISTORY.md).
 
+## Desktop 0.6.2 — 2026-08-05
+
+### Fixed
+
+- Fixed the untouched `0.25`-second anti-AFK duration being rejected by the account editor's number-step validation.
+- Detects directional water across the player's full bounding box and applies a collision-checked same-tick current only when normal physics remains position-stalled.
+
 ## Desktop 0.6.1 — 2026-08-05
 
 ### Fixed
