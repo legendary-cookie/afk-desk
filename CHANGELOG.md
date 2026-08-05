@@ -2,6 +2,26 @@
 
 For the complete desktop history from 0.1.0 onward, including source tags, installers, and comparisons, see [HISTORY.md](HISTORY.md).
 
+## Desktop 0.6.0 — 2026-08-05
+
+### Added
+
+- Added per-account anti-AFK action selection for jump, look, sneak, arm swing, and bounded short walking.
+- Added randomized minimum/maximum delays, action duration, look angle, and walking-distance controls.
+- Added an environmental-movement toggle, enabled by default, for water, knockback, explosions, and nearby entity pushing.
+- Added a global, toggleable delay between startup account connections; the default is three seconds.
+
+### Fixed
+
+- Added friendly handling and recovery for common DNS, timeout, refused, reset, unreachable-network, and broken-pipe failures.
+- Added a connection watchdog so stalled sessions can enter the existing automatic-reconnect flow.
+- Fixed the account editor close and Cancel buttons and removed its competing second scrollbar.
+
+### Changed
+
+- Startup accounts now connect in a staggered sequence by default to reduce network and authentication spikes.
+- Anti-AFK randomly performs one enabled action per cycle, avoiding conflicting action combinations.
+
 ## Desktop 0.5.0 — 2026-07-30
 
 - Added selection and explicit dropping of individual inventory stacks.

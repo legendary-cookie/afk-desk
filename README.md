@@ -10,10 +10,11 @@ AFK Desk is a free, local-first Minecraft Java connection client for Windows, An
 - Microsoft device-code authentication without collecting passwords
 - Minecraft chat colors, commands, and a fixed scrolling console
 - Configurable join and server-change messages
-- Automatic reconnect with exponential backoff
-- Anti-AFK and manual movement controls
+- Automatic reconnect with exponential backoff and stalled-connection recovery
+- Custom anti-AFK actions, randomized timing, duration, look angle, and bounded walking distance
+- Optional position holding or default environmental movement from water, knockback, explosions, players, and mobs
 - Per-account SOCKS5 and HTTP CONNECT proxies
-- Per-account startup connections
+- Per-account startup connections with a configurable global stagger delay
 - Health, hunger, coordinates, dimension, and inventory views
 - Desktop inventory stack selection and optional nearby-chest auto-deposit with coordinate tracking
 - Modern Velocity server-switch compatibility
@@ -24,7 +25,7 @@ AFK Desk is a free, local-first Minecraft Java connection client for Windows, An
 
 | Project | Stack | Current version | Notes |
 | --- | --- | --- | --- |
-| [`desktop/`](desktop/) | Electron + Mineflayer | 0.5.0 | Windows installer and local browser dashboard |
+| [`desktop/`](desktop/) | Electron + Mineflayer | 0.6.0 | Windows installer and local browser dashboard |
 | [`mobile/`](mobile/) | React Native + embedded Node.js | 0.1.0 | Standalone Android app and iOS Xcode source |
 
 ## Development

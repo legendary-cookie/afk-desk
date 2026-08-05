@@ -62,7 +62,6 @@ class BotManager {
       bot,
       account: { ...account },
       antiAfkTimer: null,
-      jumpTimer: null,
       telemetryTimer: null,
       chestScanTimer: null,
       connectionTimer: null,
@@ -487,7 +486,6 @@ class BotManager {
 
   clearTimers(session) {
     if (session.antiAfkTimer) this.clearAntiAfkTimer(session.antiAfkTimer)
-    if (session.jumpTimer) clearTimeout(session.jumpTimer)
     if (session.telemetryTimer) clearInterval(session.telemetryTimer)
     if (session.chestScanTimer) clearInterval(session.chestScanTimer)
     if (session.connectionTimer) this.clearNetworkTimer(session.connectionTimer)
@@ -498,7 +496,6 @@ class BotManager {
     for (const timer of session.messageTimers || []) clearTimeout(timer)
     session.messageTimers?.clear()
     session.antiAfkTimer = null
-    session.jumpTimer = null
     session.telemetryTimer = null
     session.chestScanTimer = null
     session.connectionTimer = null
