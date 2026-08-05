@@ -2,6 +2,18 @@
 
 For the complete desktop history from 0.1.0 onward, including source tags, installers, and comparisons, see [HISTORY.md](HISTORY.md).
 
+## Desktop 0.6.3 — 2026-08-06
+
+### Fixed
+
+- Water-current recovery now inspects loaded blocks even when Mineflayer temporarily reports the account as dry.
+- Modern water block-state levels are used when a server or protocol translator does not expose numeric metadata.
+
+### Added
+
+- The desktop and browser dashboards now show live water diagnostics: disabled, dry, still water, detected direction, active fallback, and server corrections during a current.
+- Added an integration regression against the installed 1.21 physics stack in addition to the AFK Desk fallback tests.
+
 ## Desktop 0.6.2 — 2026-08-05
 
 ### Fixed

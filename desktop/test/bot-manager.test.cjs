@@ -432,12 +432,55 @@ test('flowing water advances a client that remains position-stalled', () => {
   assert.ok(bot.entity.position.x > 0.5)
 })
 
-test('known dry players skip fluid block scans', () => {
+test('flowing-water blocks override a stale dry-player flag', () => {
   const bot = new FakeBot()
   let blockReads = 0
   bot.entity = { isInWater: false, position: new Vec3(0.5, 64, 0.5), velocity: new Vec3(0, 0, 0) }
-  bot.blockAt = () => { blockReads++; return null }
+  bot.blockAt = (position) => {
+    blockReads++
+    const x = Math.floor(position.x)
+    const y = Math.floor(position.y)
+    const z = Math.floor(position.z)
+    const metadata = x === 1 && y === 64 && z === 0 ? 2 : 1
+    return { name: 'water', metadata, position: new Vec3(x, y, z), boundingBox: 'empty' }
+  }
 
-  assert.equal(applyFluidCurrentPush(bot, {}), false)
-  assert.equal(blockReads, 0)
+  assert.equal(applyFluidCurrentPush(bot, {}), true)
+  assert.ok(blockReads > 0)
+  assert.ok(bot.entity.velocity.x > 0)
+})
+
+test('modern water block-state level is used when metadata is unavailable', () => {
+  const bot = new FakeBot()
+  bot.entity = { position: new Vec3(0.5, 64, 0.5), velocity: new Vec3(0, 0, 0) }
+  bot.blockAt = (position) => {
+    const x = Math.floor(position.x)
+    const y = Math.floor(position.y)
+    const z = Math.floor(position.z)
+    const level = x === 1 && y === 64 && z === 0 ? '2' : '1'
+    return { name: 'water', metadata: undefined, getProperties: () => ({ level }), position: new Vec3(x, y, z), boundingBox: 'empty' }
+  }
+
+  assert.equal(applyFluidCurrentPush(bot, {}), true)
+  assert.ok(bot.entity.velocity.x > 0)
+})
+
+test('environment diagnostics expose detected current and fallback state', () => {
+  const bot = new FakeBot()
+  bot.physicsEnabled = true
+  bot.entity = { position: new Vec3(1.25, 64, -2.5) }
+  const snapshot = buildTelemetry(bot, null, true, {
+    status: 'fallback', waterBlocks: 2, currentX: 1, currentZ: 0, mineflayerInWater: false
+  })
+
+  assert.deepEqual(snapshot.environment, {
+    enabled: true,
+    physicsEnabled: true,
+    waterStatus: 'fallback',
+    waterBlocks: 2,
+    current: { x: 1, z: 0 },
+    fallbackActive: true,
+    mineflayerInWater: false,
+    serverCorrections: 0
+  })
 })

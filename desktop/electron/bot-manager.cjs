@@ -76,7 +76,7 @@ class BotManager {
       depositing: false,
       joinMessageSent: false,
       nearestChest: null,
-      fluidMotion: {},
+      fluidMotion: { status: account.environmentalMovement === false ? 'disabled' : 'checking' },
       identityKey: '',
       telemetryKey: ''
     }
@@ -151,7 +151,7 @@ class BotManager {
 
     const emitTelemetry = () => {
       if (!this.sessions.has(account.id)) return
-      const snapshot = buildTelemetry(bot, session.nearestChest)
+      const snapshot = buildTelemetry(bot, session.nearestChest, session.account.environmentalMovement, session.fluidMotion)
       const { at: _at, ...stableSnapshot } = snapshot
       const key = JSON.stringify(stableSnapshot)
       if (key === session.telemetryKey) return
@@ -174,7 +174,13 @@ class BotManager {
     })
     bot.inventory?.on?.('updateSlot', emitTelemetry)
     bot.on('spawn', markReady)
-    bot.on('forcedMove', markReady)
+    bot.on('forcedMove', () => {
+      const wasReady = session.ready
+      markReady()
+      if (wasReady && ['flowing', 'fallback'].includes(session.fluidMotion.status)) {
+        session.fluidMotion.serverCorrections = (session.fluidMotion.serverCorrections || 0) + 1
+      }
+    })
     bot.on('respawn', () => {
       markReady()
       if (account.serverChangeMessage) this.scheduleMessage(account.id, account.serverChangeMessage, account.messageDelay)
@@ -340,7 +346,7 @@ class BotManager {
   emitTelemetry(id) {
     const session = this.sessions.get(id)
     if (!session) return
-    const snapshot = buildTelemetry(session.bot, session.nearestChest)
+    const snapshot = buildTelemetry(session.bot, session.nearestChest, session.account.environmentalMovement, session.fluidMotion)
     const { at: _at, ...stableSnapshot } = snapshot
     const key = JSON.stringify(stableSnapshot)
     if (key === session.telemetryKey) return
@@ -463,6 +469,8 @@ class BotManager {
     if (session.physicsRestoreTimer) this.clearAntiAfkTimer(session.physicsRestoreTimer)
     session.physicsRestoreTimer = null
     session.bot.physicsEnabled = enabled !== false
+    resetFluidMotion(session.fluidMotion, enabled === false ? 'disabled' : 'checking')
+    this.emitTelemetry(id)
   }
 
   setAntiAfk(id, account) {
@@ -700,15 +708,19 @@ function applyEntityCollisionPush(bot) {
 
 function applyFluidCurrentPush(bot, motionState = null) {
   const player = bot?.entity
-  if (!player?.position?.floored || !player?.velocity || typeof bot.blockAt !== 'function') return false
-  if (player.isInWater === false) {
-    resetFluidMotion(motionState)
+  if (!player?.position?.floored || !player?.velocity || typeof bot.blockAt !== 'function') {
+    resetFluidMotion(motionState, 'unavailable')
     return false
   }
   try {
     const current = fluidCurrentAtPlayer(bot, player.position)
     if (!current) {
-      resetFluidMotion(motionState)
+      resetFluidMotion(motionState, 'dry')
+      return false
+    }
+    if (!current.hasCurrent) {
+      resetFluidMotion(motionState, 'still')
+      if (motionState) motionState.waterBlocks = current.waterBlocks
       return false
     }
     const { x: directionX, z: directionZ } = current
@@ -721,6 +733,11 @@ function applyFluidCurrentPush(bot, motionState = null) {
     }
 
     if (motionState) {
+      motionState.status = 'flowing'
+      motionState.waterBlocks = current.waterBlocks
+      motionState.currentX = directionX
+      motionState.currentZ = directionZ
+      motionState.mineflayerInWater = player.isInWater === true
       const moved = Number.isFinite(motionState.x)
         ? Math.hypot(player.position.x - motionState.x, player.position.z - motionState.z)
         : Infinity
@@ -735,6 +752,7 @@ function applyFluidCurrentPush(bot, motionState = null) {
         if (canOccupyFluidPosition(bot, target)) {
           player.position.x = target.x
           player.position.z = target.z
+          motionState.status = 'fallback'
         }
       }
       motionState.x = player.position.x
@@ -742,7 +760,7 @@ function applyFluidCurrentPush(bot, motionState = null) {
     }
     return true
   } catch {
-    resetFluidMotion(motionState)
+    resetFluidMotion(motionState, 'error')
     return false
   }
 }
@@ -777,8 +795,11 @@ function fluidCurrentAtPlayer(bot, position) {
     }
   }
 
+  if (waterBlocks === 0) return null
   const length = Math.hypot(flowX, flowZ)
-  return waterBlocks > 0 && length > 0.001 ? { x: flowX / length, z: flowZ / length } : null
+  return length > 0.001
+    ? { x: flowX / length, z: flowZ / length, waterBlocks, hasCurrent: true }
+    : { x: 0, z: 0, waterBlocks, hasCurrent: false }
 }
 
 function fluidCurrentAtBlock(bot, water) {
@@ -826,23 +847,31 @@ function canOccupyFluidPosition(bot, position) {
   return true
 }
 
-function resetFluidMotion(state) {
+function resetFluidMotion(state, status = 'dry') {
   if (!state) return
   delete state.x
   delete state.z
+  delete state.currentX
+  delete state.currentZ
+  delete state.waterBlocks
+  delete state.mineflayerInWater
   state.stagnantTicks = 0
   state.forcing = false
+  state.status = status
 }
 
 function waterDepth(block) {
   if (!block) return -1
-  if (block.isWaterlogged || WATERLIKE_NAMES.has(block.name)) return 0
+  const properties = typeof block.getProperties === 'function' ? block.getProperties() : null
+  if (block.isWaterlogged || properties?.waterlogged === true || WATERLIKE_NAMES.has(block.name)) return 0
   if (!WATER_NAMES.has(block.name)) return -1
-  const metadata = Number(block.metadata) || 0
-  return metadata >= 8 ? 0 : metadata
+  const rawLevel = block.metadata ?? properties?.level ?? 0
+  const level = Number(rawLevel)
+  const safeLevel = Number.isFinite(level) ? level : 0
+  return safeLevel >= 8 ? 0 : safeLevel
 }
 
-function buildTelemetry(bot, nearestChest = null) {
+function buildTelemetry(bot, nearestChest = null, environmentalMovement, fluidMotion = null) {
   const position = bot?.entity?.position
   const finite = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback
   const inventory = (bot?.inventory?.items?.() || []).slice(0, 46).map((item) => ({
@@ -851,6 +880,18 @@ function buildTelemetry(bot, nearestChest = null) {
     displayName: String(item.displayName || item.name || 'Unknown item').slice(0, 100),
     count: Math.max(1, Math.min(Number(item.count) || 1, 127))
   }))
+  const environment = environmentalMovement === undefined ? undefined : {
+    enabled: environmentalMovement !== false,
+    physicsEnabled: bot?.physicsEnabled !== false,
+    waterStatus: String(fluidMotion?.status || 'checking'),
+    waterBlocks: Math.max(0, Number(fluidMotion?.waterBlocks) || 0),
+    current: Number.isFinite(fluidMotion?.currentX) && Number.isFinite(fluidMotion?.currentZ)
+      ? { x: Math.round(fluidMotion.currentX * 100) / 100, z: Math.round(fluidMotion.currentZ * 100) / 100 }
+      : null,
+    fallbackActive: fluidMotion?.status === 'fallback',
+    mineflayerInWater: fluidMotion?.mineflayerInWater === true,
+    serverCorrections: Math.max(0, Number(fluidMotion?.serverCorrections) || 0)
+  }
   return {
     health: Math.max(0, Math.min(finite(bot?.health), 20)),
     food: Math.max(0, Math.min(finite(bot?.food), 20)),
@@ -862,6 +903,7 @@ function buildTelemetry(bot, nearestChest = null) {
     dimension: String(bot?.game?.dimension || 'unknown').slice(0, 80),
     nearestChest,
     inventory,
+    ...(environment ? { environment } : {}),
     at: Date.now()
   }
 }

@@ -14,7 +14,7 @@ const state = {
 const el = Object.fromEntries([
   'account-list', 'account-count', 'add-account', 'browser-access', 'open-settings', 'settings-dialog', 'close-settings', 'start-with-windows', 'stagger-startup-connections', 'startup-connection-delay', 'save-settings', 'empty-state', 'dashboard', 'account-title',
   'edit-account', 'connection-button', 'status-banner', 'status-name', 'status-detail', 'server-address',
-  'detail-username', 'detail-server', 'detail-version', 'detail-antiafk', 'detail-health', 'detail-hunger', 'detail-coordinates', 'detail-chest', 'detail-dimension', 'inventory-count', 'inventory-grid', 'auto-deposit-toggle', 'drop-selected', 'console-log', 'clear-console',
+  'detail-username', 'detail-server', 'detail-version', 'detail-antiafk', 'detail-environment', 'detail-water', 'detail-health', 'detail-hunger', 'detail-coordinates', 'detail-chest', 'detail-dimension', 'inventory-count', 'inventory-grid', 'auto-deposit-toggle', 'drop-selected', 'console-log', 'clear-console',
   'chat-form', 'chat-message', 'account-dialog', 'account-form', 'dialog-title', 'account-id', 'label',
   'username', 'host', 'port', 'version', 'connect-on-startup', 'proxy-enabled', 'proxy-fields', 'proxy-type', 'proxy-host', 'proxy-port', 'proxy-username', 'proxy-password', 'proxy-password-help', 'proxy-clear-password', 'anti-afk', 'anti-afk-min-delay', 'anti-afk-max-delay', 'anti-afk-duration', 'anti-afk-look-degrees', 'anti-afk-walk-distance', 'anti-afk-jump', 'anti-afk-look', 'anti-afk-sneak', 'anti-afk-swing', 'anti-afk-walk', 'environmental-movement', 'auto-reconnect', 'auto-reconnect-delay', 'auto-reconnect-max', 'auto-deposit-setting', 'join-message', 'server-change-message',
   'message-delay', 'form-error', 'delete-account', 'login-dialog', 'login-code', 'open-login-private', 'open-login',
@@ -90,6 +90,7 @@ function render() {
   const minDelay = account.antiAfkMinDelay ?? account.antiAfkInterval ?? 45
   const maxDelay = account.antiAfkMaxDelay ?? account.antiAfkInterval ?? minDelay
   el['detail-antiafk'].textContent = account.antiAfk ? `${minDelay}–${maxDelay} seconds` : 'Disabled'
+  el['detail-environment'].textContent = account.environmentalMovement !== false ? 'Allowed' : 'Position held'
   el['auto-deposit-toggle'].checked = account.autoDepositToChest === true
   renderStatus(status)
   renderConsole()
@@ -248,6 +249,7 @@ function renderConsole() {
 
 function renderTelemetry() {
   const telemetry = state.telemetry.get(state.selectedId)
+  el['detail-water'].textContent = describeWater(telemetry?.environment)
   el['detail-health'].textContent = telemetry ? `${formatNumber(telemetry.health)} / 20` : '—'
   el['detail-hunger'].textContent = telemetry ? `${formatNumber(telemetry.food)} / 20` : '—'
   el['detail-coordinates'].textContent = telemetry?.position ? `${telemetry.position.x}, ${telemetry.position.y}, ${telemetry.position.z}` : '—'
@@ -544,6 +546,22 @@ async function saveSettings() {
     el['settings-dialog'].close()
     toast('Settings saved.')
   } catch (error) { toast(cleanError(error), 'error') }
+}
+
+function describeWater(environment) {
+  if (!environment) return 'Connect to inspect'
+  if (!environment.enabled) return 'Disabled'
+  if (!environment.physicsEnabled) return 'Physics paused'
+  if (environment.waterStatus === 'dry') return 'Not in water'
+  if (environment.waterStatus === 'still') return `Water detected (${environment.waterBlocks}), no horizontal current`
+  if (environment.waterStatus === 'error') return 'Inspection error'
+  if (environment.waterStatus === 'unavailable') return 'World data unavailable'
+  if (environment.current) {
+    const mode = environment.fallbackActive ? ', fallback active' : ''
+    const corrections = environment.serverCorrections ? `, ${environment.serverCorrections} server correction${environment.serverCorrections === 1 ? '' : 's'}` : ''
+    return `Flow x ${environment.current.x}, z ${environment.current.z}${mode}${corrections}`
+  }
+  return 'Checking…'
 }
 
 function syncStartupDelay() {

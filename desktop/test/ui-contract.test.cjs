@@ -8,7 +8,7 @@ test('desktop UI exposes cancellable account setup, settings, proxy, startup, an
   assert.equal((html.match(/data-close-account/g) || []).length, 2)
   for (const id of [
     'open-settings', 'start-with-windows', 'connect-on-startup', 'proxy-enabled', 'proxy-type',
-    'proxy-host', 'proxy-port', 'proxy-username', 'proxy-password', 'detail-health',
+    'proxy-host', 'proxy-port', 'proxy-username', 'proxy-password', 'detail-health', 'detail-environment', 'detail-water',
     'detail-coordinates', 'detail-chest', 'inventory-grid', 'drop-selected', 'auto-deposit-toggle', 'auto-deposit-setting',
     'anti-afk-min-delay', 'anti-afk-max-delay', 'anti-afk-duration', 'anti-afk-look-degrees',
     'anti-afk-walk-distance', 'anti-afk-jump', 'anti-afk-look', 'anti-afk-sneak', 'anti-afk-swing',
@@ -61,5 +61,7 @@ test('browser player state shows the closest chest coordinates', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'electron', 'remote', 'public', 'index.html'), 'utf8')
   const script = fs.readFileSync(path.join(__dirname, '..', 'electron', 'remote', 'public', 'app.js'), 'utf8')
   assert.match(html, /id="chest"/)
+  assert.match(html, /id="water"/)
   assert.match(script, /telemetry\?\.nearestChest/)
+  assert.match(script, /telemetry\?\.environment/)
 })
