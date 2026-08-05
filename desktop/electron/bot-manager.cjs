@@ -17,7 +17,10 @@ class BotManager {
     scheduleReconnectTimer = setTimeout,
     clearReconnectTimer = clearTimeout,
     scheduleNetworkTimer = setTimeout,
-    clearNetworkTimer = clearTimeout
+    clearNetworkTimer = clearTimeout,
+    scheduleAntiAfkTimer = setTimeout,
+    clearAntiAfkTimer = clearTimeout,
+    random = Math.random
   }) {
     this.profilesPath = profilesPath
     this.emit = emit
@@ -26,6 +29,9 @@ class BotManager {
     this.clearReconnectTimer = clearReconnectTimer
     this.scheduleNetworkTimer = scheduleNetworkTimer
     this.clearNetworkTimer = clearNetworkTimer
+    this.scheduleAntiAfkTimer = scheduleAntiAfkTimer
+    this.clearAntiAfkTimer = clearAntiAfkTimer
+    this.random = random
     this.sessions = new Map()
     this.reconnects = new Map()
   }
@@ -61,6 +67,8 @@ class BotManager {
       chestScanTimer: null,
       connectionTimer: null,
       networkRecoveryTimer: null,
+      physicsRestoreTimer: null,
+      antiAfkActionTimers: new Set(),
       messageTimers: new Set(),
       ready: false,
       switching: false,
@@ -70,6 +78,7 @@ class BotManager {
       identityKey: '',
       telemetryKey: ''
     }
+    bot.physicsEnabled = account.environmentalMovement !== false
     this.sessions.set(account.id, session)
     this.status(account.id, 'connecting', reconnecting ? `Reconnect attempt ${reconnectState.attempts}…` : `Connecting to ${account.host}…`)
     session.connectionTimer = this.scheduleNetworkTimer(() => {
@@ -114,7 +123,7 @@ class BotManager {
         void this.refreshChest(account.id)
         session.chestScanTimer = setInterval(() => { void this.refreshChest(account.id) }, CHEST_SCAN_INTERVAL)
       }
-      if (firstReady && account.antiAfk !== false) this.enableAntiAfk(account.id, account.antiAfkInterval)
+      if (firstReady && account.antiAfk !== false) this.enableAntiAfk(account.id, account)
       if (firstReady && account.joinMessage && !session.joinMessageSent) {
         session.joinMessageSent = true
         this.scheduleMessage(account.id, account.joinMessage, account.messageDelay)
@@ -155,6 +164,9 @@ class BotManager {
     bot.on('playerJoined', (player) => { if (player?.username === bot.username) emitIdentity() })
     bot.on('playerUpdated', (player) => { if (player?.username === bot.username) emitIdentity() })
     bot.on('health', emitTelemetry)
+    bot.on('physicsTick', () => {
+      if (session.account.environmentalMovement !== false) applyEntityCollisionPush(bot)
+    })
     bot.inventory?.on?.('updateSlot', emitTelemetry)
     bot.on('spawn', markReady)
     bot.on('forcedMove', markReady)
@@ -260,9 +272,11 @@ class BotManager {
   }
 
   control(id, control, duration = 350) {
+    const session = this.sessions.get(id)
     const bot = this.requireOnline(id)
     const allowed = new Set(['forward', 'back', 'left', 'right', 'jump', 'sprint', 'sneak'])
     if (!allowed.has(control)) throw new Error('Unknown movement control.')
+    this.temporarilyEnablePhysics(session, Math.max(100, Math.min(Number(duration) || 350, 3000)) + 200)
     bot.setControlState(control, true)
     setTimeout(() => {
       if (this.sessions.has(id)) bot.setControlState(control, false)
@@ -346,19 +360,123 @@ class BotManager {
     session.messageTimers.add(timer)
   }
 
-  enableAntiAfk(id, seconds = 45) {
+  enableAntiAfk(id, input = {}) {
     const session = this.sessions.get(id)
     if (!session) return
-    if (session.antiAfkTimer) clearInterval(session.antiAfkTimer)
-    if (session.jumpTimer) clearTimeout(session.jumpTimer)
-    const interval = Math.max(15, Math.min(Number(seconds) || 45, 3600)) * 1000
-    session.antiAfkTimer = setInterval(() => {
-      const bot = session.bot
-      if (!bot.entity) return
-      bot.setControlState('jump', true)
-      session.jumpTimer = setTimeout(() => bot.setControlState('jump', false), 250)
-      bot.look(bot.entity.yaw + 0.2, bot.entity.pitch, true).catch(() => {})
-    }, interval)
+    if (session.antiAfkTimer) this.clearAntiAfkTimer(session.antiAfkTimer)
+    for (const timer of session.antiAfkActionTimers) this.clearAntiAfkTimer(timer)
+    session.antiAfkActionTimers.clear()
+    session.antiAfkSettings = normalizeAntiAfkSettings(input)
+    this.scheduleAntiAfk(id)
+  }
+
+  scheduleAntiAfk(id) {
+    const session = this.sessions.get(id)
+    if (!session) return
+    const settings = session.antiAfkSettings
+    const seconds = settings.minDelay + this.random() * (settings.maxDelay - settings.minDelay)
+    session.antiAfkTimer = this.scheduleAntiAfkTimer(() => {
+      session.antiAfkTimer = null
+      if (!this.sessions.has(id)) return
+      this.runAntiAfkCycle(id)
+      this.scheduleAntiAfk(id)
+    }, Math.round(seconds * 1000))
+  }
+
+  runAntiAfkCycle(id) {
+    const session = this.sessions.get(id)
+    if (!session?.bot?.entity) return
+    const { bot } = session
+    const settings = session.antiAfkSettings
+    const duration = Math.round(settings.duration * 1000)
+    const actions = [
+      settings.jump && 'jump',
+      settings.look && 'look',
+      settings.sneak && 'sneak',
+      settings.swing && 'swing',
+      settings.walk && 'walk'
+    ].filter(Boolean)
+    if (!actions.length) return
+    const action = actions[Math.min(actions.length - 1, Math.floor(this.random() * actions.length))]
+    if (['jump', 'sneak', 'walk'].includes(action)) this.temporarilyEnablePhysics(session, duration + 200)
+    if (action === 'jump' || action === 'sneak') this.holdAntiAfkControl(session, action, duration)
+    if (action === 'swing') {
+      try { bot.swingArm('right') } catch {}
+    }
+    if (action === 'look') {
+      const direction = this.random() < 0.5 ? -1 : 1
+      const radians = settings.lookDegrees * Math.PI / 180
+      bot.look(bot.entity.yaw + direction * radians, bot.entity.pitch, true).catch(() => {})
+    }
+    if (action === 'walk') {
+      const control = session.antiAfkWalkForward === false ? 'back' : 'forward'
+      session.antiAfkWalkForward = !session.antiAfkWalkForward
+      this.walkAntiAfkDistance(session, control, settings.walkDistance, duration)
+    }
+  }
+
+  holdAntiAfkControl(session, control, duration) {
+    session.bot.setControlState(control, true)
+    const timer = this.scheduleAntiAfkTimer(() => {
+      session.antiAfkActionTimers.delete(timer)
+      if (this.sessions.get(session.account.id) === session) session.bot.setControlState(control, false)
+    }, duration)
+    session.antiAfkActionTimers.add(timer)
+  }
+
+  walkAntiAfkDistance(session, control, distance, duration) {
+    const start = { x: Number(session.bot.entity.position.x), z: Number(session.bot.entity.position.z) }
+    session.bot.setControlState(control, true)
+    const startedAt = Date.now()
+    const check = () => {
+      if (this.sessions.get(session.account.id) !== session) return
+      const position = session.bot.entity?.position
+      const moved = position ? Math.hypot(Number(position.x) - Number(start.x), Number(position.z) - Number(start.z)) : 0
+      if (moved >= distance || Date.now() - startedAt >= duration) {
+        session.bot.setControlState(control, false)
+        return
+      }
+      const timer = this.scheduleAntiAfkTimer(() => {
+        session.antiAfkActionTimers.delete(timer)
+        check()
+      }, 50)
+      session.antiAfkActionTimers.add(timer)
+    }
+    check()
+  }
+
+  temporarilyEnablePhysics(session, duration) {
+    if (!session || session.account.environmentalMovement !== false) return
+    if (session.physicsRestoreTimer) this.clearAntiAfkTimer(session.physicsRestoreTimer)
+    session.bot.physicsEnabled = true
+    session.physicsRestoreTimer = this.scheduleAntiAfkTimer(() => {
+      session.physicsRestoreTimer = null
+      if (this.sessions.get(session.account.id) === session && session.account.environmentalMovement === false) session.bot.physicsEnabled = false
+    }, duration)
+  }
+
+  setEnvironmentalMovement(id, enabled) {
+    const session = this.sessions.get(id)
+    if (!session) return
+    session.account.environmentalMovement = enabled !== false
+    if (session.physicsRestoreTimer) this.clearAntiAfkTimer(session.physicsRestoreTimer)
+    session.physicsRestoreTimer = null
+    session.bot.physicsEnabled = enabled !== false
+  }
+
+  setAntiAfk(id, account) {
+    const session = this.sessions.get(id)
+    if (!session) return
+    Object.assign(session.account, account)
+    if (session.antiAfkTimer) this.clearAntiAfkTimer(session.antiAfkTimer)
+    for (const timer of session.antiAfkActionTimers) this.clearAntiAfkTimer(timer)
+    session.antiAfkActionTimers.clear()
+    session.bot.setControlState('jump', false)
+    session.bot.setControlState('sneak', false)
+    session.bot.setControlState('forward', false)
+    session.bot.setControlState('back', false)
+    session.antiAfkTimer = null
+    if (account.antiAfk !== false && session.bot.entity) this.enableAntiAfk(id, account)
   }
 
   clearSession(id) {
@@ -368,12 +486,15 @@ class BotManager {
   }
 
   clearTimers(session) {
-    if (session.antiAfkTimer) clearInterval(session.antiAfkTimer)
+    if (session.antiAfkTimer) this.clearAntiAfkTimer(session.antiAfkTimer)
     if (session.jumpTimer) clearTimeout(session.jumpTimer)
     if (session.telemetryTimer) clearInterval(session.telemetryTimer)
     if (session.chestScanTimer) clearInterval(session.chestScanTimer)
     if (session.connectionTimer) this.clearNetworkTimer(session.connectionTimer)
     if (session.networkRecoveryTimer) this.clearNetworkTimer(session.networkRecoveryTimer)
+    if (session.physicsRestoreTimer) this.clearAntiAfkTimer(session.physicsRestoreTimer)
+    for (const timer of session.antiAfkActionTimers || []) this.clearAntiAfkTimer(timer)
+    session.antiAfkActionTimers?.clear()
     for (const timer of session.messageTimers || []) clearTimeout(timer)
     session.messageTimers?.clear()
     session.antiAfkTimer = null
@@ -382,6 +503,7 @@ class BotManager {
     session.chestScanTimer = null
     session.connectionTimer = null
     session.networkRecoveryTimer = null
+    session.physicsRestoreTimer = null
   }
 
   requireOnline(id) {
@@ -419,6 +541,7 @@ function describeNetworkError(error) {
     ENETUNREACH: 'The network is unreachable. Check the active internet connection.',
     EPIPE: 'The connection closed while AFK Desk was sending data.'
   }
+
   if (!messages[code] && /socket hang up/i.test(raw)) code = 'ECONNRESET'
   return {
     code: code || 'UNKNOWN',
@@ -539,6 +662,51 @@ function chestLocation(bot, block) {
   }
 }
 
+function normalizeAntiAfkSettings(input) {
+  const legacyInterval = typeof input === 'number' ? input : input?.antiAfkInterval
+  const minDelay = clampNumber(input?.antiAfkMinDelay ?? legacyInterval, 2, 3600, 45)
+  const maxDelay = Math.max(minDelay, clampNumber(input?.antiAfkMaxDelay ?? legacyInterval, 2, 3600, minDelay))
+  return {
+    minDelay,
+    maxDelay,
+    duration: clampNumber(input?.antiAfkActionDuration, 0.1, 10, 0.25),
+    walkDistance: clampNumber(input?.antiAfkWalkDistance, 0.1, 8, 0.5),
+    lookDegrees: clampNumber(input?.antiAfkLookDegrees, 5, 180, 12),
+    jump: input?.antiAfkJump !== false,
+    look: input?.antiAfkLook !== false,
+    sneak: input?.antiAfkSneak === true,
+    swing: input?.antiAfkSwing === true,
+    walk: input?.antiAfkWalk === true
+  }
+}
+
+function clampNumber(value, minimum, maximum, fallback) {
+  const number = Number(value)
+  return Number.isFinite(number) ? Math.max(minimum, Math.min(number, maximum)) : fallback
+}
+
+function applyEntityCollisionPush(bot) {
+  const player = bot?.entity
+  if (!player?.position || !player?.velocity) return 0
+  let collisions = 0
+  for (const key in bot.entities || {}) {
+    const entity = bot.entities[key]
+    if (!entity || entity === player || entity.id === player.id || entity.isValid === false || !['mob', 'player'].includes(entity.type) || !entity.position) continue
+    const verticalOverlap = Number(entity.position.y) < Number(player.position.y) + Number(player.height || 1.8) && Number(entity.position.y) + Number(entity.height || 1.8) > Number(player.position.y)
+    if (!verticalOverlap) continue
+    const dx = Number(player.position.x) - Number(entity.position.x)
+    const dz = Number(player.position.z) - Number(entity.position.z)
+    const distance = Math.hypot(dx, dz)
+    const collisionDistance = (Number(player.width) || 0.6) / 2 + (Number(entity.width) || 0.6) / 2
+    if (distance <= 0.001 || distance >= collisionDistance) continue
+    const strength = Math.min(0.05, (collisionDistance - distance) * 0.08)
+    player.velocity.x += dx / distance * strength
+    player.velocity.z += dz / distance * strength
+    collisions += 1
+  }
+  return collisions
+}
+
 function buildTelemetry(bot, nearestChest = null) {
   const position = bot?.entity?.position
   const finite = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback
@@ -563,4 +731,4 @@ function buildTelemetry(bot, nearestChest = null) {
   }
 }
 
-module.exports = { BotManager, normalizeLoginCode, extractText, shouldUseProxyCommandPacket, parseMinecraftFormatting, normalizeSkinUrl, findNearestChest, buildTelemetry, describeNetworkError }
+module.exports = { BotManager, normalizeLoginCode, extractText, shouldUseProxyCommandPacket, parseMinecraftFormatting, normalizeSkinUrl, findNearestChest, buildTelemetry, describeNetworkError, normalizeAntiAfkSettings, applyEntityCollisionPush }

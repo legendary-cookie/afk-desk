@@ -164,9 +164,25 @@
           <label class="toggle-row full">
             <input id="anti-afk" type="checkbox" checked />
             <span class="toggle" aria-hidden="true"></span>
-            <span><strong>Enable anti-AFK</strong><small>Occasionally jumps and turns to keep the connection active.</small></span>
+            <span><strong>Enable anti-AFK</strong><small>Randomly picks one selected action at a randomized interval.</small></span>
           </label>
-          <label class="field full"><span>Anti-AFK interval (seconds)</span><input id="anti-afk-interval" type="number" min="15" max="3600" value="45" /></label>
+          <div class="action-grid full" role="group" aria-label="Anti-AFK actions">
+            <label class="check-row"><input id="anti-afk-jump" type="checkbox" checked /> Jump</label>
+            <label class="check-row"><input id="anti-afk-look" type="checkbox" checked /> Look around</label>
+            <label class="check-row"><input id="anti-afk-sneak" type="checkbox" /> Sneak</label>
+            <label class="check-row"><input id="anti-afk-swing" type="checkbox" /> Swing arm</label>
+            <label class="check-row"><input id="anti-afk-walk" type="checkbox" /> Short walk</label>
+          </div>
+          <label class="field"><span>Minimum delay (seconds)</span><input id="anti-afk-min-delay" type="number" min="2" max="3600" value="45" /></label>
+          <label class="field"><span>Maximum delay (seconds)</span><input id="anti-afk-max-delay" type="number" min="2" max="3600" value="45" /></label>
+          <label class="field"><span>Action duration (seconds)</span><input id="anti-afk-duration" type="number" min="0.1" max="10" step="0.1" value="0.25" /></label>
+          <label class="field"><span>Look angle (degrees)</span><input id="anti-afk-look-degrees" type="number" min="5" max="180" value="12" /></label>
+          <label class="field full"><span>Maximum walking distance (blocks)</span><input id="anti-afk-walk-distance" type="number" min="0.1" max="8" step="0.1" value="0.5" /><small>Short walking alternates forward and backward and is off by default.</small></label>
+          <label class="toggle-row full">
+            <input id="environmental-movement" type="checkbox" checked />
+            <span class="toggle" aria-hidden="true"></span>
+            <span><strong>Allow environmental movement</strong><small>Water, knockback, explosions, and nearby players or mobs can move the account. Manual controls still work when this is off.</small></span>
+          </label>
           <label class="toggle-row full">
             <input id="auto-reconnect" type="checkbox" checked />
             <span class="toggle" aria-hidden="true"></span>
@@ -222,6 +238,12 @@
             <span class="toggle" aria-hidden="true"></span>
             <span><strong>Start AFK Desk when Windows signs in</strong><small>Accounts with “Connect when AFK Desk starts” enabled will then join automatically.</small></span>
           </label>
+          <label class="toggle-row">
+            <input id="stagger-startup-connections" type="checkbox" checked />
+            <span class="toggle" aria-hidden="true"></span>
+            <span><strong>Stagger startup account logins</strong><small>Connect startup accounts one at a time to reduce network and authentication spikes.</small></span>
+          </label>
+          <label class="field settings-delay"><span>Delay between accounts (seconds)</span><input id="startup-connection-delay" type="number" min="1" max="300" value="3" /></label>
         </div>
         <footer class="dialog-footer">
           <span class="footer-spacer"></span>

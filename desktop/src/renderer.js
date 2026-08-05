@@ -12,11 +12,11 @@ const state = {
 }
 
 const el = Object.fromEntries([
-  'account-list', 'account-count', 'add-account', 'browser-access', 'open-settings', 'settings-dialog', 'close-settings', 'start-with-windows', 'save-settings', 'empty-state', 'dashboard', 'account-title',
+  'account-list', 'account-count', 'add-account', 'browser-access', 'open-settings', 'settings-dialog', 'close-settings', 'start-with-windows', 'stagger-startup-connections', 'startup-connection-delay', 'save-settings', 'empty-state', 'dashboard', 'account-title',
   'edit-account', 'connection-button', 'status-banner', 'status-name', 'status-detail', 'server-address',
   'detail-username', 'detail-server', 'detail-version', 'detail-antiafk', 'detail-health', 'detail-hunger', 'detail-coordinates', 'detail-chest', 'detail-dimension', 'inventory-count', 'inventory-grid', 'auto-deposit-toggle', 'drop-selected', 'console-log', 'clear-console',
   'chat-form', 'chat-message', 'account-dialog', 'account-form', 'dialog-title', 'account-id', 'label',
-  'username', 'host', 'port', 'version', 'connect-on-startup', 'proxy-enabled', 'proxy-fields', 'proxy-type', 'proxy-host', 'proxy-port', 'proxy-username', 'proxy-password', 'proxy-password-help', 'proxy-clear-password', 'anti-afk', 'anti-afk-interval', 'auto-reconnect', 'auto-reconnect-delay', 'auto-reconnect-max', 'auto-deposit-setting', 'join-message', 'server-change-message',
+  'username', 'host', 'port', 'version', 'connect-on-startup', 'proxy-enabled', 'proxy-fields', 'proxy-type', 'proxy-host', 'proxy-port', 'proxy-username', 'proxy-password', 'proxy-password-help', 'proxy-clear-password', 'anti-afk', 'anti-afk-min-delay', 'anti-afk-max-delay', 'anti-afk-duration', 'anti-afk-look-degrees', 'anti-afk-walk-distance', 'anti-afk-jump', 'anti-afk-look', 'anti-afk-sneak', 'anti-afk-swing', 'anti-afk-walk', 'environmental-movement', 'auto-reconnect', 'auto-reconnect-delay', 'auto-reconnect-max', 'auto-deposit-setting', 'join-message', 'server-change-message',
   'message-delay', 'form-error', 'delete-account', 'login-dialog', 'login-code', 'open-login-private', 'open-login',
   'close-login', 'remote-dialog', 'close-remote', 'remote-local-url', 'open-dashboard', 'tailscale-command',
   'enable-tailscale', 'tailscale-result', 'remote-base-url', 'grant-label', 'grant-accounts', 'create-grant', 'generated-link', 'share-link',
@@ -37,6 +37,7 @@ function bindEvents() {
   el['open-settings'].addEventListener('click', openSettingsDialog)
   el['close-settings'].addEventListener('click', () => el['settings-dialog'].close())
   el['save-settings'].addEventListener('click', saveSettings)
+  el['stagger-startup-connections'].addEventListener('change', syncStartupDelay)
   document.querySelector('[data-action="add"]').addEventListener('click', () => openAccountDialog())
   el['edit-account'].addEventListener('click', () => openAccountDialog(selectedAccount()))
   el['account-form'].addEventListener('submit', saveAccount)
@@ -86,7 +87,9 @@ function render() {
   el['detail-username'].textContent = account.username
   el['detail-server'].textContent = `${account.host}:${account.port}`
   el['detail-version'].textContent = account.version || 'Auto-detect'
-  el['detail-antiafk'].textContent = account.antiAfk ? `Every ${account.antiAfkInterval} seconds` : 'Disabled'
+  const minDelay = account.antiAfkMinDelay ?? account.antiAfkInterval ?? 45
+  const maxDelay = account.antiAfkMaxDelay ?? account.antiAfkInterval ?? minDelay
+  el['detail-antiafk'].textContent = account.antiAfk ? `${minDelay}–${maxDelay} seconds` : 'Disabled'
   el['auto-deposit-toggle'].checked = account.autoDepositToChest === true
   renderStatus(status)
   renderConsole()
@@ -339,7 +342,18 @@ function openAccountDialog(account) {
   el['proxy-clear-password'].checked = false
   syncProxyFields()
   el['anti-afk'].checked = account?.antiAfk !== false
-  el['anti-afk-interval'].value = account?.antiAfkInterval || 45
+  const legacyAntiAfkDelay = account?.antiAfkInterval || 45
+  el['anti-afk-min-delay'].value = account?.antiAfkMinDelay ?? legacyAntiAfkDelay
+  el['anti-afk-max-delay'].value = account?.antiAfkMaxDelay ?? legacyAntiAfkDelay
+  el['anti-afk-duration'].value = account?.antiAfkActionDuration ?? 0.25
+  el['anti-afk-look-degrees'].value = account?.antiAfkLookDegrees ?? 12
+  el['anti-afk-walk-distance'].value = account?.antiAfkWalkDistance ?? 0.5
+  el['anti-afk-jump'].checked = account?.antiAfkJump !== false
+  el['anti-afk-look'].checked = account?.antiAfkLook !== false
+  el['anti-afk-sneak'].checked = account?.antiAfkSneak === true
+  el['anti-afk-swing'].checked = account?.antiAfkSwing === true
+  el['anti-afk-walk'].checked = account?.antiAfkWalk === true
+  el['environmental-movement'].checked = account?.environmentalMovement !== false
   el['auto-reconnect'].checked = account?.autoReconnect !== false
   el['auto-reconnect-delay'].value = account?.autoReconnectDelay || 5
   el['auto-reconnect-max'].value = account?.autoReconnectMaxAttempts ?? 0
@@ -377,7 +391,17 @@ async function saveAccount(event) {
     minecraftUuid: existing?.minecraftUuid || '',
     skinUrl: existing?.skinUrl || '',
     antiAfk: el['anti-afk'].checked,
-    antiAfkInterval: Number(el['anti-afk-interval'].value),
+    antiAfkMinDelay: Number(el['anti-afk-min-delay'].value),
+    antiAfkMaxDelay: Number(el['anti-afk-max-delay'].value),
+    antiAfkActionDuration: Number(el['anti-afk-duration'].value),
+    antiAfkLookDegrees: Number(el['anti-afk-look-degrees'].value),
+    antiAfkWalkDistance: Number(el['anti-afk-walk-distance'].value),
+    antiAfkJump: el['anti-afk-jump'].checked,
+    antiAfkLook: el['anti-afk-look'].checked,
+    antiAfkSneak: el['anti-afk-sneak'].checked,
+    antiAfkSwing: el['anti-afk-swing'].checked,
+    antiAfkWalk: el['anti-afk-walk'].checked,
+    environmentalMovement: el['environmental-movement'].checked,
     autoReconnect: el['auto-reconnect'].checked,
     autoReconnectDelay: Number(el['auto-reconnect-delay'].value),
     autoReconnectMaxAttempts: Number(el['auto-reconnect-max'].value),
@@ -503,16 +527,27 @@ async function openSettingsDialog() {
   try {
     const settings = await api.getSettings()
     el['start-with-windows'].checked = settings.startWithWindows === true
+    el['stagger-startup-connections'].checked = settings.staggerStartupConnections !== false
+    el['startup-connection-delay'].value = settings.startupConnectionDelay || 3
+    syncStartupDelay()
     el['settings-dialog'].showModal()
   } catch (error) { toast(cleanError(error), 'error') }
 }
 
 async function saveSettings() {
   try {
-    await api.saveSettings({ startWithWindows: el['start-with-windows'].checked })
+    await api.saveSettings({
+      startWithWindows: el['start-with-windows'].checked,
+      staggerStartupConnections: el['stagger-startup-connections'].checked,
+      startupConnectionDelay: Number(el['startup-connection-delay'].value)
+    })
     el['settings-dialog'].close()
     toast('Settings saved.')
   } catch (error) { toast(cleanError(error), 'error') }
+}
+
+function syncStartupDelay() {
+  el['startup-connection-delay'].disabled = !el['stagger-startup-connections'].checked
 }
 
 async function createRemoteGrant() {

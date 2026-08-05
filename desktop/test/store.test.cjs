@@ -3,7 +3,7 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
-const { AccountStore } = require('../electron/store.cjs')
+const { AccountStore, SettingsStore, normalizeSettings, startupConnectionDelay } = require('../electron/store.cjs')
 
 test('AccountStore saves, updates, and deletes profiles', (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'afkdesk-store-'))
@@ -28,4 +28,20 @@ test('AccountStore saves, updates, and deletes profiles', (t) => {
 
   store.delete('one')
   assert.deepEqual(store.list(), [{ id: 'two', label: 'Second' }])
+})
+
+test('SettingsStore persists safe startup connection staggering', (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'afkdesk-settings-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const store = new SettingsStore(directory)
+
+  assert.deepEqual(store.get(), { staggerStartupConnections: true, startupConnectionDelay: 3 })
+  assert.deepEqual(store.save({ staggerStartupConnections: false, startupConnectionDelay: 12 }), {
+    staggerStartupConnections: false,
+    startupConnectionDelay: 12
+  })
+  assert.deepEqual(store.get(), { staggerStartupConnections: false, startupConnectionDelay: 12 })
+  assert.deepEqual(normalizeSettings({ startupConnectionDelay: 9999 }), { staggerStartupConnections: true, startupConnectionDelay: 300 })
+  assert.equal(startupConnectionDelay({ staggerStartupConnections: true, startupConnectionDelay: 5 }, 2), 10_700)
+  assert.equal(startupConnectionDelay({ staggerStartupConnections: false, startupConnectionDelay: 5 }, 2), 700)
 })

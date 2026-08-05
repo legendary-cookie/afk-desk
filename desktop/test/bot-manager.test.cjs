@@ -1,7 +1,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const { EventEmitter } = require('node:events')
-const { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, normalizeSkinUrl, buildTelemetry, describeNetworkError } = require('../electron/bot-manager.cjs')
+const { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, normalizeSkinUrl, buildTelemetry, describeNetworkError, applyEntityCollisionPush } = require('../electron/bot-manager.cjs')
 const { computeSignedChatChecksum } = require('../electron/protocol-fixes.cjs')
 
 class FakeBot extends EventEmitter {
@@ -320,4 +320,62 @@ test('ends a stuck network session so auto-reconnect can recover it', () => {
   networkTimers[1].callback()
   assert.equal(reconnectTimer.delay, 5000)
   assert.equal(events.filter(([type]) => type === 'status').at(-1)[2].status, 'reconnecting')
+})
+
+test('schedules one randomly selected anti-AFK action within the chosen delay range', () => {
+  const bot = new FakeBot()
+  const timers = []
+  const manager = new BotManager({
+    profilesPath: 'profiles', emit: () => {}, createBot: () => bot, random: () => 0.5,
+    scheduleAntiAfkTimer: (callback, delay) => { timers.push({ callback, delay }); return `afk-${timers.length}` },
+    clearAntiAfkTimer: () => {}
+  })
+  manager.connect({
+    id: 'custom-afk', username: 'user@example.com', host: 'localhost', autoReconnect: false,
+    antiAfk: true, antiAfkMinDelay: 20, antiAfkMaxDelay: 40, antiAfkActionDuration: 0.5,
+    antiAfkJump: true, antiAfkLook: false, antiAfkSneak: true, antiAfkSwing: true, antiAfkWalk: false
+  })
+  bot.entity = { yaw: 0, pitch: 0, position: { x: 0, y: 64, z: 0 }, velocity: { x: 0, y: 0, z: 0 } }
+  bot.swingArm = (hand) => { bot.swung = hand }
+  bot.emit('spawn')
+
+  assert.equal(timers[0].delay, 30_000)
+  timers[0].callback()
+  assert.deepEqual(bot.controls.slice(0, 1), [['sneak', true]])
+  assert.equal(bot.swung, undefined)
+  assert.equal(timers.some(({ delay }) => delay === 500), true)
+  assert.equal(timers.filter(({ delay }) => delay === 30_000).length, 2)
+  manager.disconnect('custom-afk')
+})
+
+test('environmental movement defaults on and can be disabled without breaking manual controls', () => {
+  const bot = new FakeBot()
+  const timers = []
+  const manager = new BotManager({
+    profilesPath: 'profiles', emit: () => {}, createBot: () => bot,
+    scheduleAntiAfkTimer: (callback, delay) => { timers.push({ callback, delay }); return `physics-${timers.length}` },
+    clearAntiAfkTimer: () => {}
+  })
+  manager.connect({ id: 'physics', username: 'user@example.com', host: 'localhost', antiAfk: false, autoReconnect: false, environmentalMovement: false })
+  bot.entity = { yaw: 0, pitch: 0, position: { x: 0, y: 64, z: 0 }, velocity: { x: 0, y: 0, z: 0 } }
+  assert.equal(bot.physicsEnabled, false)
+  manager.control('physics', 'forward', 350)
+  assert.equal(bot.physicsEnabled, true)
+  const restore = timers.find(({ delay }) => delay === 550)
+  assert.ok(restore)
+  restore.callback()
+  assert.equal(bot.physicsEnabled, false)
+  manager.disconnect('physics')
+})
+
+test('nearby players and mobs apply horizontal collision push', () => {
+  const bot = new FakeBot()
+  bot.entity = { id: 1, position: { x: 0, y: 64, z: 0 }, velocity: { x: 0, y: 0, z: 0 }, height: 1.8 }
+  bot.entities = {
+    1: bot.entity,
+    2: { id: 2, type: 'mob', position: { x: 0.3, y: 64, z: 0 }, height: 1.8, isValid: true }
+  }
+  assert.equal(applyEntityCollisionPush(bot), 1)
+  assert.ok(bot.entity.velocity.x < 0)
+  assert.equal(bot.entity.velocity.z, 0)
 })

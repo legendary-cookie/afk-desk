@@ -3,7 +3,7 @@ const path = require('node:path')
 const crypto = require('node:crypto')
 const { execFile } = require('node:child_process')
 const { promisify } = require('node:util')
-const { AccountStore } = require('./store.cjs')
+const { AccountStore, SettingsStore, startupConnectionDelay } = require('./store.cjs')
 const { BotManager, normalizeSkinUrl } = require('./bot-manager.cjs')
 const { AccessStore } = require('./remote/access-store.cjs')
 const { RemoteAccessServer } = require('./remote/server.cjs')
@@ -12,6 +12,7 @@ const execFileAsync = promisify(execFile)
 
 let mainWindow
 let store
+let settingsStore
 let bots
 let accessStore
 let remoteAccess
@@ -38,6 +39,7 @@ function createWindow() {
 
 app.whenReady().then(async () => {
   store = new AccountStore(app.getPath('userData'))
+  settingsStore = new SettingsStore(app.getPath('userData'))
   accessStore = new AccessStore(app.getPath('userData'))
   bots = new BotManager({
     profilesPath: path.join(app.getPath('userData'), 'profiles'),
@@ -72,6 +74,8 @@ function registerIpc() {
     const account = validateAccount(input, existing)
     const saved = store.save(account)
     if (existing && existing.autoDepositToChest !== saved.autoDepositToChest) await bots.setAutoDeposit(saved.id, saved.autoDepositToChest)
+    if (existing && existing.environmentalMovement !== saved.environmentalMovement) bots.setEnvironmentalMovement(saved.id, saved.environmentalMovement)
+    if (existing && antiAfkChanged(existing, saved)) bots.setAntiAfk(saved.id, saved)
     return publicAccount(saved)
   })
   ipcMain.handle('accounts:delete', (_event, id) => {
@@ -116,15 +120,22 @@ function registerIpc() {
     if (!['https:', 'http:'].includes(parsed.protocol)) throw new Error('Unsupported link.')
     return shell.openExternal(parsed.toString())
   })
-  ipcMain.handle('settings:get', () => ({ startWithWindows: app.getLoginItemSettings().openAtLogin }))
+  ipcMain.handle('settings:get', () => ({
+    startWithWindows: app.getLoginItemSettings().openAtLogin,
+    ...settingsStore.get()
+  }))
   ipcMain.handle('settings:save', (_event, input) => {
     const startWithWindows = input?.startWithWindows === true
     app.setLoginItemSettings({ openAtLogin: startWithWindows })
-    return { startWithWindows: app.getLoginItemSettings().openAtLogin }
+    return {
+      startWithWindows: app.getLoginItemSettings().openAtLogin,
+      ...settingsStore.save(input)
+    }
   })
 }
 
 function autoConnectConfiguredAccounts() {
+  const settings = settingsStore.get()
   store.list().filter((account) => account.connectOnStartup).forEach((account, index) => {
     setTimeout(() => {
       try { bots.connect(withProxyPassword(account)) }
@@ -132,7 +143,7 @@ function autoConnectConfiguredAccounts() {
         emitBotEvent('log', account.id, { kind: 'error', message: `Startup connection failed: ${error.message}`, at: Date.now() })
         emitBotEvent('status', account.id, { status: 'offline', detail: 'Startup connection failed' })
       }
-    }, 700 + index * 800)
+    }, startupConnectionDelay(settings, index))
   })
 }
 
@@ -224,6 +235,15 @@ function validateAccount(input, existing) {
   const port = Number(input?.port) || 25565
   if (port < 1 || port > 65535) throw new Error('Port must be between 1 and 65535.')
   const minecraftName = normalizeMinecraftName(input?.minecraftName)
+  const antiAfk = input?.antiAfk !== false
+  const antiAfkJump = input?.antiAfkJump !== false
+  const antiAfkLook = input?.antiAfkLook !== false
+  const antiAfkSneak = input?.antiAfkSneak === true
+  const antiAfkSwing = input?.antiAfkSwing === true
+  const antiAfkWalk = input?.antiAfkWalk === true
+  if (antiAfk && ![antiAfkJump, antiAfkLook, antiAfkSneak, antiAfkSwing, antiAfkWalk].some(Boolean)) {
+    throw new Error('Select at least one anti-AFK action or turn anti-AFK off.')
+  }
   return {
     id: input?.id || crypto.randomUUID(),
     label: minecraftName || String(input?.label || username.split('@')[0] || 'Minecraft account').trim().slice(0, 50),
@@ -234,8 +254,22 @@ function validateAccount(input, existing) {
     minecraftName,
     minecraftUuid: normalizeUuid(input?.minecraftUuid),
     skinUrl: normalizeSkinUrl(input?.skinUrl),
-    antiAfk: input?.antiAfk !== false,
-    antiAfkInterval: Math.max(15, Math.min(Number(input?.antiAfkInterval) || 45, 3600)),
+    antiAfk,
+    antiAfkInterval: bounded(input?.antiAfkMinDelay ?? input?.antiAfkInterval, 2, 3600, 45),
+    antiAfkMinDelay: bounded(input?.antiAfkMinDelay ?? input?.antiAfkInterval, 2, 3600, 45),
+    antiAfkMaxDelay: Math.max(
+      bounded(input?.antiAfkMinDelay ?? input?.antiAfkInterval, 2, 3600, 45),
+      bounded(input?.antiAfkMaxDelay ?? input?.antiAfkInterval, 2, 3600, 45)
+    ),
+    antiAfkActionDuration: bounded(input?.antiAfkActionDuration, 0.1, 10, 0.25),
+    antiAfkWalkDistance: bounded(input?.antiAfkWalkDistance, 0.1, 8, 0.5),
+    antiAfkLookDegrees: bounded(input?.antiAfkLookDegrees, 5, 180, 12),
+    antiAfkJump,
+    antiAfkLook,
+    antiAfkSneak,
+    antiAfkSwing,
+    antiAfkWalk,
+    environmentalMovement: input?.environmentalMovement !== false,
     autoReconnect: input?.autoReconnect !== false,
     autoReconnectDelay: Math.max(1, Math.min(Number(input?.autoReconnectDelay) || 5, 300)),
     autoReconnectMaxAttempts: Math.max(0, Math.min(Number(input?.autoReconnectMaxAttempts) || 0, 1000)),
@@ -246,6 +280,19 @@ function validateAccount(input, existing) {
     serverChangeMessage: String(input?.serverChangeMessage || '').trim().slice(0, 256),
     messageDelay: Math.max(0, Math.min(input?.messageDelay === '' || input?.messageDelay == null ? 5 : Number(input.messageDelay) || 0, 30))
   }
+}
+
+function bounded(value, minimum, maximum, fallback) {
+  const number = Number(value)
+  return Number.isFinite(number) ? Math.max(minimum, Math.min(number, maximum)) : fallback
+}
+
+function antiAfkChanged(before, after) {
+  return [
+    'antiAfk', 'antiAfkMinDelay', 'antiAfkMaxDelay', 'antiAfkActionDuration',
+    'antiAfkWalkDistance', 'antiAfkLookDegrees', 'antiAfkJump', 'antiAfkLook',
+    'antiAfkSneak', 'antiAfkSwing', 'antiAfkWalk'
+  ].some((field) => before?.[field] !== after?.[field])
 }
 
 function normalizeUuid(value) {

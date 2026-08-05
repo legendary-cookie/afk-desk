@@ -9,7 +9,10 @@ test('desktop UI exposes cancellable account setup, settings, proxy, startup, an
   for (const id of [
     'open-settings', 'start-with-windows', 'connect-on-startup', 'proxy-enabled', 'proxy-type',
     'proxy-host', 'proxy-port', 'proxy-username', 'proxy-password', 'detail-health',
-    'detail-coordinates', 'detail-chest', 'inventory-grid', 'drop-selected', 'auto-deposit-toggle', 'auto-deposit-setting'
+    'detail-coordinates', 'detail-chest', 'inventory-grid', 'drop-selected', 'auto-deposit-toggle', 'auto-deposit-setting',
+    'anti-afk-min-delay', 'anti-afk-max-delay', 'anti-afk-duration', 'anti-afk-look-degrees',
+    'anti-afk-walk-distance', 'anti-afk-jump', 'anti-afk-look', 'anti-afk-sneak', 'anti-afk-swing',
+    'anti-afk-walk', 'environmental-movement', 'stagger-startup-connections', 'startup-connection-delay'
   ]) assert.match(html, new RegExp(`id="${id}"`))
   assert.match(html, /id="proxy-password" type="password"/)
   assert.match(html, /id="message-delay"[^>]*value="5"/)
@@ -40,6 +43,8 @@ test('desktop bridge exposes inventory actions and accounts default automatic de
   assert.match(preload, /setAutoDeposit:.*bot:auto-deposit/)
   assert.match(main, /autoDepositToChest:\s*input\?\.autoDepositToChest === true/)
   assert.match(main, /messageDelay:.*\? 5 :/)
+  assert.match(main, /environmentalMovement:\s*input\?\.environmentalMovement !== false/)
+  assert.match(main, /startupConnectionDelay\(settings, index\)/)
 })
 
 test('browser player state shows the closest chest coordinates', () => {
