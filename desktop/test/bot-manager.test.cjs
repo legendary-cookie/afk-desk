@@ -2,7 +2,7 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const { EventEmitter } = require('node:events')
 const { Vec3 } = require('vec3')
-const { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, normalizeSkinUrl, buildTelemetry, describeNetworkError, applyEntityCollisionPush, applyFluidCurrentPush, installMovementPacketCompatibility } = require('../electron/bot-manager.cjs')
+const { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, normalizeSkinUrl, buildTelemetry, describeNetworkError, inspectFluidCurrent, installMovementPacketCompatibility } = require('../electron/bot-manager.cjs')
 const { computeSignedChatChecksum } = require('../electron/protocol-fixes.cjs')
 
 class FakeBot extends EventEmitter {
@@ -369,19 +369,30 @@ test('environmental movement defaults on and can be disabled without breaking ma
   manager.disconnect('physics')
 })
 
-test('nearby players and mobs apply horizontal collision push', () => {
+test('environment diagnostics do not add a second movement simulation after Mineflayer physics', (t) => {
   const bot = new FakeBot()
-  bot.entity = { id: 1, position: { x: 0, y: 64, z: 0 }, velocity: { x: 0, y: 0, z: 0 }, height: 1.8 }
+  const manager = new BotManager({ profilesPath: 'profiles', emit: () => {}, createBot: () => bot })
+  manager.connect({ id: 'native-physics', username: 'user@example.com', host: 'localhost', antiAfk: false, autoReconnect: false, environmentalMovement: true })
+  t.after(() => manager.disconnect('native-physics'))
+  bot.entity = { id: 1, position: new Vec3(0.5, 64, 0.5), velocity: new Vec3(0.0112, 0, 0), height: 1.8 }
   bot.entities = {
     1: bot.entity,
-    2: { id: 2, type: 'mob', position: { x: 0.3, y: 64, z: 0 }, height: 1.8, isValid: true }
+    2: { id: 2, type: 'mob', position: new Vec3(0.8, 64, 0.5), height: 1.8, isValid: true }
   }
-  assert.equal(applyEntityCollisionPush(bot), 1)
-  assert.ok(bot.entity.velocity.x < 0)
-  assert.equal(bot.entity.velocity.z, 0)
+  bot.blockAt = (position) => {
+    const x = Math.floor(position.x)
+    const y = Math.floor(position.y)
+    const z = Math.floor(position.z)
+    const metadata = x === 1 && y === 64 && z === 0 ? 2 : 1
+    return { name: 'water', metadata, position: new Vec3(x, y, z), boundingBox: 'empty' }
+  }
+
+  bot.emit('physicsTick')
+
+  assert.deepEqual(bot.entity.velocity, new Vec3(0.0112, 0, 0))
 })
 
-test('flowing water supplies a minimum horizontal current when normal physics stalls', () => {
+test('flowing water inspection reports current without changing velocity', () => {
   const bot = new FakeBot()
   bot.entity = { position: new Vec3(0.5, 64, 0.5), velocity: new Vec3(0, 0, 0) }
   bot.blockAt = (position) => {
@@ -390,17 +401,16 @@ test('flowing water supplies a minimum horizontal current when normal physics st
     return { name: 'water', metadata, position: new Vec3(Math.floor(position.x), Math.floor(position.y), Math.floor(position.z)), boundingBox: 'empty' }
   }
 
-  assert.equal(applyFluidCurrentPush(bot), true)
-  assert.ok(bot.entity.velocity.x > 0)
-  assert.equal(bot.entity.velocity.z, 0)
+  assert.equal(inspectFluidCurrent(bot), true)
+  assert.deepEqual(bot.entity.velocity, new Vec3(0, 0, 0))
 
   bot.entity.velocity = new Vec3(0, 0, 0)
   bot.blockAt = (position) => ({ name: 'stone', metadata: 0, position })
-  assert.equal(applyFluidCurrentPush(bot), false)
+  assert.equal(inspectFluidCurrent(bot), false)
   assert.deepEqual(bot.entity.velocity, new Vec3(0, 0, 0))
 })
 
-test('flowing water intersecting the player bounding box applies its current', () => {
+test('flowing water intersecting the player bounding box is detected without changing velocity', () => {
   const bot = new FakeBot()
   bot.entity = { position: new Vec3(0.8, 64, 0.5), velocity: new Vec3(0, 0, 0) }
   bot.blockAt = (position) => {
@@ -411,11 +421,11 @@ test('flowing water intersecting the player bounding box applies its current', (
     return { name: 'water', metadata: x === 1 ? 1 : 2, position: new Vec3(x, y, z), boundingBox: 'empty' }
   }
 
-  assert.equal(applyFluidCurrentPush(bot), true)
-  assert.notEqual(bot.entity.velocity.x, 0)
+  assert.equal(inspectFluidCurrent(bot), true)
+  assert.deepEqual(bot.entity.velocity, new Vec3(0, 0, 0))
 })
 
-test('flowing water never forces client coordinates when normal physics is stalled', () => {
+test('repeated water diagnostics never force client coordinates or velocity', () => {
   const bot = new FakeBot()
   bot.entity = { position: new Vec3(0.5, 64, 0.5), velocity: new Vec3(0, 0, 0) }
   bot.blockAt = (position) => {
@@ -427,10 +437,10 @@ test('flowing water never forces client coordinates when normal physics is stall
   }
   const motionState = {}
 
-  for (let tick = 0; tick < 5; tick++) applyFluidCurrentPush(bot, motionState)
+  for (let tick = 0; tick < 5; tick++) inspectFluidCurrent(bot, motionState)
 
   assert.deepEqual(bot.entity.position, new Vec3(0.5, 64, 0.5))
-  assert.ok(bot.entity.velocity.x > 0)
+  assert.deepEqual(bot.entity.velocity, new Vec3(0, 0, 0))
 })
 
 test('modern movement packets report the collision state calculated by physics', () => {
@@ -476,9 +486,9 @@ test('flowing-water blocks override a stale dry-player flag', () => {
     return { name: 'water', metadata, position: new Vec3(x, y, z), boundingBox: 'empty' }
   }
 
-  assert.equal(applyFluidCurrentPush(bot, {}), true)
+  assert.equal(inspectFluidCurrent(bot, {}), true)
   assert.ok(blockReads > 0)
-  assert.ok(bot.entity.velocity.x > 0)
+  assert.deepEqual(bot.entity.velocity, new Vec3(0, 0, 0))
 })
 
 test('modern water block-state level is used when metadata is unavailable', () => {
@@ -492,8 +502,8 @@ test('modern water block-state level is used when metadata is unavailable', () =
     return { name: 'water', metadata: undefined, getProperties: () => ({ level }), position: new Vec3(x, y, z), boundingBox: 'empty' }
   }
 
-  assert.equal(applyFluidCurrentPush(bot, {}), true)
-  assert.ok(bot.entity.velocity.x > 0)
+  assert.equal(inspectFluidCurrent(bot, {}), true)
+  assert.deepEqual(bot.entity.velocity, new Vec3(0, 0, 0))
 })
 
 test('environment diagnostics expose detected current and fallback state', () => {

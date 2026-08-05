@@ -169,8 +169,7 @@ class BotManager {
     bot.on('health', emitTelemetry)
     bot.on('physicsTick', () => {
       if (session.account.environmentalMovement !== false) {
-        applyEntityCollisionPush(bot)
-        applyFluidCurrentPush(bot, session.fluidMotion)
+        inspectFluidCurrent(bot, session.fluidMotion)
       }
     })
     bot.inventory?.on?.('updateSlot', emitTelemetry)
@@ -685,31 +684,9 @@ function clampNumber(value, minimum, maximum, fallback) {
   return Number.isFinite(number) ? Math.max(minimum, Math.min(number, maximum)) : fallback
 }
 
-function applyEntityCollisionPush(bot) {
+function inspectFluidCurrent(bot, motionState = null) {
   const player = bot?.entity
-  if (!player?.position || !player?.velocity) return 0
-  let collisions = 0
-  for (const key in bot.entities || {}) {
-    const entity = bot.entities[key]
-    if (!entity || entity === player || entity.id === player.id || entity.isValid === false || !['mob', 'player'].includes(entity.type) || !entity.position) continue
-    const verticalOverlap = Number(entity.position.y) < Number(player.position.y) + Number(player.height || 1.8) && Number(entity.position.y) + Number(entity.height || 1.8) > Number(player.position.y)
-    if (!verticalOverlap) continue
-    const dx = Number(player.position.x) - Number(entity.position.x)
-    const dz = Number(player.position.z) - Number(entity.position.z)
-    const distance = Math.hypot(dx, dz)
-    const collisionDistance = (Number(player.width) || 0.6) / 2 + (Number(entity.width) || 0.6) / 2
-    if (distance <= 0.001 || distance >= collisionDistance) continue
-    const strength = Math.min(0.05, (collisionDistance - distance) * 0.08)
-    player.velocity.x += dx / distance * strength
-    player.velocity.z += dz / distance * strength
-    collisions += 1
-  }
-  return collisions
-}
-
-function applyFluidCurrentPush(bot, motionState = null) {
-  const player = bot?.entity
-  if (!player?.position?.floored || !player?.velocity || typeof bot.blockAt !== 'function') {
+  if (!player?.position?.floored || typeof bot.blockAt !== 'function') {
     resetFluidMotion(motionState, 'unavailable')
     return false
   }
@@ -725,13 +702,6 @@ function applyFluidCurrentPush(bot, motionState = null) {
       return false
     }
     const { x: directionX, z: directionZ } = current
-    const minimumCurrent = 0.014
-    const currentSpeed = Number(player.velocity.x) * directionX + Number(player.velocity.z) * directionZ
-    if (currentSpeed < minimumCurrent) {
-      const missingSpeed = minimumCurrent - currentSpeed
-      player.velocity.x += directionX * missingSpeed
-      player.velocity.z += directionZ * missingSpeed
-    }
 
     if (motionState) {
       motionState.status = 'flowing'
@@ -747,9 +717,8 @@ function applyFluidCurrentPush(bot, motionState = null) {
         motionState.stagnantTicks = 0
         motionState.forcing = false
       }
-      // Never force coordinates here. Mineflayer sends the simulated position
-      // after this event, and moving even slightly into a solid block causes
-      // authoritative servers to correct the client every tick.
+      // This hook runs after Mineflayer's native physics simulation. It is
+      // diagnostics-only so it cannot double-apply current or entity pushes.
       motionState.forcing = false
       motionState.x = player.position.x
       motionState.z = player.position.z
@@ -903,4 +872,4 @@ function buildTelemetry(bot, nearestChest = null, environmentalMovement, fluidMo
   }
 }
 
-module.exports = { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, normalizeSkinUrl, findNearestChest, buildTelemetry, describeNetworkError, normalizeAntiAfkSettings, applyEntityCollisionPush, applyFluidCurrentPush, installMovementPacketCompatibility }
+module.exports = { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, normalizeSkinUrl, findNearestChest, buildTelemetry, describeNetworkError, normalizeAntiAfkSettings, inspectFluidCurrent, installMovementPacketCompatibility }
