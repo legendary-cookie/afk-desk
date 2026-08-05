@@ -2,6 +2,14 @@
 
 For the complete desktop history from 0.1.0 onward, including source tags, installers, and comparisons, see [HISTORY.md](HISTORY.md).
 
+## Desktop 0.6.1 — 2026-08-05
+
+### Fixed
+
+- Fixed account editor toggles scrolling the entire form, header, and Save button out of view.
+- Fixed modern Velocity `/server` commands sending incomplete raw packets that could cause a generic internal connection error.
+- Added a bounded flowing-water current fallback when the normal Mineflayer physics calculation stalls.
+
 ## Desktop 0.6.0 — 2026-08-05
 
 ### Added

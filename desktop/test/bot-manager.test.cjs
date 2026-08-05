@@ -1,7 +1,8 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const { EventEmitter } = require('node:events')
-const { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, normalizeSkinUrl, buildTelemetry, describeNetworkError, applyEntityCollisionPush } = require('../electron/bot-manager.cjs')
+const { Vec3 } = require('vec3')
+const { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, normalizeSkinUrl, buildTelemetry, describeNetworkError, applyEntityCollisionPush, applyFluidCurrentPush } = require('../electron/bot-manager.cjs')
 const { computeSignedChatChecksum } = require('../electron/protocol-fixes.cjs')
 
 class FakeBot extends EventEmitter {
@@ -82,8 +83,8 @@ test('sends separate join and server-change messages', async () => {
   await new Promise((resolve) => setTimeout(resolve, 5))
   bot.emit('respawn')
   await new Promise((resolve) => setTimeout(resolve, 5))
-  assert.deepEqual(bot.messages, ['joined'])
-  assert.deepEqual(bot.writes, [['chat_command', { command: 'server survival' }]])
+  assert.deepEqual(bot.messages, ['joined', '/server survival'])
+  assert.deepEqual(bot.writes, [])
   manager.disconnect('messages')
 })
 
@@ -104,16 +105,16 @@ test('live chat marks a session online and a late login event cannot downgrade i
   manager.disconnect('ordering')
 })
 
-test('uses the unsigned command packet for modern proxy-switch commands', () => {
+test('uses the complete protocol chat path for modern proxy-switch commands', () => {
   const bot = new FakeBot()
   const manager = new BotManager({ profilesPath: 'profiles', emit: () => {}, createBot: () => bot })
   manager.connect({ id: 'proxy', username: 'user@example.com', host: 'localhost', port: 25565, antiAfk: false, autoReconnect: false })
   bot.entity = { yaw: 0, pitch: 0 }
   manager.sendChat('proxy', '/server towny')
-  assert.deepEqual(bot.writes, [['chat_command', { command: 'server towny' }]])
-  assert.deepEqual(bot.messages, [])
+  assert.deepEqual(bot.writes, [])
+  assert.deepEqual(bot.messages, ['/server towny'])
   manager.sendChat('proxy', '/home')
-  assert.deepEqual(bot.messages, ['/home'])
+  assert.deepEqual(bot.messages, ['/server towny', '/home'])
   manager.disconnect('proxy')
 })
 
@@ -378,4 +379,23 @@ test('nearby players and mobs apply horizontal collision push', () => {
   assert.equal(applyEntityCollisionPush(bot), 1)
   assert.ok(bot.entity.velocity.x < 0)
   assert.equal(bot.entity.velocity.z, 0)
+})
+
+test('flowing water supplies a minimum horizontal current when normal physics stalls', () => {
+  const bot = new FakeBot()
+  bot.entity = { position: new Vec3(0.5, 64, 0.5), velocity: new Vec3(0, 0, 0) }
+  bot.blockAt = (position) => {
+    const key = `${Math.floor(position.x)},${Math.floor(position.y)},${Math.floor(position.z)}`
+    const metadata = key === '1,64,0' ? 2 : 1
+    return { name: 'water', metadata, position: new Vec3(Math.floor(position.x), Math.floor(position.y), Math.floor(position.z)), boundingBox: 'empty' }
+  }
+
+  assert.equal(applyFluidCurrentPush(bot), true)
+  assert.ok(bot.entity.velocity.x > 0)
+  assert.equal(bot.entity.velocity.z, 0)
+
+  bot.entity.velocity = new Vec3(0, 0, 0)
+  bot.blockAt = (position) => ({ name: 'stone', metadata: 0, position })
+  assert.equal(applyFluidCurrentPush(bot), false)
+  assert.deepEqual(bot.entity.velocity, new Vec3(0, 0, 0))
 })

@@ -4,8 +4,10 @@ const { createProxyConnect } = require('./proxy-connect.cjs')
 applyProtocolFixes()
 const mineflayer = require('mineflayer')
 
-const PROXY_COMMANDS = new Set(['server', 'hub', 'lobby', 'switch'])
 const CHEST_NAMES = new Set(['chest', 'trapped_chest'])
+const WATER_NAMES = new Set(['water', 'flowing_water'])
+const WATERLIKE_NAMES = new Set(['bubble_column', 'seagrass', 'tall_seagrass', 'kelp', 'kelp_plant'])
+const FLOW_DIRECTIONS = [[0, 1], [-1, 0], [0, -1], [1, 0]]
 const CHEST_SCAN_INTERVAL = 5000
 const CHEST_MAX_DISTANCE = 5
 
@@ -164,7 +166,10 @@ class BotManager {
     bot.on('playerUpdated', (player) => { if (player?.username === bot.username) emitIdentity() })
     bot.on('health', emitTelemetry)
     bot.on('physicsTick', () => {
-      if (session.account.environmentalMovement !== false) applyEntityCollisionPush(bot)
+      if (session.account.environmentalMovement !== false) {
+        applyEntityCollisionPush(bot)
+        applyFluidCurrentPush(bot)
+      }
     })
     bot.inventory?.on?.('updateSlot', emitTelemetry)
     bot.on('spawn', markReady)
@@ -262,11 +267,7 @@ class BotManager {
     const bot = this.requireOnline(id)
     const trimmed = String(message || '').trim()
     if (!trimmed) return
-    if (shouldUseProxyCommandPacket(bot, trimmed)) {
-      bot._client.write('chat_command', { command: trimmed.slice(1) })
-    } else {
-      bot.chat(trimmed)
-    }
+    bot.chat(trimmed)
     this.emit('log', id, { kind: 'sent', message: trimmed, at: Date.now() })
   }
 
@@ -566,14 +567,6 @@ function extractText(value) {
   return `${text}${extras}`.trim()
 }
 
-function shouldUseProxyCommandPacket(bot, message) {
-  if (!message.startsWith('/') || !bot?._client?.write) return false
-  const command = message.slice(1).trim().split(/\s+/, 1)[0].toLowerCase()
-  if (!PROXY_COMMANDS.has(command)) return false
-  try { return bot.supportFeature?.('seperateSignedChatCommandPacket') === true }
-  catch { return false }
-}
-
 const CHAT_COLORS = {
   0: '#000000', 1: '#0000aa', 2: '#00aa00', 3: '#00aaaa', 4: '#aa0000', 5: '#aa00aa', 6: '#ffaa00', 7: '#aaaaaa',
   8: '#555555', 9: '#5555ff', a: '#55ff55', b: '#55ffff', c: '#ff5555', d: '#ff55ff', e: '#ffff55', f: '#ffffff'
@@ -704,6 +697,61 @@ function applyEntityCollisionPush(bot) {
   return collisions
 }
 
+function applyFluidCurrentPush(bot) {
+  const player = bot?.entity
+  if (!player?.position?.floored || !player?.velocity || typeof bot.blockAt !== 'function') return false
+  try {
+    const position = player.position.floored()
+    const feetBlock = bot.blockAt(position, false)
+    const water = waterDepth(feetBlock) >= 0 ? feetBlock : bot.blockAt(position.offset(0, 1, 0), false)
+    if (waterDepth(water) < 0) return false
+
+    const currentDepth = waterDepth(water)
+    let flowX = 0
+    let flowZ = 0
+    for (const [dx, dz] of FLOW_DIRECTIONS) {
+      const adjacentPosition = water.position.offset(dx, 0, dz)
+      const adjacent = bot.blockAt(adjacentPosition, false)
+      const adjacentDepth = waterDepth(adjacent)
+      if (adjacentDepth >= 0) {
+        const difference = adjacentDepth - currentDepth
+        flowX += dx * difference
+        flowZ += dz * difference
+      } else if (!adjacent || adjacent.boundingBox === 'empty') {
+        const belowDepth = waterDepth(bot.blockAt(adjacentPosition.offset(0, -1, 0), false))
+        if (belowDepth >= 0) {
+          const difference = belowDepth - (currentDepth - 8)
+          flowX += dx * difference
+          flowZ += dz * difference
+        }
+      }
+    }
+
+    const length = Math.hypot(flowX, flowZ)
+    if (length <= 0.001) return false
+    const directionX = flowX / length
+    const directionZ = flowZ / length
+    const minimumCurrent = 0.014
+    const currentSpeed = Number(player.velocity.x) * directionX + Number(player.velocity.z) * directionZ
+    if (currentSpeed < minimumCurrent) {
+      const missingSpeed = minimumCurrent - currentSpeed
+      player.velocity.x += directionX * missingSpeed
+      player.velocity.z += directionZ * missingSpeed
+    }
+    return true
+  } catch {
+    return false
+  }
+}
+
+function waterDepth(block) {
+  if (!block) return -1
+  if (block.isWaterlogged || WATERLIKE_NAMES.has(block.name)) return 0
+  if (!WATER_NAMES.has(block.name)) return -1
+  const metadata = Number(block.metadata) || 0
+  return metadata >= 8 ? 0 : metadata
+}
+
 function buildTelemetry(bot, nearestChest = null) {
   const position = bot?.entity?.position
   const finite = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback
@@ -728,4 +776,4 @@ function buildTelemetry(bot, nearestChest = null) {
   }
 }
 
-module.exports = { BotManager, normalizeLoginCode, extractText, shouldUseProxyCommandPacket, parseMinecraftFormatting, normalizeSkinUrl, findNearestChest, buildTelemetry, describeNetworkError, normalizeAntiAfkSettings, applyEntityCollisionPush }
+module.exports = { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, normalizeSkinUrl, findNearestChest, buildTelemetry, describeNetworkError, normalizeAntiAfkSettings, applyEntityCollisionPush, applyFluidCurrentPush }

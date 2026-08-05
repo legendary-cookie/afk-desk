@@ -30,10 +30,19 @@ test('account editor has explicit cancel controls and only its fields scroll', (
   const script = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer.js'), 'utf8')
   assert.equal((html.match(/data-close-account/g) || []).length, 2)
   assert.doesNotMatch(html, /data-close-account[^>]*type="submit"/)
-  assert.match(css, /#account-dialog\s*\{[^}]*overflow:\s*hidden;/s)
+  assert.match(css, /#account-dialog\s*\{[^}]*overflow:\s*clip;/s)
   assert.match(css, /#account-form\s*\{[^}]*overflow:\s*hidden;/s)
   assert.match(css, /\.form-grid\s*\{[^}]*overflow-y:\s*auto;/s)
   assert.match(script, /querySelectorAll\('\[data-close-account\]'\)/)
+})
+
+test('open dialogs stay pinned to the viewport and lock page scrolling', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', 'src', 'styles.css'), 'utf8')
+  assert.match(css, /dialog\s*\{[^}]*position:\s*fixed;[^}]*inset:\s*0;/s)
+  assert.match(css, /dialog\s*\{[^}]*overflow:\s*clip;/s)
+  assert.match(css, /body:has\(dialog\[open\]\)\s*\{[^}]*overflow:\s*hidden;/s)
+  assert.match(css, /\.toggle-row\s*\{[^}]*position:\s*relative;/s)
+  assert.match(css, /\.toggle-row\s*>\s*input\s*\{[^}]*width:\s*36px;[^}]*height:\s*20px;/s)
 })
 
 test('desktop bridge exposes inventory actions and accounts default automatic deposits off', () => {
