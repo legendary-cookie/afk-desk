@@ -5,6 +5,163 @@ const minecraftData = require('minecraft-data')
 const prismarineBlock = require('prismarine-block')
 const { Physics, PlayerState } = require('prismarine-physics')
 
+test('horizontal collision resolves the smaller movement axis first like vanilla 1.21.1', () => {
+  const version = '1.21.1'
+  const registry = minecraftData(version)
+  const Block = prismarineBlock(version)
+  const block = (name, position) => {
+    const definition = registry.blocksByName[name]
+    const value = Block.fromStateId(definition.minStateId, 0)
+    value.position = position.clone()
+    return value
+  }
+  const world = {
+    getBlock(position) {
+      const point = position.floored()
+      if (point.equals(new Vec3(1, 70, 0))) return block('stone', point)
+      return block('air', point)
+    }
+  }
+  const start = new Vec3(0.7, 70, 0.3)
+  const bot = {
+    version,
+    registry,
+    inventory: { slots: [] },
+    jumpTicks: 0,
+    jumpQueued: false,
+    fireworkRocketDuration: 0,
+    entity: {
+      position: start.clone(),
+      velocity: new Vec3(0.2, 0, -0.61),
+      onGround: false,
+      isInWater: false,
+      isInLava: false,
+      isInWeb: false,
+      isCollidedHorizontally: false,
+      isCollidedVertically: false,
+      elytraFlying: false,
+      yaw: 0,
+      pitch: 0,
+      effects: {},
+      attributes: {}
+    }
+  }
+  const controls = { forward: false, back: false, left: false, right: false, jump: false, sprint: false, sneak: false }
+  const physics = Physics(registry, world)
+  physics.stepHeight = 0
+
+  physics.simulatePlayer(new PlayerState(bot, controls), world).apply(bot)
+
+  assert.ok(bot.entity.position.z < -0.3, `expected Z to clear the corner first, got ${JSON.stringify(bot.entity.position)}`)
+  assert.ok(bot.entity.position.x > 0.89, `expected X to continue after Z cleared the corner, got ${JSON.stringify(bot.entity.position)}`)
+})
+
+test('player collision width uses vanilla float precision at block faces', () => {
+  const version = '1.21.1'
+  const registry = minecraftData(version)
+  const Block = prismarineBlock(version)
+  const block = (name, position) => {
+    const definition = registry.blocksByName[name]
+    const value = Block.fromStateId(definition.minStateId, 0)
+    value.position = position.clone()
+    return value
+  }
+  const world = {
+    getBlock(position) {
+      const point = position.floored()
+      if (point.equals(new Vec3(0, 64, 0))) return block('stone', point)
+      return block('air', point)
+    }
+  }
+  const bot = {
+    version,
+    registry,
+    inventory: { slots: [] },
+    jumpTicks: 0,
+    jumpQueued: false,
+    fireworkRocketDuration: 0,
+    entity: {
+      position: new Vec3(0.5, 64, 1.31),
+      velocity: new Vec3(0, 0, -0.05),
+      onGround: false,
+      isInWater: false,
+      isInLava: false,
+      isInWeb: false,
+      isCollidedHorizontally: false,
+      isCollidedVertically: false,
+      elytraFlying: false,
+      yaw: 0,
+      pitch: 0,
+      effects: {},
+      attributes: {}
+    }
+  }
+  const controls = { forward: false, back: false, left: false, right: false, jump: false, sprint: false, sneak: false }
+
+  Physics(registry, world).simulatePlayer(new PlayerState(bot, controls), world).apply(bot)
+
+  // EntityDimensions stores 0.6F, so vanilla's half-width is not the exact
+  // decimal 0.3. This exact boundary is what the server validates.
+  assert.equal(bot.entity.position.z, 1 + Math.fround(0.6) / 2)
+})
+
+test('passive shallow-water collisions do not synthesize an exit-water jump', () => {
+  const version = '1.21.1'
+  const registry = minecraftData(version)
+  const Block = prismarineBlock(version)
+  const block = (name, position, stateOffset = 0) => {
+    const definition = registry.blocksByName[name]
+    const value = Block.fromStateId(definition.minStateId + stateOffset, 0)
+    value.position = position.clone()
+    return value
+  }
+  const world = {
+    getBlock(position) {
+      const point = position.floored()
+      if (point.equals(new Vec3(0, 64, 0))) return block('water', point, 7)
+      if (point.equals(new Vec3(0, 64, -1))) return block('stone', point)
+      return block(point.y < 64 ? 'stone' : 'air', point)
+    }
+  }
+  const bot = {
+    version,
+    registry,
+    inventory: { slots: [] },
+    jumpTicks: 0,
+    jumpQueued: false,
+    fireworkRocketDuration: 0,
+    entity: {
+      position: new Vec3(0.5, 64, 0.31),
+      velocity: new Vec3(0, 0, -0.05),
+      onGround: true,
+      isInWater: true,
+      isInLava: false,
+      isInWeb: false,
+      isCollidedHorizontally: false,
+      isCollidedVertically: true,
+      elytraFlying: false,
+      yaw: 0,
+      pitch: 0,
+      effects: {},
+      attributes: {}
+    }
+  }
+  const controls = { forward: false, back: false, left: false, right: false, jump: false, sprint: false, sneak: false }
+
+  Physics(registry, world).simulatePlayer(new PlayerState(bot, controls), world).apply(bot)
+
+  assert.ok(bot.entity.velocity.y < 0.1, `passive current incorrectly jumped with velocity ${bot.entity.velocity.y}`)
+
+  bot.entity.position.set(0.5, 64, 0.31)
+  bot.entity.velocity.set(0, 0, -0.05)
+  bot.entity.onGround = true
+  bot.entity.isInWater = true
+  controls.forward = true
+  Physics(registry, world).simulatePlayer(new PlayerState(bot, controls), world).apply(bot)
+
+  assert.equal(bot.entity.velocity.y, 0.3, 'intentional movement must retain Mineflayer exit-water behavior')
+})
+
 for (const version of ['1.21.1', '1.21.8', '1.21.11']) {
   test(`the installed ${version} physics stack moves a player in directional water`, () => {
     const registry = minecraftData(version)
@@ -56,6 +213,57 @@ for (const version of ['1.21.1', '1.21.8', '1.21.11']) {
     assert.ok(bot.entity.velocity.x > 0)
   })
 }
+
+test('modern water height uses the block-state level instead of stale legacy metadata', () => {
+  const version = '1.21.1'
+  const registry = minecraftData(version)
+  const Block = prismarineBlock(version)
+  const makeBlock = (name, position, level = 0) => {
+    const definition = registry.blocksByName[name]
+    const value = Block.fromStateId(definition.minStateId + level, 0)
+    value.position = position.clone()
+    return value
+  }
+  const world = {
+    getBlock(position) {
+      const point = position.floored()
+      if (point.equals(new Vec3(0, 64, 0))) {
+        const water = makeBlock('water', point, 4)
+        water.metadata = 3
+        return water
+      }
+      return makeBlock(point.y < 64 ? 'stone' : 'air', point)
+    }
+  }
+  const bot = {
+    version,
+    registry,
+    inventory: { slots: [] },
+    jumpTicks: 0,
+    jumpQueued: false,
+    fireworkRocketDuration: 0,
+    entity: {
+      position: new Vec3(0.5, 64.5, 0.5),
+      velocity: new Vec3(0, 0, 0),
+      onGround: false,
+      isInWater: false,
+      isInLava: false,
+      isInWeb: false,
+      isCollidedHorizontally: false,
+      isCollidedVertically: false,
+      elytraFlying: false,
+      yaw: 0,
+      pitch: 0,
+      effects: {},
+      attributes: {}
+    }
+  }
+  const controls = { forward: false, back: false, left: false, right: false, jump: false, sprint: false, sneak: false }
+
+  Physics(registry, world).simulatePlayer(new PlayerState(bot, controls), world).apply(bot)
+
+  assert.equal(bot.entity.isInWater, false)
+})
 
 test('the installed physics stack averages intersecting player fluid vectors like vanilla', () => {
   const version = '1.21.1'

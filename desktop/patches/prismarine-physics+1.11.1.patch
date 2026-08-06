@@ -1,11 +1,86 @@
 diff --git a/node_modules/prismarine-physics/index.js b/node_modules/prismarine-physics/index.js
-index d95ce7f..5488978 100644
+index d95ce7f..4ceb8f8 100644
 --- a/node_modules/prismarine-physics/index.js
 +++ b/node_modules/prismarine-physics/index.js
-@@ -632,6 +632,17 @@ function Physics (mcData, world) {
-     return meta >= 8 ? 0 : meta
-   }
+@@ -66,15 +66,15 @@ function Physics (mcData, world) {
+     playerSpeed: 0.1,
+     sprintSpeed: 0.3,
+     sneakSpeed: 0.3,
+-    stepHeight: 0.6, // how much height can the bot step on without jump
++    stepHeight: Math.fround(0.6), // vanilla stores entity dimensions as floats
+     negligeableVelocity: 0.003, // actually 0.005 for 1.8, but seems fine
+     soulsandSpeed: 0.4,
+     honeyblockSpeed: 0.4,
+     honeyblockJumpSpeed: 0.4,
+     ladderMaxSpeed: 0.15,
+     ladderClimbSpeed: 0.2,
+-    playerHalfWidth: 0.3,
+-    playerHeight: 1.8,
++    playerHalfWidth: Math.fround(0.6) / 2,
++    playerHeight: Math.fround(1.8),
+     waterInertia: 0.8,
+     lavaInertia: 0.5,
+     liquidAcceleration: 0.02,
+@@ -212,15 +212,31 @@ function Physics (mcData, world) {
+     }
+     playerBB.offset(0, dy, 0)
  
+-    for (const blockBB of surroundingBBs) {
+-      dx = blockBB.computeOffsetX(playerBB, dx)
++    // Vanilla 1.14+ resolves the horizontal component with the smaller
++    // absolute movement first. This matters at diagonal corners: moving the
++    // longer axis first can clear a collision shape and let the shorter axis
++    // continue, while a fixed X-then-Z order can wedge the player forever.
++    const zFirst = Math.abs(dx) < Math.abs(dz)
++    if (zFirst && dz !== 0) {
++      for (const blockBB of surroundingBBs) {
++        dz = blockBB.computeOffsetZ(playerBB, dz)
++      }
++      playerBB.offset(0, 0, dz)
+     }
+-    playerBB.offset(dx, 0, 0)
+ 
+-    for (const blockBB of surroundingBBs) {
+-      dz = blockBB.computeOffsetZ(playerBB, dz)
++    if (dx !== 0) {
++      for (const blockBB of surroundingBBs) {
++        dx = blockBB.computeOffsetX(playerBB, dx)
++      }
++      playerBB.offset(dx, 0, 0)
++    }
++
++    if (!zFirst && dz !== 0) {
++      for (const blockBB of surroundingBBs) {
++        dz = blockBB.computeOffsetZ(playerBB, dz)
++      }
++      playerBB.offset(0, 0, dz)
+     }
+-    playerBB.offset(0, 0, dz)
+ 
+     // Step on block if height < stepHeight
+     if (physics.stepHeight > 0 &&
+@@ -496,7 +512,8 @@ function Physics (mcData, world) {
+       vel.x *= horizontalInertia
+       vel.z *= horizontalInertia
+ 
+-      if (entity.isCollidedHorizontally && doesNotCollide(world, pos.offset(vel.x, vel.y + 0.6 - pos.y + lastY, vel.z))) {
++      const intentionallyLeavingLiquid = strafe !== 0 || forward !== 0 || entity.control.jump
++      if (intentionallyLeavingLiquid && entity.isCollidedHorizontally && doesNotCollide(world, pos.offset(vel.x, vel.y + 0.6 - pos.y + lastY, vel.z))) {
+         vel.y = physics.outOfLiquidImpulse // jump out of liquid
+       }
+     } else if (entity.elytraFlying) {
+@@ -628,8 +645,21 @@ function Physics (mcData, world) {
+     if (waterLike.has(block.type)) return 0
+     if (block.isWaterlogged) return 0
+     if (!waterIds.includes(block.type)) return -1
+-    const meta = block.metadata
+-    return meta >= 8 ? 0 : meta
++    const properties = typeof block.getProperties === 'function' ? block.getProperties() : null
++    const stateLevel = Number(properties?.level)
++    const depth = Number.isFinite(stateLevel) ? stateLevel : Number(block.metadata)
++    return depth >= 8 ? 0 : depth
++  }
++
 +  function canFluidSampleBelow (block) {
 +    if (!block || block.boundingBox !== 'empty') return false
 +
@@ -15,12 +90,10 @@ index d95ce7f..5488978 100644
 +    // still block this lookup. Default-material empty blocks cover air and
 +    // replaceable plants; retain vanilla's explicit non-solid exceptions too.
 +    return block.material === 'default' || block.name === 'cobweb' || block.name === 'bamboo_sapling'
-+  }
-+
+   }
+ 
    function getFlow (world, block) {
-     const curlevel = getRenderedDepth(block)
-     const flow = new Vec3(0, 0, 0)
-@@ -639,7 +650,7 @@ function Physics (mcData, world) {
+@@ -639,7 +669,7 @@ function Physics (mcData, world) {
        const adjBlock = world.getBlock(block.position.offset(dx, 0, dz))
        const adjLevel = getRenderedDepth(adjBlock)
        if (adjLevel < 0) {
@@ -29,7 +102,7 @@ index d95ce7f..5488978 100644
            const adjLevel = getRenderedDepth(world.getBlock(block.position.offset(dx, -1, dz)))
            if (adjLevel >= 0) {
              const f = adjLevel - (curlevel - 8)
-@@ -670,13 +681,16 @@ function Physics (mcData, world) {
+@@ -670,13 +700,16 @@ function Physics (mcData, world) {
    function getWaterInBB (world, bb) {
      const waterBlocks = []
      const cursor = new Vec3(0, 0, 0)
@@ -50,7 +123,7 @@ index d95ce7f..5488978 100644
            }
          }
        }
-@@ -688,17 +702,24 @@ function Physics (mcData, world) {
+@@ -688,17 +721,24 @@ function Physics (mcData, world) {
      const acceleration = new Vec3(0, 0, 0)
      const waterBlocks = getWaterInBB(world, bb)
      const isInWater = waterBlocks.length > 0
@@ -81,7 +154,7 @@ index d95ce7f..5488978 100644
      return isInWater
    }
  
-@@ -706,7 +727,7 @@ function Physics (mcData, world) {
+@@ -706,7 +746,7 @@ function Physics (mcData, world) {
      const vel = entity.vel
      const pos = entity.pos
  

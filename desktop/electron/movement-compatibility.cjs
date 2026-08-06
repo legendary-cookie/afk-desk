@@ -30,20 +30,23 @@ function installMovementPacketCompatibility(bot) {
     }
     if (['position', 'look', 'position_look'].includes(name)) {
       const previous = bot.__afkDeskMovementTrace?.lastSent
+      const recent = bot.__afkDeskMovementTrace?.recent || []
+      const sent = {
+        packet: name,
+        at: Date.now(),
+        position: vectorSnapshot(payload) || previous?.position || null,
+        yaw: Number.isFinite(Number(payload?.yaw)) ? roundDiagnostic(payload.yaw) : previous?.yaw ?? null,
+        pitch: Number.isFinite(Number(payload?.pitch)) ? roundDiagnostic(payload.pitch) : previous?.pitch ?? null,
+        onGround: payload?.flags && typeof payload.flags === 'object'
+          ? payload.flags.onGround === true
+          : payload?.onGround === true,
+        horizontalCollision: payload?.flags && typeof payload.flags === 'object'
+          ? payload.flags.hasHorizontalCollision === true
+          : null
+      }
       bot.__afkDeskMovementTrace = {
-        lastSent: {
-          packet: name,
-          at: Date.now(),
-          position: vectorSnapshot(payload) || previous?.position || null,
-          yaw: Number.isFinite(Number(payload?.yaw)) ? roundDiagnostic(payload.yaw) : previous?.yaw ?? null,
-          pitch: Number.isFinite(Number(payload?.pitch)) ? roundDiagnostic(payload.pitch) : previous?.pitch ?? null,
-          onGround: payload?.flags && typeof payload.flags === 'object'
-            ? payload.flags.onGround === true
-            : payload?.onGround === true,
-          horizontalCollision: payload?.flags && typeof payload.flags === 'object'
-            ? payload.flags.hasHorizontalCollision === true
-            : null
-        }
+        lastSent: sent,
+        recent: [...recent, sent].slice(-20)
       }
     }
     return write(name, payload)
@@ -144,6 +147,29 @@ function snapshotNearbyBlocks(bot, position) {
   return blocks.slice(0, 36)
 }
 
+function snapshotNearbyEntities(bot, position, radius = 3) {
+  const entities = []
+  for (const entity of Object.values(bot?.entities || {})) {
+    if (!entity?.position || entity === bot.entity) continue
+    const dx = Number(entity.position.x) - Number(position.x)
+    const dy = Number(entity.position.y) - Number(position.y)
+    const dz = Number(entity.position.z) - Number(position.z)
+    const distance = Math.hypot(dx, dy, dz)
+    if (!Number.isFinite(distance) || distance > radius) continue
+    entities.push({
+      id: Number.isFinite(Number(entity.id)) ? Number(entity.id) : null,
+      type: String(entity.type || '').slice(0, 32),
+      name: String(entity.name || entity.username || '').slice(0, 80),
+      position: vectorSnapshot(entity.position),
+      velocity: vectorSnapshot(entity.velocity),
+      width: Number.isFinite(Number(entity.width)) ? roundDiagnostic(entity.width) : null,
+      height: Number.isFinite(Number(entity.height)) ? roundDiagnostic(entity.height) : null,
+      distance: roundDiagnostic(distance)
+    })
+  }
+  return entities.sort((a, b) => a.distance - b.distance).slice(0, 24)
+}
+
 module.exports = {
   CONFIGURATION_PACKET_NAMES,
   installMovementPacketCompatibility,
@@ -152,5 +178,6 @@ module.exports = {
   vectorSnapshot,
   vectorDelta,
   safeMovementFlags,
-  snapshotNearbyBlocks
+  snapshotNearbyBlocks,
+  snapshotNearbyEntities
 }

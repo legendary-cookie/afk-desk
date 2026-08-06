@@ -4,8 +4,9 @@ const { EventEmitter } = require('node:events')
 const fs = require('node:fs')
 const path = require('node:path')
 const { Vec3 } = require('vec3')
-const { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, normalizeSkinUrl, buildTelemetry, describeNetworkError, reconnectDelaySeconds, inspectFluidCurrent, fluidControlsForCurrent, fluidControlsForRecovery, recordFluidCorrection, installMovementPacketCompatibility, installModernPlayerInputCompatibility } = require('../electron/bot-manager.cjs')
+const { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, normalizeSkinUrl, buildTelemetry, describeNetworkError, reconnectDelaySeconds, inspectFluidCurrent, recordFluidCorrection, installMovementPacketCompatibility, installModernPlayerInputCompatibility } = require('../electron/bot-manager.cjs')
 const { computeSignedChatChecksum } = require('../electron/protocol-fixes.cjs')
+const { snapshotNearbyEntities } = require('../electron/movement-compatibility.cjs')
 
 class FakeBot extends EventEmitter {
   constructor() {
@@ -92,6 +93,24 @@ test('sends separate join and server-change messages', async (t) => {
   await new Promise((resolve) => setTimeout(resolve, 5))
   assert.deepEqual(bot.messages, ['joined', '/server survival'])
   assert.deepEqual(bot.writes, [])
+})
+
+test('nearby entity diagnostics are bounded and contain no account credentials', () => {
+  const self = { id: 1, position: new Vec3(0, 64, 0) }
+  const bot = {
+    entity: self,
+    entities: {
+      1: self,
+      2: { id: 2, type: 'mob', name: 'zombie', position: new Vec3(1, 64, 0), velocity: new Vec3(0, 0, 0), width: 0.6, height: 1.95 },
+      3: { id: 3, type: 'player', username: 'NearbyPlayer', position: new Vec3(2, 64, 0), velocity: new Vec3(0.1, 0, 0), width: 0.6, height: 1.8 },
+      4: { id: 4, type: 'mob', name: 'far-away', position: new Vec3(20, 64, 0) }
+    }
+  }
+
+  const result = snapshotNearbyEntities(bot, self.position)
+  assert.deepEqual(result.map((entity) => entity.name), ['zombie', 'NearbyPlayer'])
+  assert.equal(result[0].distance, 1)
+  assert.equal(JSON.stringify(result).includes('accessToken'), false)
 })
 
 test('does not resend the same automatic server switch after its resulting respawn', async (t) => {
@@ -562,7 +581,7 @@ test('flowing water intersecting the player bounding box is detected without cha
   assert.deepEqual(bot.entity.velocity, new Vec3(0, 0, 0))
 })
 
-test('surface water flicker preserves recovery briefly but genuine dry movement resets it', () => {
+test('surface water flicker preserves diagnostics briefly but genuine dry movement resets it', () => {
   const bot = new FakeBot()
   bot.entity = { position: new Vec3(0.8, 64, 0.5), velocity: new Vec3(0, 0, 0), isInWater: true }
   let waterVisible = true
@@ -573,7 +592,7 @@ test('surface water flicker preserves recovery briefly but genuine dry movement 
     if (!waterVisible || (x !== 1 && x !== 2) || y !== 64 || z !== 0) return { name: 'stone', metadata: 0, position: new Vec3(x, y, z), boundingBox: 'block' }
     return { name: 'water', metadata: x === 1 ? 1 : 2, position: new Vec3(x, y, z), boundingBox: 'empty' }
   }
-  const motion = { serverCorrections: 12, stalledCorrections: 12, recoveryAttempt: 0, progressEpoch: 0 }
+  const motion = { serverCorrections: 12, stalledCorrections: 12 }
 
   assert.equal(inspectFluidCurrent(bot, motion), true)
   waterVisible = false
@@ -582,11 +601,6 @@ test('surface water flicker preserves recovery briefly but genuine dry movement 
   assert.equal(motion.stalledCorrections, 12)
 
   motion.lastFluidAt = Date.now() - 1000
-  motion.assisting = true
-  assert.equal(inspectFluidCurrent(bot, motion), true)
-  assert.equal(motion.stalledCorrections, 12)
-
-  motion.assisting = false
   assert.equal(inspectFluidCurrent(bot, motion), false)
   assert.equal(motion.stalledCorrections, 0)
   assert.equal(motion.status, 'dry')
@@ -610,38 +624,20 @@ test('repeated water diagnostics never force client coordinates or velocity', ()
   assert.deepEqual(bot.entity.velocity, new Vec3(0, 0, 0))
 })
 
-test('maps a rejected world-current direction to the closest normal movement input', () => {
-  assert.deepEqual(fluidControlsForCurrent(0, 1, 0), ['right'])
-  assert.deepEqual(fluidControlsForCurrent(0, 0, -1), ['forward'])
-  assert.deepEqual(fluidControlsForCurrent(Math.PI / 2, 1, 0), ['back'])
-})
-
-test('water recovery prioritizes the measured wall-cancelling diagonal at loop corners', () => {
-  const yaw = 6.773926
-  assert.deepEqual(fluidControlsForRecovery(yaw, 0.707, 0.707, 1), ['forward', 'right'])
-  assert.deepEqual(fluidControlsForRecovery(yaw, 0.707, 0.707, 2), ['left'])
-  assert.deepEqual(fluidControlsForRecovery(yaw, -0.707, 0.707, 1), ['right', 'back'])
-  assert.deepEqual(fluidControlsForRecovery(yaw, 0.707, -0.707, 1), ['left', 'forward'])
-})
-
-test('water recovery ignores server jitter but resets after meaningful accepted movement', () => {
-  const motion = { recoveryAttempt: 2, stalledCorrections: 0, serverCorrections: 0, progressEpoch: 0 }
+test('water correction diagnostics distinguish jitter from accepted movement', () => {
+  const motion = { stalledCorrections: 0, serverCorrections: 0 }
 
   recordFluidCorrection(motion, { x: 10, y: 64, z: 20 })
   recordFluidCorrection(motion, { x: 10.04, y: 64.04, z: 20 })
 
   assert.equal(motion.stalledCorrections, 2)
-  assert.equal(motion.recoveryAttempt, 2)
-  assert.equal(motion.progressEpoch, 0)
 
   recordFluidCorrection(motion, { x: 10.3, y: 64.04, z: 20 })
 
   assert.equal(motion.stalledCorrections, 1)
-  assert.equal(motion.recoveryAttempt, 0)
-  assert.equal(motion.progressEpoch, 1)
 })
 
-test('historical water corrections do not keep fallback active after server position progresses', (t) => {
+test('historical water corrections keep environmental movement passive', (t) => {
   const bot = new FakeBot()
   const manager = new BotManager({ profilesPath: 'profiles', emit: () => {}, createBot: () => bot })
   manager.connect({ id: 'progressed-water', username: 'user@example.com', host: 'localhost', antiAfk: false, autoReconnect: false, environmentalMovement: true })
@@ -659,55 +655,6 @@ test('historical water corrections do not keep fallback active after server posi
   bot.emit('physicsTick')
 
   assert.deepEqual(bot.controls, [])
-})
-
-test('repeated rejected corner movement triggers a bounded diagonal escape', (t) => {
-  const bot = new FakeBot()
-  const timers = []
-  const manager = new BotManager({
-    profilesPath: 'profiles', emit: () => {}, createBot: () => bot,
-    scheduleAntiAfkTimer: (callback, delay) => { timers.push({ callback, delay }); return `adaptive-water-${timers.length}` },
-    clearAntiAfkTimer: () => {}
-  })
-  manager.connect({ id: 'adaptive-water', username: 'user@example.com', host: 'localhost', antiAfk: false, autoReconnect: false, environmentalMovement: true })
-  t.after(() => manager.disconnect('adaptive-water'))
-  bot.entity = { yaw: 0, position: new Vec3(0.5, 64, 0.5), velocity: new Vec3(0, 0, 0), isInWater: true, isCollidedHorizontally: true }
-  bot.physics = { stepHeight: 0.6 }
-  bot.blockAt = (position) => {
-    const x = Math.floor(position.x)
-    const y = Math.floor(position.y)
-    const z = Math.floor(position.z)
-    if (y !== 64) return { name: 'stone', metadata: 0, position: new Vec3(x, y, z), boundingBox: 'block' }
-    return { name: 'water', metadata: x === 1 && z === 0 ? 2 : 1, position: new Vec3(x, y, z), boundingBox: 'empty' }
-  }
-  Object.assign(manager.sessions.get('adaptive-water').fluidMotion, { serverCorrections: 6, stalledCorrections: 6, recoveryAttempt: 0 })
-
-  bot.emit('physicsTick')
-
-  assert.equal(bot.controls.filter(([, enabled]) => enabled).length, 2)
-  assert.equal(bot.controls.some(([control]) => ['jump', 'sneak'].includes(control)), false)
-  assert.equal(Math.hypot(bot.entity.velocity.x, bot.entity.velocity.z), 0)
-  assert.equal(bot.entity.velocity.y, 0)
-  assert.equal(bot.physics.stepHeight, 0)
-  assert.equal(timers.length, 1)
-  assert.equal(timers[0].delay, 200)
-  timers[0].callback()
-  assert.equal(bot.controls.filter(([, enabled]) => enabled === false).length, 2)
-  assert.equal(bot.physics.stepHeight, 0.6)
-})
-
-test('stopping water assistance tolerates a client destroyed during shutdown', () => {
-  const manager = new BotManager({ profilesPath: 'profiles', emit: () => {} })
-  const session = {
-    bot: { setControlState: () => { throw new Error('Object has been destroyed') } },
-    fluidAssistControls: ['forward'],
-    fluidMotion: { assisting: true },
-    fluidAssistTimer: null
-  }
-
-  assert.doesNotThrow(() => manager.stopFluidAssist(session))
-  assert.deepEqual(session.fluidAssistControls, [])
-  assert.equal(session.fluidMotion.assisting, false)
 })
 
 test('passive environmental water movement never injects player controls', (t) => {
@@ -793,46 +740,6 @@ test('rising head-level water remains passive and input-free', (t) => {
 
   assert.deepEqual(bot.controls, [])
   assert.deepEqual(timers, [])
-})
-
-test('late corner recovery stays horizontal and never climbs', (t) => {
-  const bot = new FakeBot()
-  const timers = []
-  const manager = new BotManager({
-    profilesPath: 'profiles', emit: () => {}, createBot: () => bot,
-    scheduleAntiAfkTimer: (callback, delay) => { timers.push({ callback, delay }); return `head-water-${timers.length}` },
-    clearAntiAfkTimer: () => {}
-  })
-  manager.connect({ id: 'head-water', username: 'user@example.com', host: 'localhost', antiAfk: false, autoReconnect: false, environmentalMovement: true })
-  t.after(() => manager.disconnect('head-water'))
-  bot.entity = { yaw: 0, position: new Vec3(0.5, 64, 0.5), velocity: new Vec3(0, 0.08, 0), isInWater: true, isCollidedHorizontally: true }
-  bot.physics = { stepHeight: 0.6 }
-  let upperLayerWater = true
-  bot.blockAt = (position) => {
-    const x = Math.floor(position.x)
-    const y = Math.floor(position.y)
-    const z = Math.floor(position.z)
-    if (y === 65 && !upperLayerWater) return { name: 'stone', metadata: 0, position: new Vec3(x, y, z), boundingBox: 'block' }
-    if (![64, 65].includes(y) || z !== 0 || ![0, 1].includes(x)) return { name: 'stone', metadata: 0, position: new Vec3(x, y, z), boundingBox: 'block' }
-    return { name: 'water', metadata: x === 1 ? 2 : 1, position: new Vec3(x, y, z), boundingBox: 'empty' }
-  }
-  Object.assign(manager.sessions.get('head-water').fluidMotion, { serverCorrections: 10, stalledCorrections: 10 })
-
-  bot.emit('physicsTick')
-
-  assert.equal(bot.controls.filter(([, enabled]) => enabled).length, 1)
-  assert.equal(bot.controls.some(([control]) => ['jump', 'sneak'].includes(control)), false)
-  assert.equal(bot.entity.velocity.y, 0.08)
-  assert.equal(bot.physics.stepHeight, 0)
-  assert.equal(timers.length, 1)
-  assert.equal(timers[0].delay, 200)
-
-  upperLayerWater = false
-  bot.emit('physicsTick')
-  timers[0].callback()
-
-  assert.equal(bot.controls.filter(([, enabled]) => enabled === false).length, 1)
-  assert.equal(bot.physics.stepHeight, 0.6)
 })
 
 test('modern movement packets report the collision state calculated by physics', () => {
@@ -933,6 +840,8 @@ test('movement corrections emit structured packet diagnostics without account cr
   assert.deepEqual(diagnostics[0].delta, { x: -0.12, y: 0, z: -0.25 })
   assert.deepEqual(diagnostics[0].velocity, { x: 0.0112, y: -0.02, z: 0.003 })
   assert.deepEqual(diagnostics[0].lastSent.position, { x: 10.12, y: 64, z: 20.25 })
+  assert.equal(diagnostics[0].recentMovementPackets.length, 1)
+  assert.deepEqual(diagnostics[0].recentMovementPackets[0].position, { x: 10.12, y: 64, z: 20.25 })
   assert.equal(JSON.stringify(diagnostics[0]).includes('user@example.com'), false)
   assert.equal(JSON.stringify(diagnostics[0]).includes('private.example'), false)
 })
@@ -970,24 +879,43 @@ test('modern water block-state level is used when metadata is unavailable', () =
   assert.deepEqual(bot.entity.velocity, new Vec3(0, 0, 0))
 })
 
-test('environment diagnostics expose detected current and fallback state', () => {
+test('modern water block-state level takes priority over stale legacy metadata', () => {
+  const bot = new FakeBot()
+  bot.entity = { isInWater: false, position: new Vec3(0.5, 64, 0.5), velocity: new Vec3(0, 0, 0) }
+  bot.blockAt = (position) => {
+    const point = position.floored()
+    if (point.x === 0 && point.y === 64 && point.z === 0) {
+      return { name: 'water', metadata: 3, getProperties: () => ({ level: '4' }), position: point, boundingBox: 'empty' }
+    }
+    if (point.x === 1 && point.y === 64 && point.z === 0) {
+      return { name: 'water', metadata: 0, getProperties: () => ({ level: '0' }), position: point, boundingBox: 'empty' }
+    }
+    return { name: 'stone', metadata: 0, position: point, boundingBox: 'block' }
+  }
+  const motion = {}
+
+  assert.equal(inspectFluidCurrent(bot, motion), true)
+  assert.equal(motion.currentX, -1)
+  assert.equal(motion.currentZ, 0)
+})
+
+test('environment diagnostics expose detected current without synthetic fallback', () => {
   const bot = new FakeBot()
   bot.physicsEnabled = true
   bot.entity = { position: new Vec3(1.25, 64, -2.5) }
   const snapshot = buildTelemetry(bot, null, true, {
-    status: 'fallback', waterBlocks: 2, currentX: 1, currentZ: 0, mineflayerInWater: false, assisting: true
+    status: 'flowing', waterBlocks: 2, currentX: 1, currentZ: 0, mineflayerInWater: false
   })
 
   assert.deepEqual(snapshot.environment, {
     enabled: true,
     physicsEnabled: true,
-    waterStatus: 'fallback',
+    waterStatus: 'flowing',
     waterBlocks: 2,
     current: { x: 1, z: 0 },
-    fallbackActive: true,
+    fallbackActive: false,
     mineflayerInWater: false,
     serverCorrections: 0,
-    stalledCorrections: 0,
-    recoveryAttempt: 0
+    stalledCorrections: 0
   })
 })

@@ -2,59 +2,24 @@
 
 For the complete desktop history from 0.1.0 onward, including source tags, installers, and comparisons, see [HISTORY.md](HISTORY.md).
 
-## Desktop 0.7.1 — 2026-08-06
-
-### Fixed
-
-- Head-level water currents now follow vanilla's fluid-cell sampling order, preventing a blocked diagonal component from erasing movement along an open channel beside signs, chests, and walls.
-- Added a regression fixture reduced from StarrySea's captured two-level water-loop geometry.
-
-## Desktop 0.6.3 — 2026-08-06
-
-### Fixed
-
-- Water-current recovery now inspects loaded blocks even when Mineflayer temporarily reports the account as dry.
-- Modern water block-state levels are used when a server or protocol translator does not expose numeric metadata.
+## Desktop 0.6.0 — 2026-08-07
 
 ### Added
 
-- The desktop and browser dashboards now show live water diagnostics: disabled, dry, still water, detected direction, active fallback, and server corrections during a current.
-- Added an integration regression against the installed 1.21 physics stack in addition to the AFK Desk fallback tests.
-
-## Desktop 0.6.2 — 2026-08-05
-
-### Fixed
-
-- Fixed the untouched `0.25`-second anti-AFK duration being rejected by the account editor's number-step validation.
-- Detects directional water across the player's full bounding box and applies a collision-checked same-tick current only when normal physics remains position-stalled.
-
-## Desktop 0.6.1 — 2026-08-05
+- Customizable per-account anti-AFK actions for jumping, looking, sneaking, arm swinging, and bounded short walking, with randomized delays, action duration, look angle, and walking distance.
+- A default-on environmental-movement toggle for water, knockback, explosions, players, and mobs, plus live water-current diagnostics in the desktop and browser dashboards.
+- Configurable staggered startup logins to reduce simultaneous network and authentication load.
+- Chat history with Up/Down recall and an optional, fully editable macro pad for messages and commands.
+- Interface scaling and held mouse/keyboard movement controls, including WASD and Space.
 
 ### Fixed
 
-- Fixed account editor toggles scrolling the entire form, header, and Save button out of view.
-- Fixed modern Velocity `/server` commands sending incomplete raw packets that could cause a generic internal connection error.
-- Added a bounded flowing-water current fallback when the normal Mineflayer physics calculation stalls.
-
-## Desktop 0.6.0 — 2026-08-05
-
-### Added
-
-- Added per-account anti-AFK action selection for jump, look, sneak, arm swing, and bounded short walking.
-- Added randomized minimum/maximum delays, action duration, look angle, and walking-distance controls.
-- Added an environmental-movement toggle, enabled by default, for water, knockback, explosions, and nearby entity pushing.
-- Added a global, toggleable delay between startup account connections; the default is three seconds.
-
-### Fixed
-
-- Added friendly handling and recovery for common DNS, timeout, refused, reset, unreachable-network, and broken-pipe failures.
-- Added a connection watchdog so stalled sessions can enter the existing automatic-reconnect flow.
-- Fixed the account editor close and Cancel buttons and removed its competing second scrollbar.
-
-### Changed
-
-- Startup accounts now connect in a staggered sequence by default to reduce network and authentication spikes.
-- Anti-AFK randomly performs one enabled action per cycle, avoiding conflicting action combinations.
+- Improved recovery and readable reporting for DNS, timeout, refused, reset, unreachable-network, broken-pipe, and stalled-connection failures.
+- Fixed modern Velocity server switching so automatic `/server` commands wait for the destination world, send complete protocol state, and do not repeat after the resulting respawn.
+- Fixed the account editor's blank state, Close/Cancel controls, invalid default duration, double scrollbar, and viewport overflow.
+- Fixed held movement and jump controls so button and keyboard input remain active until released.
+- Reworked environmental water movement to use corrected native Mineflayer physics across supported 1.21 versions, including deep/head-level currents, block-state water levels, wall signs, diagonal corners, collision precision, and passive flow without synthetic walking or unwanted hops.
+- Fixed the dashboard layout so chat, inventory, controls, dialogs, and settings remain bounded to the window and scroll only where needed.
 
 ## Desktop 0.5.0 — 2026-07-30
 

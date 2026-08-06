@@ -9,7 +9,8 @@ const {
   vectorSnapshot,
   vectorDelta,
   safeMovementFlags,
-  snapshotNearbyBlocks
+  snapshotNearbyBlocks,
+  snapshotNearbyEntities
 } = require('./movement-compatibility.cjs')
 applyProtocolFixes()
 const mineflayer = require('mineflayer')
@@ -19,10 +20,6 @@ const WATER_NAMES = new Set(['water', 'flowing_water'])
 const WATERLIKE_NAMES = new Set(['bubble_column', 'seagrass', 'tall_seagrass', 'kelp', 'kelp_plant'])
 const FLOW_DIRECTIONS = [[0, 1], [-1, 0], [0, -1], [1, 0]]
 const FLUID_CONTACT_GRACE_MS = 750
-const CORNER_RECOVERY_CONFIRMATIONS = 2
-const CORNER_RECOVERY_STEP_CORRECTIONS = 4
-const CORNER_RECOVERY_PULSE_MS = 200
-const CORNER_RECOVERY_COOLDOWN_MS = 175
 const CHEST_SCAN_INTERVAL = 5000
 const CHEST_MAX_DISTANCE = 5
 class BotManager {
@@ -89,9 +86,6 @@ class BotManager {
       reconnectResetTimer: null,
       networkRecoveryTimer: null,
       physicsRestoreTimer: null,
-      fluidAssistTimer: null,
-      fluidAssistControls: [],
-      fluidAssistStepHeight: null,
       manualControls: new Set(),
       manualControlTimers: new Map(),
       antiAfkActionTimers: new Set(),
@@ -106,9 +100,7 @@ class BotManager {
       fluidMotion: {
         status: account.environmentalMovement === false ? 'disabled' : 'checking',
         serverCorrections: 0,
-        stalledCorrections: 0,
-        recoveryAttempt: 0,
-        progressEpoch: 0
+        stalledCorrections: 0
       },
       pendingServerPosition: null,
       lastMovementDiagnosticAt: 0,
@@ -231,21 +223,14 @@ class BotManager {
     bot.on('playerUpdated', (player) => { if (player?.username === bot.username) { markWorldReady(); emitIdentity() } })
     bot.on('health', () => { markWorldReady(); emitTelemetry() })
     bot.on('physicsTick', () => {
-      if (session.account.environmentalMovement !== false) {
-        const flowing = inspectFluidCurrent(bot, session.fluidMotion)
-        const rejectedAtCorner = flowing &&
-          (session.fluidMotion.stalledCorrections || 0) >= CORNER_RECOVERY_CONFIRMATIONS &&
-          bot.entity?.isCollidedHorizontally === true
-        if (rejectedAtCorner) this.assistRejectedFluidCurrent(session)
-        else if (!flowing) this.stopFluidAssist(session)
-      }
+      if (session.account.environmentalMovement !== false) inspectFluidCurrent(bot, session.fluidMotion)
     })
     bot.inventory?.on?.('updateSlot', emitTelemetry)
     bot.on('spawn', markReady)
     bot.on('forcedMove', () => {
       const wasReady = session.ready
       markReady()
-      if (wasReady && ['flowing', 'fallback'].includes(session.fluidMotion.status)) {
+      if (wasReady && session.fluidMotion.status === 'flowing') {
         recordFluidCorrection(session.fluidMotion, session.pendingServerPosition?.serverPosition)
       }
       if (wasReady && session.account.environmentalMovement !== false) {
@@ -375,18 +360,14 @@ class BotManager {
     const oldTimer = session.manualControlTimers.get(control)
     if (oldTimer) this.clearAntiAfkTimer(oldTimer)
     session.manualControlTimers.delete(control)
-    this.stopFluidAssist(session)
-
     if (active) {
       session.manualControls.add(control)
-      session.fluidMotion.nextAssistAt = Number.POSITIVE_INFINITY
       if (session.physicsRestoreTimer) this.clearAntiAfkTimer(session.physicsRestoreTimer)
       session.physicsRestoreTimer = null
       session.bot.physicsEnabled = true
     } else {
       session.manualControls.delete(control)
       if (session.manualControls.size === 0) {
-        session.fluidMotion.nextAssistAt = Date.now() + 750
         this.temporarilyEnablePhysics(session, 200)
       }
     }
@@ -554,11 +535,13 @@ class BotManager {
       headSubmerged: session.fluidMotion?.headSubmerged === true,
       correctionCount: Math.max(0, Number(session.fluidMotion?.serverCorrections) || 0)
     }
+    entry.recentMovementPackets = (session.bot?.__afkDeskMovementTrace?.recent || []).slice(-20)
     const movementBlockCaptureKey = clientPosition
       ? `${Math.floor(clientPosition.x)},${Math.floor(clientPosition.y)},${Math.floor(clientPosition.z)}`
       : ''
     if (movementBlockCaptureKey && movementBlockCaptureKey !== session.movementBlockCaptureKey && entry.flow) {
       entry.nearbyBlocks = snapshotNearbyBlocks(session.bot, clientPosition)
+      entry.nearbyEntities = snapshotNearbyEntities(session.bot, clientPosition)
       session.movementBlockCaptureKey = movementBlockCaptureKey
     }
     try {
@@ -655,7 +638,6 @@ class BotManager {
     const session = this.sessions.get(id)
     if (!session) return
     session.account.environmentalMovement = enabled !== false
-    if (enabled === false) this.stopFluidAssist(session)
     if (session.physicsRestoreTimer) this.clearAntiAfkTimer(session.physicsRestoreTimer)
     session.physicsRestoreTimer = null
     session.bot.physicsEnabled = enabled !== false
@@ -678,58 +660,6 @@ class BotManager {
     if (account.antiAfk !== false && session.bot.entity) this.enableAntiAfk(id, account)
   }
 
-  assistRejectedFluidCurrent(session) {
-    const motion = session?.fluidMotion
-    const bot = session?.bot
-    if (!motion || !bot?.entity || (motion.stalledCorrections || 0) < CORNER_RECOVERY_CONFIRMATIONS) return
-    if (session.fluidAssistTimer) return
-    if (Date.now() < (motion.nextAssistAt || 0)) return
-    const attempt = fluidRecoveryAttempt(motion.stalledCorrections)
-    motion.recoveryAttempt = attempt
-    const controls = fluidControlsForRecovery(bot.entity.yaw, motion.currentX, motion.currentZ, attempt)
-    if (controls.length === 0) return
-    const progressEpoch = Math.max(0, Number(motion.progressEpoch) || 0)
-    if (Number.isFinite(bot.physics?.stepHeight) && session.fluidAssistStepHeight === null) {
-      session.fluidAssistStepHeight = bot.physics.stepHeight
-      bot.physics.stepHeight = 0
-    }
-    session.fluidAssistControls = controls
-    for (const control of controls) bot.setControlState(control, true)
-    motion.assisting = true
-    motion.status = 'fallback'
-    session.fluidAssistTimer = this.scheduleAntiAfkTimer(() => {
-      session.fluidAssistTimer = null
-      this.restoreFluidStepHeight(session)
-      if (this.sessions.get(session.account.id) !== session) return
-      for (const control of session.fluidAssistControls) bot.setControlState(control, false)
-      session.fluidAssistControls = []
-      motion.assisting = false
-      motion.recoveryAttempt = motion.progressEpoch === progressEpoch
-        ? fluidRecoveryAttempt(motion.stalledCorrections)
-        : 0
-      motion.nextAssistAt = Date.now() + CORNER_RECOVERY_COOLDOWN_MS
-      if (motion.status === 'fallback') motion.status = 'flowing'
-    }, CORNER_RECOVERY_PULSE_MS)
-  }
-
-  stopFluidAssist(session) {
-    if (!session) return
-    if (session.fluidAssistTimer) this.clearAntiAfkTimer(session.fluidAssistTimer)
-    session.fluidAssistTimer = null
-    for (const control of session.fluidAssistControls || []) {
-      try { session.bot?.setControlState?.(control, false) } catch {}
-    }
-    session.fluidAssistControls = []
-    this.restoreFluidStepHeight(session)
-    if (session.fluidMotion) session.fluidMotion.assisting = false
-  }
-
-  restoreFluidStepHeight(session) {
-    if (session?.fluidAssistStepHeight === null || session?.fluidAssistStepHeight === undefined) return
-    if (session.bot?.physics) session.bot.physics.stepHeight = session.fluidAssistStepHeight
-    session.fluidAssistStepHeight = null
-  }
-
   clearSession(id) {
     const session = this.sessions.get(id)
     if (session) this.clearTimers(session)
@@ -737,7 +667,6 @@ class BotManager {
   }
 
   clearTimers(session) {
-    this.stopFluidAssist(session)
     for (const timer of session.manualControlTimers || []) this.clearAntiAfkTimer(timer[1])
     session.manualControlTimers?.clear()
     session.manualControls?.clear()
@@ -759,7 +688,6 @@ class BotManager {
     session.reconnectResetTimer = null
     session.networkRecoveryTimer = null
     session.physicsRestoreTimer = null
-    session.fluidAssistTimer = null
   }
 
   requireOnline(id) {
@@ -956,12 +884,11 @@ function inspectFluidCurrent(bot, motionState = null) {
     const current = fluidCurrentAtPlayer(bot, player.position)
     if (!current) {
       const recentlyInFlow = motionState &&
-        (motionState.assisting === true ||
-          (Number.isFinite(motionState.lastFluidAt) && Date.now() - motionState.lastFluidAt <= FLUID_CONTACT_GRACE_MS)) &&
+        Number.isFinite(motionState.lastFluidAt) && Date.now() - motionState.lastFluidAt <= FLUID_CONTACT_GRACE_MS &&
         Number.isFinite(motionState.currentX) &&
         Number.isFinite(motionState.currentZ)
       if (recentlyInFlow) {
-        motionState.status = motionState.assisting ? 'fallback' : 'flowing'
+        motionState.status = 'flowing'
         motionState.headSubmerged = false
         motionState.mineflayerInWater = player.isInWater === true
         return true
@@ -981,7 +908,7 @@ function inspectFluidCurrent(bot, motionState = null) {
     const { x: directionX, z: directionZ } = current
 
     if (motionState) {
-      motionState.status = motionState.assisting ? 'fallback' : 'flowing'
+      motionState.status = 'flowing'
       motionState.waterBlocks = current.waterBlocks
       motionState.waterLayers = current.waterLayers
       motionState.headSubmerged = current.headSubmerged
@@ -1098,51 +1025,9 @@ function resetFluidMotion(state, status = 'dry') {
   delete state.lastServerPosition
   state.stagnantTicks = 0
   state.forcing = false
-  state.assisting = false
   state.serverCorrections = 0
   state.stalledCorrections = 0
-  state.recoveryAttempt = 0
-  state.progressEpoch = 0
   state.status = status
-}
-
-function fluidControlsForCurrent(yaw, currentX, currentZ) {
-  const components = fluidControlComponents(yaw, currentX, currentZ)
-  return components ? [components.primary] : []
-}
-
-function fluidControlComponents(yaw, currentX, currentZ) {
-  const angle = Number(yaw)
-  const x = Number(currentX)
-  const z = Number(currentZ)
-  if (![angle, x, z].every(Number.isFinite) || Math.hypot(x, z) < 0.001) return null
-  const forward = -x * Math.sin(angle) - z * Math.cos(angle)
-  const strafe = x * Math.cos(angle) - z * Math.sin(angle)
-  const longitudinal = forward >= 0 ? 'forward' : 'back'
-  const lateral = strafe >= 0 ? 'right' : 'left'
-  return Math.abs(forward) >= Math.abs(strafe)
-    ? { primary: longitudinal, secondary: lateral }
-    : { primary: lateral, secondary: longitudinal }
-}
-
-function fluidRecoveryAttempt(stalledCorrections) {
-  return Math.floor(
-    Math.max(0, (Number(stalledCorrections) || 0) - CORNER_RECOVERY_CONFIRMATIONS) /
-      CORNER_RECOVERY_STEP_CORRECTIONS
-  ) % 4
-}
-
-function fluidControlsForRecovery(yaw, currentX, currentZ, attempt = 0) {
-  const components = fluidControlComponents(yaw, currentX, currentZ)
-  if (!components) return []
-  const opposite = { forward: 'back', back: 'forward', left: 'right', right: 'left' }
-  const choices = [
-    [components.primary],
-    [opposite[components.primary], components.secondary],
-    [opposite[components.secondary]],
-    [components.primary, opposite[components.secondary]]
-  ]
-  return [...choices[Math.max(0, Number(attempt) || 0) % choices.length]]
 }
 
 function recordFluidCorrection(state, serverPosition) {
@@ -1158,9 +1043,6 @@ function recordFluidCorrection(state, serverPosition) {
   state.lastServerPosition = position
   if (progressed) {
     state.stalledCorrections = 1
-    state.recoveryAttempt = 0
-    state.nextAssistAt = 0
-    state.progressEpoch = (state.progressEpoch || 0) + 1
   } else {
     state.stalledCorrections = (state.stalledCorrections || 0) + 1
   }
@@ -1171,7 +1053,7 @@ function waterDepth(block) {
   const properties = typeof block.getProperties === 'function' ? block.getProperties() : null
   if (block.isWaterlogged || properties?.waterlogged === true || WATERLIKE_NAMES.has(block.name)) return 0
   if (!WATER_NAMES.has(block.name)) return -1
-  const rawLevel = block.metadata ?? properties?.level ?? 0
+  const rawLevel = properties?.level ?? block.metadata ?? 0
   const level = Number(rawLevel)
   const safeLevel = Number.isFinite(level) ? level : 0
   return safeLevel >= 8 ? 0 : safeLevel
@@ -1194,11 +1076,10 @@ function buildTelemetry(bot, nearestChest = null, environmentalMovement, fluidMo
     current: Number.isFinite(fluidMotion?.currentX) && Number.isFinite(fluidMotion?.currentZ)
       ? { x: Math.round(fluidMotion.currentX * 100) / 100, z: Math.round(fluidMotion.currentZ * 100) / 100 }
       : null,
-      fallbackActive: fluidMotion?.assisting === true,
+    fallbackActive: false,
     mineflayerInWater: fluidMotion?.mineflayerInWater === true,
     serverCorrections: Math.max(0, Number(fluidMotion?.serverCorrections) || 0),
-    stalledCorrections: Math.max(0, Number(fluidMotion?.stalledCorrections) || 0),
-    recoveryAttempt: Math.max(0, Number(fluidMotion?.recoveryAttempt) || 0)
+    stalledCorrections: Math.max(0, Number(fluidMotion?.stalledCorrections) || 0)
   }
   return {
     health: Math.max(0, Math.min(finite(bot?.health), 20)),
@@ -1216,4 +1097,4 @@ function buildTelemetry(bot, nearestChest = null, environmentalMovement, fluidMo
   }
 }
 
-module.exports = { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, normalizeSkinUrl, findNearestChest, buildTelemetry, describeNetworkError, reconnectDelaySeconds, normalizeAntiAfkSettings, inspectFluidCurrent, fluidControlsForCurrent, fluidControlsForRecovery, recordFluidCorrection, installMovementPacketCompatibility, installModernPlayerInputCompatibility }
+module.exports = { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, normalizeSkinUrl, findNearestChest, buildTelemetry, describeNetworkError, reconnectDelaySeconds, normalizeAntiAfkSettings, inspectFluidCurrent, recordFluidCorrection, installMovementPacketCompatibility, installModernPlayerInputCompatibility }
