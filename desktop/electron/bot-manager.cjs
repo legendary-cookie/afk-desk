@@ -214,8 +214,8 @@ class BotManager {
     bot.on('health', emitTelemetry)
     bot.on('physicsTick', () => {
       if (session.account.environmentalMovement !== false) {
-        if (inspectFluidCurrent(bot, session.fluidMotion)) this.assistRejectedFluidCurrent(session)
-        else this.stopFluidAssist(session)
+        inspectFluidCurrent(bot, session.fluidMotion)
+        this.stopFluidAssist(session)
       }
     })
     bot.inventory?.on?.('updateSlot', emitTelemetry)
@@ -967,7 +967,7 @@ function fluidCurrentAtBlock(bot, water) {
       const difference = adjacentDepth - currentDepth
       flowX += dx * difference
       flowZ += dz * difference
-    } else if (adjacent && adjacent.boundingBox !== 'empty') {
+    } else if (adjacent && adjacent.boundingBox === 'empty') {
       const belowDepth = waterDepth(bot.blockAt(adjacentPosition.offset(0, -1, 0), false))
       if (belowDepth >= 0) {
         const difference = belowDepth - (currentDepth - 8)

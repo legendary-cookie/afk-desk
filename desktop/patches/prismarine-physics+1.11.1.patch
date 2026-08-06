@@ -1,0 +1,62 @@
+diff --git a/node_modules/prismarine-physics/index.js b/node_modules/prismarine-physics/index.js
+index d95ce7f..aff1905 100644
+--- a/node_modules/prismarine-physics/index.js
++++ b/node_modules/prismarine-physics/index.js
+@@ -639,7 +639,7 @@ function Physics (mcData, world) {
+       const adjBlock = world.getBlock(block.position.offset(dx, 0, dz))
+       const adjLevel = getRenderedDepth(adjBlock)
+       if (adjLevel < 0) {
+-        if (adjBlock && adjBlock.boundingBox !== 'empty') {
++        if (adjBlock && adjBlock.boundingBox === 'empty') {
+           const adjLevel = getRenderedDepth(world.getBlock(block.position.offset(dx, -1, dz)))
+           if (adjLevel >= 0) {
+             const f = adjLevel - (curlevel - 8)
+@@ -676,7 +676,7 @@ function Physics (mcData, world) {
+           const block = world.getBlock(cursor)
+           if (block && (waterIds.includes(block.type) || waterLike.has(block.type) || block.isWaterlogged)) {
+             const waterLevel = cursor.y + 1 - getLiquidHeightPcent(block)
+-            if (Math.ceil(bb.maxY) >= waterLevel) waterBlocks.push(block)
++            if (waterLevel >= bb.minY) waterBlocks.push(block)
+           }
+         }
+       }
+@@ -688,17 +688,24 @@ function Physics (mcData, world) {
+     const acceleration = new Vec3(0, 0, 0)
+     const waterBlocks = getWaterInBB(world, bb)
+     const isInWater = waterBlocks.length > 0
++    let fluidDepth = 0
+     for (const block of waterBlocks) {
+-      const flow = getFlow(world, block)
++      const waterLevel = block.position.y + 1 - getLiquidHeightPcent(block)
++      fluidDepth = Math.max(fluidDepth, waterLevel - bb.minY)
++      let flow = getFlow(world, block)
++      if (fluidDepth < 0.4) flow = flow.scaled(fluidDepth)
+       acceleration.add(flow)
+     }
+ 
+-    const len = acceleration.norm()
+-    if (len > 0) {
+-      vel.x += acceleration.x / len * 0.014
+-      vel.y += acceleration.y / len * 0.014
+-      vel.z += acceleration.z / len * 0.014
++    if (waterBlocks.length > 0) acceleration.scale(1 / waterBlocks.length)
++    acceleration.scale(0.014)
++
++    const accelerationLength = acceleration.norm()
++    const horizontalVelocity = Math.sqrt(vel.x * vel.x + vel.z * vel.z)
++    if (horizontalVelocity < 0.003 && accelerationLength > 0 && accelerationLength < 0.0045) {
++      acceleration.scale(0.0045 / accelerationLength)
+     }
++    vel.add(acceleration)
+     return isInWater
+   }
+ 
+@@ -706,7 +713,7 @@ function Physics (mcData, world) {
+     const vel = entity.vel
+     const pos = entity.pos
+ 
+-    const waterBB = getPlayerBB(pos).contract(0.001, 0.401, 0.001)
++    const waterBB = getPlayerBB(pos).contract(0.001, 0.001, 0.001)
+     const lavaBB = getPlayerBB(pos).contract(0.1, 0.4, 0.1)
+ 
+     entity.isInWater = isInWaterApplyCurrent(world, waterBB, vel)

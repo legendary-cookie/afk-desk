@@ -449,6 +449,24 @@ test('flowing water inspection reports current without changing velocity', () =>
   assert.deepEqual(bot.entity.velocity, new Vec3(0, 0, 0))
 })
 
+test('fluid diagnostics do not report current through a solid wall', () => {
+  const bot = new FakeBot()
+  const motion = {}
+  bot.entity = { position: new Vec3(0.5, 64, 0.5), velocity: new Vec3(0, 0, 0), height: 1.8 }
+  bot.blockAt = (position) => {
+    const point = position.floored()
+    if (point.equals(new Vec3(0, 64, 0))) return { name: 'water', metadata: 0, position: point, boundingBox: 'empty' }
+    if (point.equals(new Vec3(1, 64, 0))) return { name: 'water', metadata: 1, position: point, boundingBox: 'empty' }
+    if (point.equals(new Vec3(0, 64, 1))) return { name: 'stone', metadata: 0, position: point, boundingBox: 'block' }
+    if (point.equals(new Vec3(0, 63, 1))) return { name: 'water', metadata: 1, position: point, boundingBox: 'empty' }
+    return { name: point.y < 64 ? 'stone' : 'air', metadata: 0, position: point, boundingBox: point.y < 64 ? 'block' : 'empty' }
+  }
+
+  assert.equal(inspectFluidCurrent(bot, motion), true)
+  assert.ok(Math.abs(motion.currentX - 1) < 1e-9)
+  assert.ok(Math.abs(motion.currentZ) < 1e-9, `solid wall leaked Z current: ${motion.currentZ}`)
+})
+
 test('flowing water intersecting the player bounding box is detected without changing velocity', () => {
   const bot = new FakeBot()
   bot.entity = { position: new Vec3(0.8, 64, 0.5), velocity: new Vec3(0, 0, 0) }
@@ -562,7 +580,7 @@ test('historical water corrections do not keep fallback active after server posi
   assert.deepEqual(bot.controls, [])
 })
 
-test('water recovery tries a diagonal input after the current-facing input stalls', (t) => {
+test('repeated corrections do not inject diagonal movement into passive water flow', (t) => {
   const bot = new FakeBot()
   const timers = []
   const manager = new BotManager({
@@ -584,8 +602,8 @@ test('water recovery tries a diagonal input after the current-facing input stall
 
   bot.emit('physicsTick')
 
-  assert.deepEqual(bot.controls.slice(-2), [['right', true], ['back', true]])
-  assert.equal(timers.at(-1).delay, 2500)
+  assert.deepEqual(bot.controls, [])
+  assert.deepEqual(timers, [])
 })
 
 test('stopping water assistance tolerates a client destroyed during shutdown', () => {
@@ -602,7 +620,7 @@ test('stopping water assistance tolerates a client destroyed during shutdown', (
   assert.equal(session.fluidMotion.assisting, false)
 })
 
-test('uses a brief normal input pulse after repeated server water corrections', (t) => {
+test('passive environmental water movement never injects player controls', (t) => {
   const bot = new FakeBot()
   const timers = []
   const manager = new BotManager({
@@ -625,13 +643,11 @@ test('uses a brief normal input pulse after repeated server water corrections', 
 
   bot.emit('physicsTick')
 
-  assert.deepEqual(bot.controls.at(-1), ['right', true])
-  assert.equal(timers.at(-1).delay, 150)
-  timers.at(-1).callback()
-  assert.deepEqual(bot.controls.at(-1), ['right', false])
+  assert.deepEqual(bot.controls, [])
+  assert.deepEqual(timers, [])
 })
 
-test('sustains shallow water input when the current is blocked by a horizontal collision', (t) => {
+test('a shallow-water collision does not synthesize movement input', (t) => {
   const bot = new FakeBot()
   const timers = []
   const manager = new BotManager({
@@ -653,12 +669,11 @@ test('sustains shallow water input when the current is blocked by a horizontal c
 
   bot.emit('physicsTick')
 
-  assert.deepEqual(bot.controls.at(-1), ['right', true])
-  assert.equal(bot.controls.some(([control]) => control === 'jump'), false)
-  assert.equal(timers.at(-1).delay, 5000)
+  assert.deepEqual(bot.controls, [])
+  assert.deepEqual(timers, [])
 })
 
-test('keeps a sustained water assist horizontal when water reaches head level', (t) => {
+test('rising head-level water remains passive and input-free', (t) => {
   const bot = new FakeBot()
   const timers = []
   const manager = new BotManager({
@@ -681,19 +696,16 @@ test('keeps a sustained water assist horizontal when water reaches head level', 
   Object.assign(manager.sessions.get('rising-water').fluidMotion, { serverCorrections: 3, stalledCorrections: 3 })
 
   bot.emit('physicsTick')
-  assert.deepEqual(bot.controls.at(-1), ['right', true])
-  assert.equal(bot.controls.some(([control]) => control === 'jump'), false)
+  assert.deepEqual(bot.controls, [])
 
   upperLayerWater = true
   bot.emit('physicsTick')
 
-  assert.equal(bot.controls.some(([control]) => control === 'jump'), false)
-  assert.equal(bot.controls.some(([control, enabled]) => control === 'right' && enabled === false), false)
-  assert.equal(timers.length, 1)
-  assert.equal(timers.at(-1).delay, 5000)
+  assert.deepEqual(bot.controls, [])
+  assert.deepEqual(timers, [])
 })
 
-test('keeps late head-level water recovery horizontal', (t) => {
+test('late head-level corrections remain passive and input-free', (t) => {
   const bot = new FakeBot()
   const timers = []
   const manager = new BotManager({
@@ -717,15 +729,14 @@ test('keeps late head-level water recovery horizontal', (t) => {
 
   bot.emit('physicsTick')
 
-  assert.deepEqual(bot.controls.slice(-2), [['right', true], ['back', true]])
-  assert.equal(bot.controls.some(([control]) => control === 'jump'), false)
-  assert.equal(timers.at(-1).delay, 2500)
+  assert.deepEqual(bot.controls, [])
+  assert.deepEqual(timers, [])
 
   upperLayerWater = false
   bot.emit('physicsTick')
 
-  assert.equal(bot.controls.some(([control]) => control === 'jump'), false)
-  assert.equal(timers.at(-1).delay, 2500)
+  assert.deepEqual(bot.controls, [])
+  assert.deepEqual(timers, [])
 })
 
 test('modern movement packets report the collision state calculated by physics', () => {
