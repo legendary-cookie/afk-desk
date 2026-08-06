@@ -1,5 +1,5 @@
 diff --git a/node_modules/prismarine-physics/index.js b/node_modules/prismarine-physics/index.js
-index d95ce7f..0b0432d 100644
+index d95ce7f..5488978 100644
 --- a/node_modules/prismarine-physics/index.js
 +++ b/node_modules/prismarine-physics/index.js
 @@ -632,6 +632,17 @@ function Physics (mcData, world) {
@@ -29,7 +29,19 @@ index d95ce7f..0b0432d 100644
            const adjLevel = getRenderedDepth(world.getBlock(block.position.offset(dx, -1, dz)))
            if (adjLevel >= 0) {
              const f = adjLevel - (curlevel - 8)
-@@ -676,7 +687,7 @@ function Physics (mcData, world) {
+@@ -670,13 +681,16 @@ function Physics (mcData, world) {
+   function getWaterInBB (world, bb) {
+     const waterBlocks = []
+     const cursor = new Vec3(0, 0, 0)
+-    for (cursor.y = Math.floor(bb.minY); cursor.y <= Math.floor(bb.maxY); cursor.y++) {
+-      for (cursor.z = Math.floor(bb.minZ); cursor.z <= Math.floor(bb.maxZ); cursor.z++) {
+-        for (cursor.x = Math.floor(bb.minX); cursor.x <= Math.floor(bb.maxX); cursor.x++) {
++    // Vanilla iterates X, then Y, then Z. This order is observable because
++    // updateMovementInFluid uses the running maximum fluid depth to scale each
++    // sampled current before averaging them.
++    for (cursor.x = Math.floor(bb.minX); cursor.x <= Math.floor(bb.maxX); cursor.x++) {
++      for (cursor.y = Math.floor(bb.minY); cursor.y <= Math.floor(bb.maxY); cursor.y++) {
++        for (cursor.z = Math.floor(bb.minZ); cursor.z <= Math.floor(bb.maxZ); cursor.z++) {
            const block = world.getBlock(cursor)
            if (block && (waterIds.includes(block.type) || waterLike.has(block.type) || block.isWaterlogged)) {
              const waterLevel = cursor.y + 1 - getLiquidHeightPcent(block)
@@ -38,7 +50,7 @@ index d95ce7f..0b0432d 100644
            }
          }
        }
-@@ -688,17 +699,24 @@ function Physics (mcData, world) {
+@@ -688,17 +702,24 @@ function Physics (mcData, world) {
      const acceleration = new Vec3(0, 0, 0)
      const waterBlocks = getWaterInBB(world, bb)
      const isInWater = waterBlocks.length > 0
@@ -69,7 +81,7 @@ index d95ce7f..0b0432d 100644
      return isInWater
    }
  
-@@ -706,7 +724,7 @@ function Physics (mcData, world) {
+@@ -706,7 +727,7 @@ function Physics (mcData, world) {
      const vel = entity.vel
      const pos = entity.pos
  

@@ -2,6 +2,13 @@
 
 For the complete desktop history from 0.1.0 onward, including source tags, installers, and comparisons, see [HISTORY.md](HISTORY.md).
 
+## Desktop 0.7.1 — 2026-08-06
+
+### Fixed
+
+- Head-level water currents now follow vanilla's fluid-cell sampling order, preventing a blocked diagonal component from erasing movement along an open channel beside signs, chests, and walls.
+- Added a regression fixture reduced from StarrySea's captured two-level water-loop geometry.
+
 ## Desktop 0.6.3 — 2026-08-06
 
 ### Fixed

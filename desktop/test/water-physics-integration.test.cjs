@@ -218,3 +218,82 @@ test('a zero-collision wall sign still blocks fluid flow from water beneath it',
   assert.ok(Math.abs(bot.entity.position.x - 0.514) < 1e-9, `expected east-only current, got ${bot.entity.position.x}`)
   assert.ok(Math.abs(bot.entity.position.z - 0.5) < 1e-9, `wall sign leaked current, got ${bot.entity.position.z}`)
 })
+
+test('diagonal water current slides along the open axis beside a chest wall', () => {
+  const version = '1.21.1'
+  const registry = minecraftData(version)
+  const Block = prismarineBlock(version)
+  const block = (name, position, stateOffset = 0) => {
+    const definition = registry.blocksByName[name]
+    const value = Block.fromStateId(definition.minStateId + stateOffset, 0)
+    value.position = position.clone()
+    return value
+  }
+  const blocks = new Map()
+  const place = (x, y, z, name, stateOffset = 0) => {
+    blocks.set(`${x},${y},${z}`, { name, stateOffset })
+  }
+
+  // Reduced from StarrySea's captured block snapshot. The current points
+  // northwest: stone/chests stop northward motion, but the west lane is water.
+  for (let x = -2; x <= 2; x++) {
+    for (let z = -2; z <= 2; z++) place(x, 127, z, 'stone')
+  }
+  place(-1, 128, -1, 'water', 8)
+  place(-1, 128, 0, 'spruce_wall_sign', 7)
+  place(-1, 128, 1, 'stone')
+  place(0, 128, -1, 'stone')
+  place(0, 128, 0, 'water', 5)
+  place(0, 128, 1, 'stone')
+  place(1, 128, -1, 'stone')
+  place(1, 128, 0, 'water', 4)
+  place(1, 128, 1, 'stone')
+  place(-1, 129, -1, 'water', 1)
+  place(-1, 129, 0, 'water', 0)
+  place(-1, 129, 1, 'stone')
+  place(0, 129, -1, 'chest')
+  place(0, 129, 0, 'spruce_wall_sign', 1)
+  place(0, 129, 1, 'stone')
+  place(1, 129, -1, 'chest')
+  place(1, 129, 1, 'stone')
+
+  const world = {
+    getBlock(position) {
+      const point = position.floored()
+      const entry = blocks.get(`${point.x},${point.y},${point.z}`)
+      return entry ? block(entry.name, point, entry.stateOffset) : block('air', point)
+    }
+  }
+  const start = new Vec3(0.116625, 128, 0.3)
+  const bot = {
+    version,
+    registry,
+    inventory: { slots: [] },
+    jumpTicks: 0,
+    jumpQueued: false,
+    fireworkRocketDuration: 0,
+    entity: {
+      position: start.clone(),
+      velocity: new Vec3(0, 0, 0),
+      onGround: false,
+      isInWater: false,
+      isInLava: false,
+      isInWeb: false,
+      isCollidedHorizontally: false,
+      isCollidedVertically: false,
+      elytraFlying: false,
+      yaw: 0,
+      pitch: 0,
+      effects: {},
+      attributes: {}
+    }
+  }
+  const controls = { forward: false, back: false, left: false, right: false, jump: false, sprint: false, sneak: false }
+
+  Physics(registry, world).simulatePlayer(new PlayerState(bot, controls), world).apply(bot)
+
+  assert.equal(bot.entity.isInWater, true)
+  const outcome = JSON.stringify({ position: bot.entity.position, velocity: bot.entity.velocity, horizontalCollision: bot.entity.isCollidedHorizontally })
+  assert.ok(bot.entity.position.x < start.x, `expected westward slide, got ${outcome}`)
+  assert.ok(bot.entity.velocity.x < 0, `expected preserved westward velocity, got ${outcome}`)
+})
