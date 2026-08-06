@@ -1014,12 +1014,12 @@ function fluidControlsForRecovery(yaw, currentX, currentZ, attempt = 0) {
   const [primary] = fluidControlsForCurrent(yaw, currentX, currentZ)
   if (!primary) return []
   const choices = {
-    forward: ['forward', 'left', 'right', 'back'],
-    back: ['back', 'right', 'left', 'forward'],
-    left: ['left', 'back', 'forward', 'right'],
-    right: ['right', 'forward', 'back', 'left']
+    forward: [['forward'], ['forward', 'left'], ['forward', 'right'], ['back', 'left']],
+    back: [['back'], ['back', 'right'], ['back', 'left'], ['forward', 'right']],
+    left: [['left'], ['left', 'back'], ['left', 'forward'], ['right', 'back']],
+    right: [['right'], ['right', 'forward'], ['right', 'back'], ['left', 'forward']]
   }[primary]
-  return [choices[Math.max(0, Number(attempt) || 0) % choices.length]]
+  return [...choices[Math.max(0, Number(attempt) || 0) % choices.length]]
 }
 
 function recordFluidCorrection(state, serverPosition) {

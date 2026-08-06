@@ -525,7 +525,7 @@ test('historical water corrections do not keep fallback active after server posi
   assert.deepEqual(bot.controls, [])
 })
 
-test('water recovery tries a perpendicular input after the current-facing input stalls', (t) => {
+test('water recovery tries a diagonal input after the current-facing input stalls', (t) => {
   const bot = new FakeBot()
   const timers = []
   const manager = new BotManager({
@@ -547,7 +547,7 @@ test('water recovery tries a perpendicular input after the current-facing input 
 
   bot.emit('physicsTick')
 
-  assert.deepEqual(bot.controls.at(-1), ['forward', true])
+  assert.deepEqual(bot.controls.slice(-2), [['right', true], ['forward', true]])
   assert.equal(timers.at(-1).delay, 2500)
 })
 
