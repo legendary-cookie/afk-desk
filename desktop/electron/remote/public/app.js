@@ -1,6 +1,6 @@
 const state = { accounts: [], selectedId: null, viewer: null, clearedBefore: new Map(), etag: '' }
 const byId = (id) => document.getElementById(id)
-const elements = Object.fromEntries(['viewer','error-state','empty-state','dashboard','accounts','title','server','connection','status','log','clear','chat-form','chat','movement','health','hunger','coordinates','chest','dimension','inventory','inventory-count','toast'].map((id) => [id, byId(id)]))
+const elements = Object.fromEntries(['viewer','error-state','empty-state','dashboard','accounts','title','server','connection','status','log','clear','chat-form','chat','movement','health','hunger','coordinates','water','chest','dimension','inventory','inventory-count','toast'].map((id) => [id, byId(id)]))
 
 async function refresh() {
   try {
@@ -60,6 +60,7 @@ function renderTelemetry(telemetry) {
   elements.health.textContent = telemetry ? `${formatNumber(telemetry.health)} / 20` : '—'
   elements.hunger.textContent = telemetry ? `${formatNumber(telemetry.food)} / 20` : '—'
   elements.coordinates.textContent = telemetry?.position ? `${telemetry.position.x}, ${telemetry.position.y}, ${telemetry.position.z}` : '—'
+  elements.water.textContent = describeWater(telemetry?.environment)
   elements.chest.textContent = telemetry?.nearestChest ? `${telemetry.nearestChest.x}, ${telemetry.nearestChest.y}, ${telemetry.nearestChest.z}` : telemetry ? 'Not found nearby' : '—'
   elements.dimension.textContent = telemetry ? String(telemetry.dimension || 'unknown').replace(/^minecraft:/,'') : '—'
   const items = telemetry?.inventory || []
@@ -75,6 +76,18 @@ function renderTelemetry(telemetry) {
   }))
 }
 function formatNumber(value) { return Number.isInteger(value)?String(value):Number(value||0).toFixed(1) }
+
+function describeWater(environment) {
+  if (!environment) return '—'
+  if (!environment.enabled) return 'Disabled'
+  if (!environment.physicsEnabled) return 'Physics paused'
+  if (environment.waterStatus === 'dry') return 'Not in water'
+  if (environment.waterStatus === 'still') return `Water (${environment.waterBlocks}), no current`
+  if (environment.waterStatus === 'error') return 'Inspection error'
+  if (environment.waterStatus === 'unavailable') return 'World data unavailable'
+  if (environment.current) return `x ${environment.current.x}, z ${environment.current.z}${environment.fallbackActive ? ' (fallback)' : ''}${environment.serverCorrections ? `, corrected ${environment.serverCorrections}×` : ''}`
+  return 'Checking…'
+}
 
 function renderLog(account) {
   const cutoff = state.clearedBefore.get(account.id) || 0

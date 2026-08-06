@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "afkdesk_movement_diagnostics",
+  "version": "${version}",
+  "name": "AFK Desk Movement Diagnostics",
+  "description": "Local-only vanilla movement telemetry for comparing AFK Desk physics.",
+  "authors": ["AFK Desk contributors"],
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["dev.afkdesk.diagnostics.AfkDeskMovementDiagnostics"]
+  },
+  "depends": {
+    "fabricloader": ">=0.19.3",
+    "minecraft": "~${minecraft_version}",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}

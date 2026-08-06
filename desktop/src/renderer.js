@@ -1,5 +1,15 @@
 const api = window.afkDesk
 
+const KEY_CONTROLS = {
+  KeyW: 'forward',
+  KeyA: 'left',
+  KeyS: 'back',
+  KeyD: 'right',
+  Space: 'jump'
+}
+
+const activeManualInputs = new Map()
+
 const state = {
   accounts: [],
   selectedId: null,
@@ -8,24 +18,27 @@ const state = {
   statuses: new Map(),
   logs: new Map(),
   telemetry: new Map(),
+  chatHistory: new Map(),
+  settings: { uiScale: 100, macros: [] },
   login: { code: '', url: 'https://microsoft.com/link' }
 }
 
 const el = Object.fromEntries([
-  'account-list', 'account-count', 'add-account', 'browser-access', 'open-settings', 'settings-dialog', 'close-settings', 'start-with-windows', 'save-settings', 'empty-state', 'dashboard', 'account-title',
+  'account-list', 'account-count', 'add-account', 'browser-access', 'open-settings', 'settings-dialog', 'close-settings', 'start-with-windows', 'stagger-startup-connections', 'startup-connection-delay', 'save-settings', 'empty-state', 'dashboard', 'account-title',
   'edit-account', 'connection-button', 'status-banner', 'status-name', 'status-detail', 'server-address',
-  'detail-username', 'detail-server', 'detail-version', 'detail-antiafk', 'detail-health', 'detail-hunger', 'detail-coordinates', 'detail-chest', 'detail-dimension', 'inventory-count', 'inventory-grid', 'auto-deposit-toggle', 'drop-selected', 'console-log', 'clear-console',
-  'chat-form', 'chat-message', 'account-dialog', 'account-form', 'dialog-title', 'account-id', 'label',
-  'username', 'host', 'port', 'version', 'connect-on-startup', 'proxy-enabled', 'proxy-fields', 'proxy-type', 'proxy-host', 'proxy-port', 'proxy-username', 'proxy-password', 'proxy-password-help', 'proxy-clear-password', 'anti-afk', 'anti-afk-interval', 'auto-reconnect', 'auto-reconnect-delay', 'auto-reconnect-max', 'auto-deposit-setting', 'join-message', 'server-change-message',
+  'detail-username', 'detail-server', 'detail-version', 'detail-antiafk', 'detail-environment', 'detail-water', 'detail-health', 'detail-hunger', 'detail-coordinates', 'detail-chest', 'detail-dimension', 'inventory-count', 'inventory-grid', 'auto-deposit-toggle', 'drop-selected', 'console-log', 'clear-console',
+  'chat-form', 'chat-message', 'macro-pad', 'manage-macros', 'macro-editor', 'macro-rows', 'add-macro', 'cancel-macros', 'save-macros', 'account-dialog', 'account-form', 'dialog-title', 'account-id', 'label',
+  'username', 'host', 'port', 'version', 'connect-on-startup', 'proxy-enabled', 'proxy-fields', 'proxy-type', 'proxy-host', 'proxy-port', 'proxy-username', 'proxy-password', 'proxy-password-help', 'proxy-clear-password', 'anti-afk', 'anti-afk-min-delay', 'anti-afk-max-delay', 'anti-afk-duration', 'anti-afk-look-degrees', 'anti-afk-walk-distance', 'anti-afk-jump', 'anti-afk-look', 'anti-afk-sneak', 'anti-afk-swing', 'anti-afk-walk', 'environmental-movement', 'auto-reconnect', 'auto-reconnect-delay', 'auto-reconnect-max', 'auto-deposit-setting', 'join-message', 'server-change-message',
   'message-delay', 'form-error', 'delete-account', 'login-dialog', 'login-code', 'open-login-private', 'open-login',
   'close-login', 'remote-dialog', 'close-remote', 'remote-local-url', 'open-dashboard', 'tailscale-command',
   'enable-tailscale', 'tailscale-result', 'remote-base-url', 'grant-label', 'grant-accounts', 'create-grant', 'generated-link', 'share-link',
-  'copy-share-link', 'grant-list', 'toast-region'
+  'copy-share-link', 'grant-list', 'ui-scale', 'ui-scale-value', 'toast-region'
 ].map((id) => [id, document.getElementById(id)]))
 
 async function init() {
-  state.accounts = await api.listAccounts()
+  ;[state.accounts, state.settings] = await Promise.all([api.listAccounts(), api.getSettings()])
   state.selectedId = state.accounts[0]?.id || null
+  applyUiScale(state.settings.uiScale)
   bindEvents()
   render()
   api.onBotEvent(handleBotEvent)
@@ -35,11 +48,16 @@ function bindEvents() {
   el['add-account'].addEventListener('click', () => openAccountDialog())
   el['browser-access'].addEventListener('click', openRemoteDialog)
   el['open-settings'].addEventListener('click', openSettingsDialog)
-  el['close-settings'].addEventListener('click', () => el['settings-dialog'].close())
+  el['close-settings'].addEventListener('click', () => {
+    applyUiScale(state.settings.uiScale)
+    el['settings-dialog'].close()
+  })
   el['save-settings'].addEventListener('click', saveSettings)
+  el['stagger-startup-connections'].addEventListener('change', syncStartupDelay)
   document.querySelector('[data-action="add"]').addEventListener('click', () => openAccountDialog())
   el['edit-account'].addEventListener('click', () => openAccountDialog(selectedAccount()))
   el['account-form'].addEventListener('submit', saveAccount)
+  document.querySelectorAll('[data-close-account]').forEach((button) => button.addEventListener('click', () => el['account-dialog'].close()))
   el['delete-account'].addEventListener('click', deleteAccount)
   el['connection-button'].addEventListener('click', toggleConnection)
   el['drop-selected'].addEventListener('click', dropSelectedStack)
@@ -49,11 +67,20 @@ function bindEvents() {
     el['proxy-port'].value = el['proxy-type'].value === 'http' ? 8080 : 1080
   })
   el['chat-form'].addEventListener('submit', sendChat)
+  el['chat-message'].addEventListener('keydown', navigateChatHistory)
+  el['manage-macros'].addEventListener('click', () => el['macro-editor'].hidden ? openMacroEditor() : closeMacroEditor())
+  el['add-macro'].addEventListener('click', () => addMacroRow())
+  el['cancel-macros'].addEventListener('click', closeMacroEditor)
+  el['save-macros'].addEventListener('click', saveMacros)
+  el['ui-scale'].addEventListener('input', () => {
+    el['ui-scale-value'].textContent = `${el['ui-scale'].value}%`
+    applyUiScale(el['ui-scale'].value)
+  })
   el['clear-console'].addEventListener('click', () => {
     state.logs.set(state.selectedId, [])
     renderConsole()
   })
-  document.querySelectorAll('[data-control]').forEach((button) => button.addEventListener('click', () => run(() => api.control(state.selectedId, button.dataset.control))))
+  bindManualMovement()
   document.querySelectorAll('[data-look]').forEach((button) => button.addEventListener('click', () => run(() => api.look(state.selectedId, button.dataset.look))))
   el['login-code'].addEventListener('click', async () => {
     await navigator.clipboard.writeText(state.login.code)
@@ -85,10 +112,14 @@ function render() {
   el['detail-username'].textContent = account.username
   el['detail-server'].textContent = `${account.host}:${account.port}`
   el['detail-version'].textContent = account.version || 'Auto-detect'
-  el['detail-antiafk'].textContent = account.antiAfk ? `Every ${account.antiAfkInterval} seconds` : 'Disabled'
+  const minDelay = account.antiAfkMinDelay ?? account.antiAfkInterval ?? 45
+  const maxDelay = account.antiAfkMaxDelay ?? account.antiAfkInterval ?? minDelay
+  el['detail-antiafk'].textContent = account.antiAfk ? `${minDelay}–${maxDelay} seconds` : 'Disabled'
+  el['detail-environment'].textContent = account.environmentalMovement !== false ? 'Allowed' : 'Position held'
   el['auto-deposit-toggle'].checked = account.autoDepositToChest === true
   renderStatus(status)
   renderConsole()
+  renderMacroPad()
   renderTelemetry()
 }
 
@@ -117,6 +148,7 @@ function renderAccountList() {
     indicator.setAttribute('aria-label', status)
     button.append(avatar, copy, indicator)
     button.addEventListener('click', () => {
+      releaseAllManualInputs()
       state.selectedId = account.id
       state.selectedInventorySlot = null
       render()
@@ -215,6 +247,7 @@ function renderStatus({ status, detail }) {
   el['connection-button'].className = `button ${active ? 'secondary' : 'primary'}`
   el['chat-message'].disabled = !canInteract
   el['chat-form'].querySelector('button').disabled = !canInteract
+  renderMacroPad(canInteract)
   document.querySelectorAll('[data-control], [data-look]').forEach((button) => { button.disabled = !canInteract })
   updateInventoryActions(canInteract)
 }
@@ -244,6 +277,7 @@ function renderConsole() {
 
 function renderTelemetry() {
   const telemetry = state.telemetry.get(state.selectedId)
+  el['detail-water'].textContent = describeWater(telemetry?.environment)
   el['detail-health'].textContent = telemetry ? `${formatNumber(telemetry.health)} / 20` : '—'
   el['detail-hunger'].textContent = telemetry ? `${formatNumber(telemetry.food)} / 20` : '—'
   el['detail-coordinates'].textContent = telemetry?.position ? `${telemetry.position.x}, ${telemetry.position.y}, ${telemetry.position.z}` : '—'
@@ -338,14 +372,25 @@ function openAccountDialog(account) {
   el['proxy-clear-password'].checked = false
   syncProxyFields()
   el['anti-afk'].checked = account?.antiAfk !== false
-  el['anti-afk-interval'].value = account?.antiAfkInterval || 45
+  const legacyAntiAfkDelay = account?.antiAfkInterval || 45
+  el['anti-afk-min-delay'].value = account?.antiAfkMinDelay ?? legacyAntiAfkDelay
+  el['anti-afk-max-delay'].value = account?.antiAfkMaxDelay ?? legacyAntiAfkDelay
+  el['anti-afk-duration'].value = account?.antiAfkActionDuration ?? 0.25
+  el['anti-afk-look-degrees'].value = account?.antiAfkLookDegrees ?? 12
+  el['anti-afk-walk-distance'].value = account?.antiAfkWalkDistance ?? 0.5
+  el['anti-afk-jump'].checked = account?.antiAfkJump !== false
+  el['anti-afk-look'].checked = account?.antiAfkLook !== false
+  el['anti-afk-sneak'].checked = account?.antiAfkSneak === true
+  el['anti-afk-swing'].checked = account?.antiAfkSwing === true
+  el['anti-afk-walk'].checked = account?.antiAfkWalk === true
+  el['environmental-movement'].checked = account?.environmentalMovement !== false
   el['auto-reconnect'].checked = account?.autoReconnect !== false
   el['auto-reconnect-delay'].value = account?.autoReconnectDelay || 5
   el['auto-reconnect-max'].value = account?.autoReconnectMaxAttempts ?? 0
   el['auto-deposit-setting'].checked = account?.autoDepositToChest === true
   el['join-message'].value = account?.joinMessage || ''
   el['server-change-message'].value = account?.serverChangeMessage || ''
-  el['message-delay'].value = account?.messageDelay ?? 5
+  el['message-delay'].value = account?.messageDelay ?? 6
   el['dialog-title'].textContent = account ? 'Edit account' : 'Add account'
   el['delete-account'].hidden = !account
   el['account-dialog'].showModal()
@@ -376,7 +421,17 @@ async function saveAccount(event) {
     minecraftUuid: existing?.minecraftUuid || '',
     skinUrl: existing?.skinUrl || '',
     antiAfk: el['anti-afk'].checked,
-    antiAfkInterval: Number(el['anti-afk-interval'].value),
+    antiAfkMinDelay: Number(el['anti-afk-min-delay'].value),
+    antiAfkMaxDelay: Number(el['anti-afk-max-delay'].value),
+    antiAfkActionDuration: Number(el['anti-afk-duration'].value),
+    antiAfkLookDegrees: Number(el['anti-afk-look-degrees'].value),
+    antiAfkWalkDistance: Number(el['anti-afk-walk-distance'].value),
+    antiAfkJump: el['anti-afk-jump'].checked,
+    antiAfkLook: el['anti-afk-look'].checked,
+    antiAfkSneak: el['anti-afk-sneak'].checked,
+    antiAfkSwing: el['anti-afk-swing'].checked,
+    antiAfkWalk: el['anti-afk-walk'].checked,
+    environmentalMovement: el['environmental-movement'].checked,
     autoReconnect: el['auto-reconnect'].checked,
     autoReconnectDelay: Number(el['auto-reconnect-delay'].value),
     autoReconnectMaxAttempts: Number(el['auto-reconnect-max'].value),
@@ -427,13 +482,185 @@ async function sendChat(event) {
   event.preventDefault()
   const message = el['chat-message'].value.trim()
   if (!message) return
-  await run(() => api.sendChat(state.selectedId, message))
-  el['chat-message'].value = ''
+  await sendChatMessage(message)
+}
+
+function bindManualMovement() {
+  document.querySelectorAll('[data-control]').forEach((button) => {
+    button.addEventListener('pointerdown', (event) => {
+      if (button.disabled || event.button !== 0) return
+      event.preventDefault()
+      button.setPointerCapture?.(event.pointerId)
+      pressManualInput(`pointer:${event.pointerId}:${button.dataset.control}`, button.dataset.control, button)
+    })
+    const release = (event) => releaseManualInput(`pointer:${event.pointerId}:${button.dataset.control}`)
+    button.addEventListener('pointerup', release)
+    button.addEventListener('pointercancel', release)
+  })
+  document.addEventListener('keydown', (event) => {
+    const control = KEY_CONTROLS[event.code]
+    if (!control || event.repeat || shouldIgnoreMovementKey(event.target, event.code)) return
+    event.preventDefault()
+    pressManualInput(`key:${event.code}`, control, document.querySelector(`[data-control="${control}"]`))
+  })
+  document.addEventListener('keyup', (event) => {
+    if (!KEY_CONTROLS[event.code]) return
+    releaseManualInput(`key:${event.code}`)
+  })
+  window.addEventListener('blur', releaseAllManualInputs)
+  document.addEventListener('visibilitychange', () => { if (document.hidden) releaseAllManualInputs() })
+}
+
+function shouldIgnoreMovementKey(target, code) {
+  if (!state.selectedId || document.querySelector('dialog[open]')) return true
+  if (target?.closest?.('input, textarea, select, [contenteditable="true"]')) return true
+  return code === 'Space' && Boolean(target?.closest?.('button, a'))
+}
+
+function pressManualInput(source, control, button) {
+  if (activeManualInputs.has(source) || !state.selectedId || getStatus(state.selectedId).status !== 'online') return
+  const input = { accountId: state.selectedId, control, button }
+  activeManualInputs.set(source, input)
+  button?.classList.add('pressed')
+  if ([...activeManualInputs.values()].filter((item) => item.accountId === input.accountId && item.control === control).length > 1) return
+  api.setControlState(input.accountId, control, true).catch((error) => {
+    activeManualInputs.delete(source)
+    button?.classList.remove('pressed')
+    toast(cleanError(error), 'error')
+  })
+}
+
+function releaseManualInput(source) {
+  const input = activeManualInputs.get(source)
+  if (!input) return
+  activeManualInputs.delete(source)
+  input.button?.classList.remove('pressed')
+  const stillHeld = [...activeManualInputs.values()].some((item) => item.accountId === input.accountId && item.control === input.control)
+  if (!stillHeld) api.setControlState(input.accountId, input.control, false).catch(() => {})
+}
+
+function releaseAllManualInputs(accountId = null) {
+  const sources = [...activeManualInputs.entries()]
+    .filter(([, input]) => !accountId || input.accountId === accountId)
+    .map(([source]) => source)
+  for (const source of sources) releaseManualInput(source)
+}
+
+async function sendChatMessage(message) {
+  const text = String(message || '').trim().slice(0, 256)
+  if (!text || !state.selectedId) return
+  rememberChatMessage(state.selectedId, text)
+  try {
+    await api.sendChat(state.selectedId, text)
+    el['chat-message'].value = ''
+  } catch (error) { toast(cleanError(error), 'error') }
+}
+
+function rememberChatMessage(accountId, message) {
+  const history = state.chatHistory.get(accountId) || { entries: [], index: 0, draft: '' }
+  if (history.entries.at(-1) !== message) history.entries = [...history.entries.slice(-99), message]
+  history.index = history.entries.length
+  history.draft = ''
+  state.chatHistory.set(accountId, history)
+}
+
+function navigateChatHistory(event) {
+  if (!['ArrowUp', 'ArrowDown'].includes(event.key) || !state.selectedId) return
+  const history = state.chatHistory.get(state.selectedId)
+  if (!history?.entries.length) return
+  event.preventDefault()
+  if (event.key === 'ArrowUp') {
+    if (history.index >= history.entries.length) history.draft = el['chat-message'].value
+    history.index = Math.max(0, history.index - 1)
+    el['chat-message'].value = history.entries[history.index]
+  } else if (history.index < history.entries.length - 1) {
+    history.index += 1
+    el['chat-message'].value = history.entries[history.index]
+  } else {
+    history.index = history.entries.length
+    el['chat-message'].value = history.draft
+  }
+  el['chat-message'].setSelectionRange(el['chat-message'].value.length, el['chat-message'].value.length)
+}
+
+function renderMacroPad(canInteract = ['online', 'connected'].includes(getStatus(state.selectedId).status)) {
+  const macros = state.settings.macros || []
+  if (!macros.length) {
+    const empty = document.createElement('span')
+    empty.className = 'macro-empty'
+    empty.textContent = 'No macros yet. Choose Edit to add one.'
+    el['macro-pad'].replaceChildren(empty)
+    return
+  }
+  el['macro-pad'].replaceChildren(...macros.map((macro) => {
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.className = 'macro-button'
+    button.textContent = macro.label
+    button.title = macro.message
+    button.disabled = !canInteract
+    button.addEventListener('click', () => sendChatMessage(macro.message))
+    return button
+  }))
+}
+
+function openMacroEditor() {
+  el['macro-rows'].replaceChildren()
+  for (const macro of state.settings.macros || []) addMacroRow(macro)
+  el['macro-editor'].hidden = false
+  el['manage-macros'].setAttribute('aria-expanded', 'true')
+  if (!state.settings.macros?.length) addMacroRow()
+  el['macro-rows'].querySelector('input')?.focus()
+}
+
+function closeMacroEditor() {
+  el['macro-editor'].hidden = true
+  el['manage-macros'].setAttribute('aria-expanded', 'false')
+}
+
+function addMacroRow(macro = {}) {
+  const row = document.createElement('div')
+  row.className = 'macro-row'
+  const label = document.createElement('input')
+  label.className = 'macro-label-input'
+  label.maxLength = 40
+  label.placeholder = 'Button label'
+  label.setAttribute('aria-label', 'Macro button label')
+  label.value = macro.label || ''
+  const message = document.createElement('input')
+  message.className = 'macro-message-input'
+  message.maxLength = 256
+  message.placeholder = 'Message or /command'
+  message.setAttribute('aria-label', 'Macro message or command')
+  message.value = macro.message || ''
+  const remove = document.createElement('button')
+  remove.type = 'button'
+  remove.className = 'icon-button macro-remove'
+  remove.textContent = '×'
+  remove.setAttribute('aria-label', 'Delete macro')
+  remove.addEventListener('click', () => row.remove())
+  row.append(label, message, remove)
+  el['macro-rows'].append(row)
+  message.focus()
+}
+
+async function saveMacros() {
+  const macros = [...el['macro-rows'].querySelectorAll('.macro-row')].map((row) => ({
+    label: row.querySelector('.macro-label-input').value,
+    message: row.querySelector('.macro-message-input').value
+  })).filter((macro) => macro.message.trim())
+  try {
+    state.settings = await api.saveSettings({ ...state.settings, macros })
+    closeMacroEditor()
+    renderMacroPad()
+    toast('Macro pad saved.')
+  } catch (error) { toast(cleanError(error), 'error') }
 }
 
 function handleBotEvent({ type, id, payload }) {
   if (type === 'status') {
     state.statuses.set(id, payload)
+    if (!['online', 'connected'].includes(payload.status)) releaseAllManualInputs(id)
     renderAccountList()
     if (id === state.selectedId) renderStatus(payload)
   }
@@ -501,17 +728,55 @@ function renderGrantAccounts() {
 async function openSettingsDialog() {
   try {
     const settings = await api.getSettings()
+    state.settings = settings
     el['start-with-windows'].checked = settings.startWithWindows === true
+    el['stagger-startup-connections'].checked = settings.staggerStartupConnections !== false
+    el['startup-connection-delay'].value = settings.startupConnectionDelay || 3
+    el['ui-scale'].value = settings.uiScale || 100
+    el['ui-scale-value'].textContent = `${el['ui-scale'].value}%`
+    syncStartupDelay()
     el['settings-dialog'].showModal()
   } catch (error) { toast(cleanError(error), 'error') }
 }
 
 async function saveSettings() {
   try {
-    await api.saveSettings({ startWithWindows: el['start-with-windows'].checked })
+    state.settings = await api.saveSettings({
+      ...state.settings,
+      startWithWindows: el['start-with-windows'].checked,
+      staggerStartupConnections: el['stagger-startup-connections'].checked,
+      startupConnectionDelay: Number(el['startup-connection-delay'].value),
+      uiScale: Number(el['ui-scale'].value)
+    })
+    applyUiScale(state.settings.uiScale)
     el['settings-dialog'].close()
     toast('Settings saved.')
   } catch (error) { toast(cleanError(error), 'error') }
+}
+
+function applyUiScale(value) {
+  const scale = Math.max(75, Math.min(Number(value) || 100, 125))
+  api.setUiScale(scale)
+}
+
+function describeWater(environment) {
+  if (!environment) return 'Connect to inspect'
+  if (!environment.enabled) return 'Disabled'
+  if (!environment.physicsEnabled) return 'Physics paused'
+  if (environment.waterStatus === 'dry') return 'Not in water'
+  if (environment.waterStatus === 'still') return `Water detected (${environment.waterBlocks}), no horizontal current`
+  if (environment.waterStatus === 'error') return 'Inspection error'
+  if (environment.waterStatus === 'unavailable') return 'World data unavailable'
+  if (environment.current) {
+    const mode = environment.fallbackActive ? ', fallback active' : ''
+    const corrections = environment.serverCorrections ? `, ${environment.serverCorrections} server correction${environment.serverCorrections === 1 ? '' : 's'}` : ''
+    return `Flow x ${environment.current.x}, z ${environment.current.z}${mode}${corrections}`
+  }
+  return 'Checking…'
+}
+
+function syncStartupDelay() {
+  el['startup-connection-delay'].disabled = !el['stagger-startup-connections'].checked
 }
 
 async function createRemoteGrant() {

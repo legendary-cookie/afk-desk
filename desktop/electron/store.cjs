@@ -53,4 +53,52 @@ class AccountStore {
   }
 }
 
-module.exports = { AccountStore }
+class SettingsStore {
+  constructor(userDataPath) {
+    this.file = path.join(userDataPath, 'settings.json')
+  }
+
+  get() {
+    try {
+      return normalizeSettings(JSON.parse(fs.readFileSync(this.file, 'utf8')))
+    } catch (error) {
+      if (error.code !== 'ENOENT') console.error('Could not read settings:', error)
+      return normalizeSettings()
+    }
+  }
+
+  save(input) {
+    const settings = normalizeSettings(input)
+    fs.mkdirSync(path.dirname(this.file), { recursive: true })
+    const temporaryFile = `${this.file}.tmp`
+    fs.writeFileSync(temporaryFile, JSON.stringify(settings, null, 2), 'utf8')
+    fs.renameSync(temporaryFile, this.file)
+    return settings
+  }
+}
+
+function normalizeSettings(input = {}) {
+  return {
+    staggerStartupConnections: input?.staggerStartupConnections !== false,
+    startupConnectionDelay: Math.max(1, Math.min(Number(input?.startupConnectionDelay) || 3, 300)),
+    uiScale: Math.max(75, Math.min(Number(input?.uiScale) || 100, 125)),
+    macros: normalizeMacros(input?.macros)
+  }
+}
+
+function normalizeMacros(input) {
+  if (!Array.isArray(input)) return []
+  return input.slice(0, 1000).flatMap((macro) => {
+    const message = String(macro?.message || '').trim().slice(0, 256)
+    if (!message) return []
+    const label = String(macro?.label || message).trim().slice(0, 40) || message.slice(0, 40)
+    return [{ label, message }]
+  })
+}
+
+function startupConnectionDelay(settings, index) {
+  const base = 700
+  return base + (settings?.staggerStartupConnections === false ? 0 : Math.max(1, Number(settings?.startupConnectionDelay) || 3) * 1000 * index)
+}
+
+module.exports = { AccountStore, SettingsStore, normalizeSettings, normalizeMacros, startupConnectionDelay }

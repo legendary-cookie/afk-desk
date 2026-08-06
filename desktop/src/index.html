@@ -76,6 +76,22 @@
                 <input id="chat-message" autocomplete="off" placeholder="Message or /command" disabled />
                 <button class="send-button" type="submit" disabled aria-label="Send message">Send</button>
               </form>
+              <section class="macro-section" aria-labelledby="macro-title">
+                <header class="macro-header">
+                  <div><h3 id="macro-title">Macro pad</h3><span>Click to send saved text or commands</span></div>
+                  <button id="manage-macros" class="text-button" type="button" aria-expanded="false" aria-controls="macro-editor">Edit</button>
+                </header>
+                <div id="macro-pad" class="macro-pad" role="group" aria-label="Saved chat macros"></div>
+                <div id="macro-editor" class="macro-editor" hidden>
+                  <div id="macro-rows" class="macro-rows"></div>
+                  <div class="macro-editor-actions">
+                    <button id="add-macro" class="button secondary" type="button">Add macro</button>
+                    <span class="footer-spacer"></span>
+                    <button id="cancel-macros" class="button secondary" type="button">Cancel</button>
+                    <button id="save-macros" class="button primary" type="button">Save macros</button>
+                  </div>
+                </div>
+              </section>
             </section>
 
             <aside class="controls-column">
@@ -86,6 +102,8 @@
                   <div><dt>Server</dt><dd id="detail-server">—</dd></div>
                   <div><dt>Version</dt><dd id="detail-version">Auto-detect</dd></div>
                   <div><dt>Anti-AFK</dt><dd id="detail-antiafk">Every 45 seconds</dd></div>
+                  <div><dt>Environment</dt><dd id="detail-environment">Allowed</dd></div>
+                  <div><dt>Water current</dt><dd id="detail-water">Connect to inspect</dd></div>
                   <div><dt>HP</dt><dd id="detail-health">—</dd></div>
                   <div><dt>Hunger</dt><dd id="detail-hunger">—</dd></div>
                   <div><dt>Coordinates</dt><dd id="detail-coordinates">—</dd></div>
@@ -130,7 +148,7 @@
       <form id="account-form" method="dialog">
         <header class="dialog-header">
           <div><div class="eyebrow">Connection profile</div><h2 id="dialog-title">Add account</h2></div>
-          <button class="icon-button" value="cancel" formnovalidate aria-label="Close">×</button>
+          <button class="icon-button" type="button" data-close-account aria-label="Close account editor">×</button>
         </header>
         <input id="account-id" type="hidden" />
         <div class="form-grid">
@@ -164,9 +182,25 @@
           <label class="toggle-row full">
             <input id="anti-afk" type="checkbox" checked />
             <span class="toggle" aria-hidden="true"></span>
-            <span><strong>Enable anti-AFK</strong><small>Occasionally jumps and turns to keep the connection active.</small></span>
+            <span><strong>Enable anti-AFK</strong><small>Randomly picks one selected action at a randomized interval.</small></span>
           </label>
-          <label class="field full"><span>Anti-AFK interval (seconds)</span><input id="anti-afk-interval" type="number" min="15" max="3600" value="45" /></label>
+          <div class="action-grid full" role="group" aria-label="Anti-AFK actions">
+            <label class="check-row"><input id="anti-afk-jump" type="checkbox" checked /> Jump</label>
+            <label class="check-row"><input id="anti-afk-look" type="checkbox" checked /> Look around</label>
+            <label class="check-row"><input id="anti-afk-sneak" type="checkbox" /> Sneak</label>
+            <label class="check-row"><input id="anti-afk-swing" type="checkbox" /> Swing arm</label>
+            <label class="check-row"><input id="anti-afk-walk" type="checkbox" /> Short walk</label>
+          </div>
+          <label class="field"><span>Minimum delay (seconds)</span><input id="anti-afk-min-delay" type="number" min="2" max="3600" value="45" /></label>
+          <label class="field"><span>Maximum delay (seconds)</span><input id="anti-afk-max-delay" type="number" min="2" max="3600" value="45" /></label>
+          <label class="field"><span>Action duration (seconds)</span><input id="anti-afk-duration" type="number" min="0.1" max="10" step="0.05" value="0.25" /></label>
+          <label class="field"><span>Look angle (degrees)</span><input id="anti-afk-look-degrees" type="number" min="5" max="180" value="12" /></label>
+          <label class="field full"><span>Maximum walking distance (blocks)</span><input id="anti-afk-walk-distance" type="number" min="0.1" max="8" step="0.1" value="0.5" /><small>Short walking alternates forward and backward and is off by default.</small></label>
+          <label class="toggle-row full">
+            <input id="environmental-movement" type="checkbox" checked />
+            <span class="toggle" aria-hidden="true"></span>
+            <span><strong>Allow environmental movement</strong><small>Water, knockback, explosions, and nearby players or mobs can move the account. Manual controls still work when this is off.</small></span>
+          </label>
           <label class="toggle-row full">
             <input id="auto-reconnect" type="checkbox" checked />
             <span class="toggle" aria-hidden="true"></span>
@@ -185,13 +219,13 @@
           </div>
           <label class="field full"><span>On server join</span><textarea id="join-message" maxlength="256" rows="2" placeholder="Example: /login password or Hello!"></textarea></label>
           <label class="field full"><span>On server/world change</span><textarea id="server-change-message" maxlength="256" rows="2" placeholder="Example: /server survival"></textarea></label>
-          <label class="field full"><span>Wait before sending (seconds)</span><input id="message-delay" type="number" min="0" max="30" value="5" /></label>
+          <label class="field full"><span>Wait after the server is ready (seconds)</span><input id="message-delay" type="number" min="0" max="30" value="6" /><small>Applies to automatic join and server/world-change messages.</small></label>
         </div>
         <p id="form-error" class="form-error" role="alert" hidden></p>
         <footer class="dialog-footer">
           <button id="delete-account" class="button danger" type="button" hidden>Delete</button>
           <span class="footer-spacer"></span>
-          <button class="button secondary" value="cancel" formnovalidate>Cancel</button>
+          <button class="button secondary" type="button" data-close-account>Cancel</button>
           <button id="save-account" class="button primary" type="submit">Save account</button>
         </footer>
       </form>
@@ -222,6 +256,13 @@
             <span class="toggle" aria-hidden="true"></span>
             <span><strong>Start AFK Desk when Windows signs in</strong><small>Accounts with “Connect when AFK Desk starts” enabled will then join automatically.</small></span>
           </label>
+          <label class="toggle-row">
+            <input id="stagger-startup-connections" type="checkbox" checked />
+            <span class="toggle" aria-hidden="true"></span>
+            <span><strong>Stagger startup account logins</strong><small>Connect startup accounts one at a time to reduce network and authentication spikes.</small></span>
+          </label>
+          <label class="field settings-delay"><span>Delay between accounts (seconds)</span><input id="startup-connection-delay" type="number" min="1" max="300" value="3" /></label>
+          <label class="field settings-delay"><span>Interface scale</span><input id="ui-scale" type="range" min="75" max="125" step="5" value="100" /><small><output id="ui-scale-value" for="ui-scale">100%</output> — smaller values fit more controls on screen.</small></label>
         </div>
         <footer class="dialog-footer">
           <span class="footer-spacer"></span>
