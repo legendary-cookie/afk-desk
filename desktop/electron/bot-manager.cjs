@@ -93,7 +93,13 @@ class BotManager {
       depositing: false,
       joinMessageSent: false,
       nearestChest: null,
-      fluidMotion: { status: account.environmentalMovement === false ? 'disabled' : 'checking' },
+      fluidMotion: {
+        status: account.environmentalMovement === false ? 'disabled' : 'checking',
+        serverCorrections: 0,
+        stalledCorrections: 0,
+        recoveryAttempt: 0,
+        progressEpoch: 0
+      },
       pendingServerPosition: null,
       lastMovementDiagnosticAt: 0,
       identityKey: '',
@@ -217,7 +223,7 @@ class BotManager {
       const wasReady = session.ready
       markReady()
       if (wasReady && ['flowing', 'fallback'].includes(session.fluidMotion.status)) {
-        session.fluidMotion.serverCorrections = (session.fluidMotion.serverCorrections || 0) + 1
+        recordFluidCorrection(session.fluidMotion, session.pendingServerPosition?.serverPosition)
       }
       if (wasReady && session.account.environmentalMovement !== false) {
         this.emitMovementDiagnostic(account.id, session)
@@ -588,26 +594,40 @@ class BotManager {
   assistRejectedFluidCurrent(session) {
     const motion = session?.fluidMotion
     const bot = session?.bot
-    if (!motion || !bot?.entity || (motion.serverCorrections || 0) < 3) return
+    if (!motion || !bot?.entity || (motion.stalledCorrections || 0) < 3) return
     if (session.fluidAssistTimer) {
-      if (motion.headSubmerged || !session.fluidAssistControls.includes('jump')) return
-      this.stopFluidAssist(session)
+      const jumpActive = session.fluidAssistControls.includes('jump')
+      if (motion.headSubmerged && !jumpActive) {
+        session.fluidAssistControls.push('jump')
+        bot.setControlState('jump', true)
+      } else if (!motion.headSubmerged && jumpActive && (motion.recoveryAttempt || 0) < 2) {
+        session.fluidAssistControls = session.fluidAssistControls.filter((control) => control !== 'jump')
+        bot.setControlState('jump', false)
+      }
+      return
     }
     if (Date.now() < (motion.nextAssistAt || 0)) return
-    const controls = fluidControlsForCurrent(bot.entity.yaw, motion.currentX, motion.currentZ)
-    if (motion.headSubmerged && !controls.includes('jump')) controls.push('jump')
+    const attempt = Math.floor(Math.max(0, (Number(motion.stalledCorrections) || 0) - 3) / 20) % 4
+    motion.recoveryAttempt = attempt
+    const controls = fluidControlsForRecovery(bot.entity.yaw, motion.currentX, motion.currentZ, attempt)
+    if ((motion.headSubmerged || attempt >= 2) && !controls.includes('jump')) controls.push('jump')
     if (controls.length === 0) return
+    const progressEpoch = Math.max(0, Number(motion.progressEpoch) || 0)
     session.fluidAssistControls = controls
     motion.assisting = true
     motion.status = 'fallback'
     for (const control of controls) bot.setControlState(control, true)
-    const assistDuration = motion.headSubmerged ? 5000 : 150
+    const sustainedAssist = motion.headSubmerged || bot.entity.isCollidedHorizontally === true
+    const assistDuration = attempt > 0 ? 2500 : sustainedAssist ? 5000 : 150
     session.fluidAssistTimer = this.scheduleAntiAfkTimer(() => {
       session.fluidAssistTimer = null
       if (this.sessions.get(session.account.id) !== session) return
       for (const control of session.fluidAssistControls) bot.setControlState(control, false)
       session.fluidAssistControls = []
       motion.assisting = false
+      motion.recoveryAttempt = motion.progressEpoch === progressEpoch
+        ? Math.floor(Math.max(0, (Number(motion.stalledCorrections) || 0) - 3) / 20) % 4
+        : 0
       motion.nextAssistAt = Date.now() + (motion.headSubmerged ? 600 : 850)
       if (motion.status === 'fallback') motion.status = 'flowing'
     }, assistDuration)
@@ -968,9 +988,14 @@ function resetFluidMotion(state, status = 'dry') {
   delete state.waterLayers
   delete state.headSubmerged
   delete state.mineflayerInWater
+  delete state.lastServerPosition
   state.stagnantTicks = 0
   state.forcing = false
   state.assisting = false
+  state.serverCorrections = 0
+  state.stalledCorrections = 0
+  state.recoveryAttempt = 0
+  state.progressEpoch = 0
   state.status = status
 }
 
@@ -983,6 +1008,39 @@ function fluidControlsForCurrent(yaw, currentX, currentZ) {
   const strafe = x * Math.cos(angle) - z * Math.sin(angle)
   if (Math.abs(forward) >= Math.abs(strafe)) return [forward >= 0 ? 'forward' : 'back']
   return [strafe >= 0 ? 'right' : 'left']
+}
+
+function fluidControlsForRecovery(yaw, currentX, currentZ, attempt = 0) {
+  const [primary] = fluidControlsForCurrent(yaw, currentX, currentZ)
+  if (!primary) return []
+  const choices = {
+    forward: ['forward', 'left', 'right', 'back'],
+    back: ['back', 'right', 'left', 'forward'],
+    left: ['left', 'back', 'forward', 'right'],
+    right: ['right', 'forward', 'back', 'left']
+  }[primary]
+  return [choices[Math.max(0, Number(attempt) || 0) % choices.length]]
+}
+
+function recordFluidCorrection(state, serverPosition) {
+  if (!state) return
+  state.serverCorrections = (state.serverCorrections || 0) + 1
+  const position = vectorSnapshot(serverPosition)
+  if (!position) {
+    state.stalledCorrections = (state.stalledCorrections || 0) + 1
+    return
+  }
+  const previous = state.lastServerPosition
+  const progressed = previous && Math.hypot(position.x - previous.x, position.y - previous.y, position.z - previous.z) >= 0.2
+  state.lastServerPosition = position
+  if (progressed) {
+    state.stalledCorrections = 1
+    state.recoveryAttempt = 0
+    state.nextAssistAt = 0
+    state.progressEpoch = (state.progressEpoch || 0) + 1
+  } else {
+    state.stalledCorrections = (state.stalledCorrections || 0) + 1
+  }
 }
 
 function waterDepth(block) {
@@ -1015,7 +1073,9 @@ function buildTelemetry(bot, nearestChest = null, environmentalMovement, fluidMo
       : null,
       fallbackActive: fluidMotion?.assisting === true,
     mineflayerInWater: fluidMotion?.mineflayerInWater === true,
-    serverCorrections: Math.max(0, Number(fluidMotion?.serverCorrections) || 0)
+    serverCorrections: Math.max(0, Number(fluidMotion?.serverCorrections) || 0),
+    stalledCorrections: Math.max(0, Number(fluidMotion?.stalledCorrections) || 0),
+    recoveryAttempt: Math.max(0, Number(fluidMotion?.recoveryAttempt) || 0)
   }
   return {
     health: Math.max(0, Math.min(finite(bot?.health), 20)),
@@ -1033,4 +1093,4 @@ function buildTelemetry(bot, nearestChest = null, environmentalMovement, fluidMo
   }
 }
 
-module.exports = { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, normalizeSkinUrl, findNearestChest, buildTelemetry, describeNetworkError, reconnectDelaySeconds, normalizeAntiAfkSettings, inspectFluidCurrent, fluidControlsForCurrent, installMovementPacketCompatibility, installModernPlayerInputCompatibility }
+module.exports = { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, normalizeSkinUrl, findNearestChest, buildTelemetry, describeNetworkError, reconnectDelaySeconds, normalizeAntiAfkSettings, inspectFluidCurrent, fluidControlsForCurrent, fluidControlsForRecovery, recordFluidCorrection, installMovementPacketCompatibility, installModernPlayerInputCompatibility }
