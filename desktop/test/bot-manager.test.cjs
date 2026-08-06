@@ -786,6 +786,12 @@ test('installed Mineflayer closes modern client ticks and sends complete input s
   assert.match(source, /sprint: controlState\.sprint/)
 })
 
+test('installed Mineflayer samples time more often than a physics tick on Windows', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'node_modules', 'mineflayer', 'lib', 'plugins', 'physics.js'), 'utf8')
+  assert.match(source, /const PHYSICS_SCHEDULER_INTERVAL_MS = 10/)
+  assert.match(source, /setInterval\(doPhysics, PHYSICS_SCHEDULER_INTERVAL_MS\)/)
+})
+
 test('movement corrections emit structured packet diagnostics without account credentials', (t) => {
   const diagnostics = []
   const bot = new FakeBot()
