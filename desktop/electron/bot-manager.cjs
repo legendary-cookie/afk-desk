@@ -87,6 +87,7 @@ class BotManager {
       fluidAssistControls: [],
       antiAfkActionTimers: new Set(),
       messageTimers: new Set(),
+      automaticServerSwitches: new Set(),
       ready: false,
       switching: false,
       depositing: false,
@@ -403,6 +404,9 @@ class BotManager {
   scheduleMessage(id, message, delaySeconds = 2) {
     const session = this.sessions.get(id)
     if (!session) return
+    const automaticSwitch = automaticServerSwitchKey(message)
+    if (automaticSwitch && session.automaticServerSwitches.has(automaticSwitch)) return
+    if (automaticSwitch) session.automaticServerSwitches.add(automaticSwitch)
     const delay = Math.max(0, Math.min(Number(delaySeconds) || 0, 30)) * 1000
     const timer = setTimeout(() => {
       session.messageTimers.delete(timer)
@@ -457,6 +461,7 @@ class BotManager {
       flow: Number.isFinite(session.fluidMotion?.currentX) && Number.isFinite(session.fluidMotion?.currentZ)
         ? { x: roundDiagnostic(session.fluidMotion.currentX), z: roundDiagnostic(session.fluidMotion.currentZ) }
         : null,
+      headSubmerged: session.fluidMotion?.headSubmerged === true,
       correctionCount: Math.max(0, Number(session.fluidMotion?.serverCorrections) || 0)
     }
     if (!session.movementBlocksCaptured && clientPosition && entry.flow) {
@@ -583,23 +588,29 @@ class BotManager {
   assistRejectedFluidCurrent(session) {
     const motion = session?.fluidMotion
     const bot = session?.bot
-    if (!motion || !bot?.entity || (motion.serverCorrections || 0) < 3 || session.fluidAssistTimer) return
+    if (!motion || !bot?.entity || (motion.serverCorrections || 0) < 3) return
+    if (session.fluidAssistTimer) {
+      if (motion.headSubmerged || !session.fluidAssistControls.includes('jump')) return
+      this.stopFluidAssist(session)
+    }
     if (Date.now() < (motion.nextAssistAt || 0)) return
     const controls = fluidControlsForCurrent(bot.entity.yaw, motion.currentX, motion.currentZ)
+    if (motion.headSubmerged && !controls.includes('jump')) controls.push('jump')
     if (controls.length === 0) return
     session.fluidAssistControls = controls
     motion.assisting = true
     motion.status = 'fallback'
     for (const control of controls) bot.setControlState(control, true)
+    const assistDuration = motion.headSubmerged ? 5000 : 150
     session.fluidAssistTimer = this.scheduleAntiAfkTimer(() => {
       session.fluidAssistTimer = null
       if (this.sessions.get(session.account.id) !== session) return
       for (const control of session.fluidAssistControls) bot.setControlState(control, false)
       session.fluidAssistControls = []
       motion.assisting = false
-      motion.nextAssistAt = Date.now() + 850
+      motion.nextAssistAt = Date.now() + (motion.headSubmerged ? 600 : 850)
       if (motion.status === 'fallback') motion.status = 'flowing'
-    }, 150)
+    }, assistDuration)
   }
 
   stopFluidAssist(session) {
@@ -821,6 +832,11 @@ function clampNumber(value, minimum, maximum, fallback) {
   return Number.isFinite(number) ? Math.max(minimum, Math.min(number, maximum)) : fallback
 }
 
+function automaticServerSwitchKey(message) {
+  const normalized = String(message || '').trim().replace(/\s+/g, ' ').toLowerCase()
+  return /^\/server(?:\s|$)/.test(normalized) ? normalized : ''
+}
+
 function inspectFluidCurrent(bot, motionState = null) {
   const player = bot?.entity
   if (!player?.position?.floored || typeof bot.blockAt !== 'function') {
@@ -835,7 +851,11 @@ function inspectFluidCurrent(bot, motionState = null) {
     }
     if (!current.hasCurrent) {
       resetFluidMotion(motionState, 'still')
-      if (motionState) motionState.waterBlocks = current.waterBlocks
+      if (motionState) {
+        motionState.waterBlocks = current.waterBlocks
+        motionState.waterLayers = current.waterLayers
+        motionState.headSubmerged = current.headSubmerged
+      }
       return false
     }
     const { x: directionX, z: directionZ } = current
@@ -843,6 +863,8 @@ function inspectFluidCurrent(bot, motionState = null) {
     if (motionState) {
       motionState.status = motionState.assisting ? 'fallback' : 'flowing'
       motionState.waterBlocks = current.waterBlocks
+      motionState.waterLayers = current.waterLayers
+      motionState.headSubmerged = current.headSubmerged
       motionState.currentX = directionX
       motionState.currentZ = directionZ
       motionState.mineflayerInWater = player.isInWater === true
@@ -873,6 +895,7 @@ function fluidCurrentAtPlayer(bot, position) {
   let flowX = 0
   let flowZ = 0
   let waterBlocks = 0
+  const waterLayers = new Set()
   const cursor = position.floored()
   const minX = Math.floor(position.x - 0.299)
   const maxX = Math.floor(position.x + 0.299)
@@ -890,6 +913,7 @@ function fluidCurrentAtPlayer(bot, position) {
         const water = bot.blockAt(cursor, false)
         if (waterDepth(water) < 0) continue
         waterBlocks++
+        waterLayers.add(y)
         const blockFlow = fluidCurrentAtBlock(bot, water)
         flowX += blockFlow.x
         flowZ += blockFlow.z
@@ -899,9 +923,14 @@ function fluidCurrentAtPlayer(bot, position) {
 
   if (waterBlocks === 0) return null
   const length = Math.hypot(flowX, flowZ)
+  const details = {
+    waterBlocks,
+    waterLayers: waterLayers.size,
+    headSubmerged: [...waterLayers].some((y) => y > Math.floor(position.y))
+  }
   return length > 0.001
-    ? { x: flowX / length, z: flowZ / length, waterBlocks, hasCurrent: true }
-    : { x: 0, z: 0, waterBlocks, hasCurrent: false }
+    ? { x: flowX / length, z: flowZ / length, ...details, hasCurrent: true }
+    : { x: 0, z: 0, ...details, hasCurrent: false }
 }
 
 function fluidCurrentAtBlock(bot, water) {
@@ -936,6 +965,8 @@ function resetFluidMotion(state, status = 'dry') {
   delete state.currentX
   delete state.currentZ
   delete state.waterBlocks
+  delete state.waterLayers
+  delete state.headSubmerged
   delete state.mineflayerInWater
   state.stagnantTicks = 0
   state.forcing = false

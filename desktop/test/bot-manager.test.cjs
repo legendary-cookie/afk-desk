@@ -90,6 +90,23 @@ test('sends separate join and server-change messages', async () => {
   manager.disconnect('messages')
 })
 
+test('does not resend the same automatic server switch after its resulting respawn', async (t) => {
+  const bot = new FakeBot()
+  const manager = new BotManager({ profilesPath: 'profiles', emit: () => {}, createBot: () => bot })
+  manager.connect({
+    id: 'one-switch', username: 'user@example.com', host: 'localhost', port: 25565,
+    antiAfk: false, autoReconnect: false, joinMessage: '/server towny', serverChangeMessage: '/server towny', messageDelay: 0
+  })
+  t.after(() => manager.disconnect('one-switch'))
+  bot.entity = { yaw: 0, pitch: 0 }
+  bot.emit('spawn')
+  await new Promise((resolve) => setTimeout(resolve, 5))
+  bot.emit('respawn')
+  await new Promise((resolve) => setTimeout(resolve, 5))
+
+  assert.deepEqual(bot.writes, [['chat_command', { command: 'server towny' }]])
+})
+
 test('live chat marks a session online and a late login event cannot downgrade it', () => {
   const events = []
   const bot = new FakeBot()
@@ -500,6 +517,7 @@ test('uses a brief normal input pulse after repeated server water corrections', 
     const x = Math.floor(position.x)
     const y = Math.floor(position.y)
     const z = Math.floor(position.z)
+    if (y !== 64) return { name: 'stone', metadata: 0, position: new Vec3(x, y, z), boundingBox: 'block' }
     const metadata = x === 1 && y === 64 && z === 0 ? 2 : 1
     return { name: 'water', metadata, position: new Vec3(x, y, z), boundingBox: 'empty' }
   }
@@ -511,6 +529,40 @@ test('uses a brief normal input pulse after repeated server water corrections', 
   assert.equal(timers.at(-1).delay, 150)
   timers.at(-1).callback()
   assert.deepEqual(bot.controls.at(-1), ['right', false])
+})
+
+test('adds upward swim input when flowing water reaches the upper player layer', (t) => {
+  const bot = new FakeBot()
+  const timers = []
+  const manager = new BotManager({
+    profilesPath: 'profiles', emit: () => {}, createBot: () => bot,
+    scheduleAntiAfkTimer: (callback, delay) => { timers.push({ callback, delay }); return `head-water-${timers.length}` },
+    clearAntiAfkTimer: () => {}
+  })
+  manager.connect({ id: 'head-water', username: 'user@example.com', host: 'localhost', antiAfk: false, autoReconnect: false, environmentalMovement: true })
+  t.after(() => manager.disconnect('head-water'))
+  bot.entity = { yaw: 0, position: new Vec3(0.5, 64, 0.5), velocity: new Vec3(0, 0, 0), isInWater: true, isCollidedHorizontally: true }
+  let upperLayerWater = true
+  bot.blockAt = (position) => {
+    const x = Math.floor(position.x)
+    const y = Math.floor(position.y)
+    const z = Math.floor(position.z)
+    if (y === 65 && !upperLayerWater) return { name: 'stone', metadata: 0, position: new Vec3(x, y, z), boundingBox: 'block' }
+    if (![64, 65].includes(y) || z !== 0 || ![0, 1].includes(x)) return { name: 'stone', metadata: 0, position: new Vec3(x, y, z), boundingBox: 'block' }
+    return { name: 'water', metadata: x === 1 ? 2 : 1, position: new Vec3(x, y, z), boundingBox: 'empty' }
+  }
+  manager.sessions.get('head-water').fluidMotion.serverCorrections = 3
+
+  bot.emit('physicsTick')
+
+  assert.deepEqual(bot.controls.slice(-2), [['right', true], ['jump', true]])
+  assert.equal(timers.at(-1).delay, 5000)
+
+  upperLayerWater = false
+  bot.emit('physicsTick')
+
+  assert.equal(bot.controls.some(([control, enabled]) => control === 'jump' && enabled === false), true)
+  assert.equal(timers.at(-1).delay, 150)
 })
 
 test('modern movement packets report the collision state calculated by physics', () => {
