@@ -19,6 +19,10 @@ const WATER_NAMES = new Set(['water', 'flowing_water'])
 const WATERLIKE_NAMES = new Set(['bubble_column', 'seagrass', 'tall_seagrass', 'kelp', 'kelp_plant'])
 const FLOW_DIRECTIONS = [[0, 1], [-1, 0], [0, -1], [1, 0]]
 const FLUID_CONTACT_GRACE_MS = 750
+const CORNER_RECOVERY_CONFIRMATIONS = 2
+const CORNER_RECOVERY_STEP_CORRECTIONS = 4
+const CORNER_RECOVERY_PULSE_MS = 800
+const CORNER_RECOVERY_COOLDOWN_MS = 175
 const CHEST_SCAN_INTERVAL = 5000
 const CHEST_MAX_DISTANCE = 5
 class BotManager {
@@ -229,7 +233,7 @@ class BotManager {
       if (session.account.environmentalMovement !== false) {
         const flowing = inspectFluidCurrent(bot, session.fluidMotion)
         const rejectedAtCorner = flowing &&
-          (session.fluidMotion.stalledCorrections || 0) >= 8 &&
+          (session.fluidMotion.stalledCorrections || 0) >= CORNER_RECOVERY_CONFIRMATIONS &&
           bot.entity?.isCollidedHorizontally === true
         if (rejectedAtCorner) this.assistRejectedFluidCurrent(session)
         else if (!flowing) this.stopFluidAssist(session)
@@ -676,10 +680,10 @@ class BotManager {
   assistRejectedFluidCurrent(session) {
     const motion = session?.fluidMotion
     const bot = session?.bot
-    if (!motion || !bot?.entity || (motion.stalledCorrections || 0) < 3) return
+    if (!motion || !bot?.entity || (motion.stalledCorrections || 0) < CORNER_RECOVERY_CONFIRMATIONS) return
     if (session.fluidAssistTimer) return
     if (Date.now() < (motion.nextAssistAt || 0)) return
-    const attempt = Math.floor(Math.max(0, (Number(motion.stalledCorrections) || 0) - 3) / 20) % 4
+    const attempt = fluidRecoveryAttempt(motion.stalledCorrections)
     motion.recoveryAttempt = attempt
     const controls = fluidControlsForRecovery(bot.entity.yaw, motion.currentX, motion.currentZ, attempt)
     if (attempt >= 2 && !controls.includes('jump')) controls.push('jump')
@@ -689,8 +693,6 @@ class BotManager {
     motion.assisting = true
     motion.status = 'fallback'
     for (const control of controls) bot.setControlState(control, true)
-    const sustainedAssist = motion.headSubmerged || bot.entity.isCollidedHorizontally === true
-    const assistDuration = attempt > 0 ? 2500 : sustainedAssist ? 5000 : 150
     session.fluidAssistTimer = this.scheduleAntiAfkTimer(() => {
       session.fluidAssistTimer = null
       if (this.sessions.get(session.account.id) !== session) return
@@ -698,11 +700,11 @@ class BotManager {
       session.fluidAssistControls = []
       motion.assisting = false
       motion.recoveryAttempt = motion.progressEpoch === progressEpoch
-        ? Math.floor(Math.max(0, (Number(motion.stalledCorrections) || 0) - 3) / 20) % 4
+        ? fluidRecoveryAttempt(motion.stalledCorrections)
         : 0
-      motion.nextAssistAt = Date.now() + (motion.headSubmerged ? 600 : 850)
+      motion.nextAssistAt = Date.now() + CORNER_RECOVERY_COOLDOWN_MS
       if (motion.status === 'fallback') motion.status = 'flowing'
-    }, assistDuration)
+    }, CORNER_RECOVERY_PULSE_MS)
   }
 
   stopFluidAssist(session) {
@@ -1109,6 +1111,13 @@ function fluidControlComponents(yaw, currentX, currentZ) {
   return Math.abs(forward) >= Math.abs(strafe)
     ? { primary: longitudinal, secondary: lateral }
     : { primary: lateral, secondary: longitudinal }
+}
+
+function fluidRecoveryAttempt(stalledCorrections) {
+  return Math.floor(
+    Math.max(0, (Number(stalledCorrections) || 0) - CORNER_RECOVERY_CONFIRMATIONS) /
+      CORNER_RECOVERY_STEP_CORRECTIONS
+  ) % 4
 }
 
 function fluidControlsForRecovery(yaw, currentX, currentZ, attempt = 0) {

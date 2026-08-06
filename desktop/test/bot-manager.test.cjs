@@ -679,13 +679,13 @@ test('repeated rejected corner movement triggers a bounded diagonal escape', (t)
     if (y !== 64) return { name: 'stone', metadata: 0, position: new Vec3(x, y, z), boundingBox: 'block' }
     return { name: 'water', metadata: x === 1 && z === 0 ? 2 : 1, position: new Vec3(x, y, z), boundingBox: 'empty' }
   }
-  Object.assign(manager.sessions.get('adaptive-water').fluidMotion, { serverCorrections: 23, stalledCorrections: 23, recoveryAttempt: 0 })
+  Object.assign(manager.sessions.get('adaptive-water').fluidMotion, { serverCorrections: 6, stalledCorrections: 6, recoveryAttempt: 0 })
 
   bot.emit('physicsTick')
 
   assert.equal(bot.controls.filter(([, enabled]) => enabled).length, 2)
   assert.equal(timers.length, 1)
-  assert.equal(timers[0].delay, 2500)
+  assert.equal(timers[0].delay, 800)
 })
 
 test('stopping water assistance tolerates a client destroyed during shutdown', () => {
@@ -729,7 +729,7 @@ test('passive environmental water movement never injects player controls', (t) =
   assert.deepEqual(timers, [])
 })
 
-test('a shallow-water collision does not synthesize movement input', (t) => {
+test('a single shallow-water correction does not synthesize movement input', (t) => {
   const bot = new FakeBot()
   const timers = []
   const manager = new BotManager({
@@ -747,7 +747,7 @@ test('a shallow-water collision does not synthesize movement input', (t) => {
     if (y !== 64) return { name: 'stone', metadata: 0, position: new Vec3(x, y, z), boundingBox: 'block' }
     return { name: 'water', metadata: x === 1 && z === 0 ? 2 : 1, position: new Vec3(x, y, z), boundingBox: 'empty' }
   }
-  Object.assign(manager.sessions.get('blocked-water').fluidMotion, { serverCorrections: 3, stalledCorrections: 3 })
+  Object.assign(manager.sessions.get('blocked-water').fluidMotion, { serverCorrections: 1, stalledCorrections: 1 })
 
   bot.emit('physicsTick')
 
@@ -775,7 +775,7 @@ test('rising head-level water remains passive and input-free', (t) => {
     if (![64, 65].includes(y) || z !== 0 || ![0, 1].includes(x)) return { name: 'stone', metadata: 0, position: new Vec3(x, y, z), boundingBox: 'block' }
     return { name: 'water', metadata: x === 1 ? 2 : 1, position: new Vec3(x, y, z), boundingBox: 'empty' }
   }
-  Object.assign(manager.sessions.get('rising-water').fluidMotion, { serverCorrections: 3, stalledCorrections: 3 })
+  Object.assign(manager.sessions.get('rising-water').fluidMotion, { serverCorrections: 1, stalledCorrections: 1 })
 
   bot.emit('physicsTick')
   assert.deepEqual(bot.controls, [])
@@ -807,13 +807,14 @@ test('late corner corrections add jump after horizontal escapes fail', (t) => {
     if (![64, 65].includes(y) || z !== 0 || ![0, 1].includes(x)) return { name: 'stone', metadata: 0, position: new Vec3(x, y, z), boundingBox: 'block' }
     return { name: 'water', metadata: x === 1 ? 2 : 1, position: new Vec3(x, y, z), boundingBox: 'empty' }
   }
-  Object.assign(manager.sessions.get('head-water').fluidMotion, { serverCorrections: 43, stalledCorrections: 43 })
+  Object.assign(manager.sessions.get('head-water').fluidMotion, { serverCorrections: 10, stalledCorrections: 10 })
 
   bot.emit('physicsTick')
 
   assert.equal(bot.controls.filter(([, enabled]) => enabled).length, 2)
   assert.equal(bot.controls.some(([control, enabled]) => control === 'jump' && enabled), true)
   assert.equal(timers.length, 1)
+  assert.equal(timers[0].delay, 800)
 
   upperLayerWater = false
   bot.emit('physicsTick')
