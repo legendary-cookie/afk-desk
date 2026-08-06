@@ -14,6 +14,7 @@ function installMovementPacketCompatibility(bot) {
       const key = JSON.stringify(payload.inputs)
       if (key === bot.__afkDeskLastPlayerInput) return
       bot.__afkDeskLastPlayerInput = key
+      bot.__afkDeskPacketDiagnostic?.({ event: 'player_input', direction: 'out', inputs: payload.inputs, at: Date.now() })
     }
     if (CONFIGURATION_PACKET_NAMES.has(name)) {
       bot.__afkDeskPacketDiagnostic?.({ event: 'protocol_packet', direction: 'out', name, at: Date.now() })

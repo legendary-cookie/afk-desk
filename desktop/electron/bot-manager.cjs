@@ -18,6 +18,7 @@ const CHEST_NAMES = new Set(['chest', 'trapped_chest'])
 const WATER_NAMES = new Set(['water', 'flowing_water'])
 const WATERLIKE_NAMES = new Set(['bubble_column', 'seagrass', 'tall_seagrass', 'kelp', 'kelp_plant'])
 const FLOW_DIRECTIONS = [[0, 1], [-1, 0], [0, -1], [1, 0]]
+const FLUID_CONTACT_GRACE_MS = 750
 const CHEST_SCAN_INTERVAL = 5000
 const CHEST_MAX_DISTANCE = 5
 class BotManager {
@@ -595,22 +596,11 @@ class BotManager {
     const motion = session?.fluidMotion
     const bot = session?.bot
     if (!motion || !bot?.entity || (motion.stalledCorrections || 0) < 3) return
-    if (session.fluidAssistTimer) {
-      const jumpActive = session.fluidAssistControls.includes('jump')
-      if (motion.headSubmerged && !jumpActive) {
-        session.fluidAssistControls.push('jump')
-        bot.setControlState('jump', true)
-      } else if (!motion.headSubmerged && jumpActive && (motion.recoveryAttempt || 0) < 2) {
-        session.fluidAssistControls = session.fluidAssistControls.filter((control) => control !== 'jump')
-        bot.setControlState('jump', false)
-      }
-      return
-    }
+    if (session.fluidAssistTimer) return
     if (Date.now() < (motion.nextAssistAt || 0)) return
     const attempt = Math.floor(Math.max(0, (Number(motion.stalledCorrections) || 0) - 3) / 20) % 4
     motion.recoveryAttempt = attempt
     const controls = fluidControlsForRecovery(bot.entity.yaw, motion.currentX, motion.currentZ, attempt)
-    if ((motion.headSubmerged || attempt >= 2) && !controls.includes('jump')) controls.push('jump')
     if (controls.length === 0) return
     const progressEpoch = Math.max(0, Number(motion.progressEpoch) || 0)
     session.fluidAssistControls = controls
@@ -866,6 +856,17 @@ function inspectFluidCurrent(bot, motionState = null) {
   try {
     const current = fluidCurrentAtPlayer(bot, player.position)
     if (!current) {
+      const recentlyInFlow = motionState &&
+        (motionState.assisting === true ||
+          (Number.isFinite(motionState.lastFluidAt) && Date.now() - motionState.lastFluidAt <= FLUID_CONTACT_GRACE_MS)) &&
+        Number.isFinite(motionState.currentX) &&
+        Number.isFinite(motionState.currentZ)
+      if (recentlyInFlow) {
+        motionState.status = motionState.assisting ? 'fallback' : 'flowing'
+        motionState.headSubmerged = false
+        motionState.mineflayerInWater = player.isInWater === true
+        return true
+      }
       resetFluidMotion(motionState, 'dry')
       return false
     }
@@ -887,6 +888,7 @@ function inspectFluidCurrent(bot, motionState = null) {
       motionState.headSubmerged = current.headSubmerged
       motionState.currentX = directionX
       motionState.currentZ = directionZ
+      motionState.lastFluidAt = Date.now()
       motionState.mineflayerInWater = player.isInWater === true
       const moved = Number.isFinite(motionState.x)
         ? Math.hypot(player.position.x - motionState.x, player.position.z - motionState.z)
@@ -988,6 +990,7 @@ function resetFluidMotion(state, status = 'dry') {
   delete state.waterLayers
   delete state.headSubmerged
   delete state.mineflayerInWater
+  delete state.lastFluidAt
   delete state.lastServerPosition
   state.stagnantTicks = 0
   state.forcing = false
@@ -1000,25 +1003,34 @@ function resetFluidMotion(state, status = 'dry') {
 }
 
 function fluidControlsForCurrent(yaw, currentX, currentZ) {
+  const components = fluidControlComponents(yaw, currentX, currentZ)
+  return components ? [components.primary] : []
+}
+
+function fluidControlComponents(yaw, currentX, currentZ) {
   const angle = Number(yaw)
   const x = Number(currentX)
   const z = Number(currentZ)
-  if (![angle, x, z].every(Number.isFinite) || Math.hypot(x, z) < 0.001) return []
+  if (![angle, x, z].every(Number.isFinite) || Math.hypot(x, z) < 0.001) return null
   const forward = -x * Math.sin(angle) - z * Math.cos(angle)
   const strafe = x * Math.cos(angle) - z * Math.sin(angle)
-  if (Math.abs(forward) >= Math.abs(strafe)) return [forward >= 0 ? 'forward' : 'back']
-  return [strafe >= 0 ? 'right' : 'left']
+  const longitudinal = forward >= 0 ? 'forward' : 'back'
+  const lateral = strafe >= 0 ? 'right' : 'left'
+  return Math.abs(forward) >= Math.abs(strafe)
+    ? { primary: longitudinal, secondary: lateral }
+    : { primary: lateral, secondary: longitudinal }
 }
 
 function fluidControlsForRecovery(yaw, currentX, currentZ, attempt = 0) {
-  const [primary] = fluidControlsForCurrent(yaw, currentX, currentZ)
-  if (!primary) return []
-  const choices = {
-    forward: [['forward'], ['forward', 'left'], ['forward', 'right'], ['back', 'left']],
-    back: [['back'], ['back', 'right'], ['back', 'left'], ['forward', 'right']],
-    left: [['left'], ['left', 'back'], ['left', 'forward'], ['right', 'back']],
-    right: [['right'], ['right', 'forward'], ['right', 'back'], ['left', 'forward']]
-  }[primary]
+  const components = fluidControlComponents(yaw, currentX, currentZ)
+  if (!components) return []
+  const opposite = { forward: 'back', back: 'forward', left: 'right', right: 'left' }
+  const choices = [
+    [components.primary],
+    [opposite[components.primary], components.secondary],
+    [components.primary, opposite[components.secondary]],
+    [components.primary, components.secondary]
+  ]
   return [...choices[Math.max(0, Number(attempt) || 0) % choices.length]]
 }
 
