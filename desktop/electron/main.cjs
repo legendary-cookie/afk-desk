@@ -95,6 +95,7 @@ function registerIpc() {
   ipcMain.handle('bot:disconnect', (_event, id) => bots.disconnect(id))
   ipcMain.handle('bot:chat', (_event, { id, message }) => bots.sendChat(id, message))
   ipcMain.handle('bot:control', (_event, { id, control, duration }) => bots.control(id, control, duration))
+  ipcMain.handle('bot:control-state', (_event, { id, control, active }) => bots.setControlState(id, control, active))
   ipcMain.handle('bot:look', (_event, { id, direction }) => bots.look(id, direction))
   ipcMain.handle('bot:drop-stack', (_event, { id, slot }) => bots.dropStack(id, slot))
   ipcMain.handle('bot:auto-deposit', async (_event, { id, enabled }) => {

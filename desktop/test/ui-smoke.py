@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 URL = (ROOT / "src" / "index.html").as_uri()
 STUB = r"""
 window.__sent = [];
+window.__controls = [];
 window.__scale = 100;
 window.__settings = { startWithWindows: false, staggerStartupConnections: true, startupConnectionDelay: 3, uiScale: 100, macros: [{ label: 'Town', message: '/server towny' }] };
 window.afkDesk = {
@@ -16,7 +17,7 @@ window.afkDesk = {
   setUiScale: (value) => { window.__scale = value; },
   onBotEvent: (callback) => { setTimeout(() => callback({ type: 'status', id: 'one', payload: { status: 'online', detail: 'Ready', at: Date.now() } }), 0); return () => {}; },
   sendChat: async (_id, message) => { window.__sent.push(message); },
-  reorderAccounts: async () => [], control: async () => {}, look: async () => {},
+  reorderAccounts: async () => [], control: async () => {}, setControlState: async (_id, control, active) => { window.__controls.push([control, active]); }, look: async () => {},
   connect: async () => {}, disconnect: async () => {}, dropStack: async () => {}, setAutoDeposit: async () => {},
   saveAccount: async (value) => value, deleteAccount: async () => {},
   remoteStatus: async () => ({ localUrl: 'http://127.0.0.1', port: 37123 }),
@@ -33,6 +34,14 @@ def run() -> None:
         page.add_init_script(STUB)
         page.goto(URL, wait_until="domcontentloaded")
         page.locator("#dashboard:not([hidden])").wait_for()
+        page.locator("body").click(position={"x": 500, "y": 100})
+        page.keyboard.down("w")
+        page.keyboard.up("w")
+        jump = page.locator('[data-control="jump"]')
+        jump.hover()
+        page.mouse.down()
+        page.mouse.up()
+        assert page.evaluate("window.__controls") == [["forward", True], ["forward", False], ["jump", True], ["jump", False]]
         page.locator("#chat-message").fill("hello history")
         page.locator("#chat-message").press("Enter")
         page.locator("#chat-message").press("ArrowUp")

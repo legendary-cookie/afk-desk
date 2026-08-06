@@ -87,6 +87,8 @@ class BotManager {
       physicsRestoreTimer: null,
       fluidAssistTimer: null,
       fluidAssistControls: [],
+      manualControls: new Set(),
+      manualControlTimers: new Map(),
       antiAfkActionTimers: new Set(),
       messageTimers: new Set(),
       automaticServerSwitches: new Set(),
@@ -338,16 +340,46 @@ class BotManager {
 
   control(id, control, duration = 350) {
     const session = this.sessions.get(id)
+    const holdFor = Math.max(100, Math.min(Number(duration) || 350, 3000))
+    this.setControlState(id, control, true)
+    const timer = this.scheduleAntiAfkTimer(() => {
+      if (this.sessions.get(id) !== session || session.manualControlTimers.get(control) !== timer) return
+      session.manualControlTimers.delete(control)
+      this.setControlState(id, control, false)
+    }, holdFor)
+    session.manualControlTimers.set(control, timer)
+  }
+
+  setControlState(id, control, active) {
+    const session = this.sessions.get(id)
     const bot = this.requireOnline(id)
     const allowed = new Set(['forward', 'back', 'left', 'right', 'jump', 'sprint', 'sneak'])
     if (!allowed.has(control)) throw new Error('Unknown movement control.')
+    if (typeof active !== 'boolean') throw new Error('Movement state must be true or false.')
+
+    const oldTimer = session.manualControlTimers.get(control)
+    if (oldTimer) this.clearAntiAfkTimer(oldTimer)
+    session.manualControlTimers.delete(control)
     this.stopFluidAssist(session)
-    session.fluidMotion.nextAssistAt = Date.now() + Math.max(100, Math.min(Number(duration) || 350, 3000)) + 500
-    this.temporarilyEnablePhysics(session, Math.max(100, Math.min(Number(duration) || 350, 3000)) + 200)
-    bot.setControlState(control, true)
-    setTimeout(() => {
-      if (this.sessions.has(id)) bot.setControlState(control, false)
-    }, Math.max(100, Math.min(Number(duration) || 350, 3000)))
+
+    if (active) {
+      session.manualControls.add(control)
+      session.fluidMotion.nextAssistAt = Number.POSITIVE_INFINITY
+      if (session.physicsRestoreTimer) this.clearAntiAfkTimer(session.physicsRestoreTimer)
+      session.physicsRestoreTimer = null
+      session.bot.physicsEnabled = true
+    } else {
+      session.manualControls.delete(control)
+      if (session.manualControls.size === 0) {
+        session.fluidMotion.nextAssistAt = Date.now() + 750
+        this.temporarilyEnablePhysics(session, 200)
+      }
+    }
+    bot.setControlState(control, active)
+    this.diagnose({
+      event: 'manual_control', accountId: id, control, active,
+      position: vectorSnapshot(bot.entity?.position), velocity: vectorSnapshot(bot.entity?.velocity), at: Date.now()
+    })
   }
 
   look(id, direction) {
@@ -678,6 +710,9 @@ class BotManager {
 
   clearTimers(session) {
     this.stopFluidAssist(session)
+    for (const timer of session.manualControlTimers || []) this.clearAntiAfkTimer(timer[1])
+    session.manualControlTimers?.clear()
+    session.manualControls?.clear()
     if (session.antiAfkTimer) this.clearAntiAfkTimer(session.antiAfkTimer)
     if (session.telemetryTimer) clearInterval(session.telemetryTimer)
     if (session.chestScanTimer) clearInterval(session.chestScanTimer)

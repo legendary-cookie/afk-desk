@@ -424,11 +424,45 @@ test('environmental movement defaults on and can be disabled without breaking ma
   assert.equal(bot.physicsEnabled, false)
   manager.control('physics', 'forward', 350)
   assert.equal(bot.physicsEnabled, true)
-  const restore = timers.find(({ delay }) => delay === 550)
+  const release = timers.find(({ delay }) => delay === 350)
+  assert.ok(release)
+  release.callback()
+  const restore = timers.find(({ delay }) => delay === 200)
   assert.ok(restore)
   restore.callback()
   assert.equal(bot.physicsEnabled, false)
   manager.disconnect('physics')
+})
+
+test('manual movement stays active until release and repeated presses cannot release a newer hold', (t) => {
+  const bot = new FakeBot()
+  const timers = []
+  const manager = new BotManager({
+    profilesPath: 'profiles', emit: () => {}, createBot: () => bot,
+    scheduleAntiAfkTimer: (callback, delay) => {
+      const timer = { callback, delay, cleared: false }
+      timers.push(timer)
+      return timer
+    },
+    clearAntiAfkTimer: (timer) => { timer.cleared = true }
+  })
+  manager.connect({ id: 'held-controls', username: 'user@example.com', host: 'localhost', antiAfk: false, autoReconnect: false })
+  t.after(() => manager.disconnect('held-controls'))
+  bot.entity = { yaw: 0, pitch: 0, position: { x: 0, y: 64, z: 0 }, velocity: { x: 0, y: 0, z: 0 } }
+
+  manager.setControlState('held-controls', 'forward', true)
+  assert.deepEqual(bot.controls.at(-1), ['forward', true])
+  assert.equal(timers.length, 0)
+
+  manager.control('held-controls', 'forward', 350)
+  const oldRelease = timers.at(-1)
+  manager.setControlState('held-controls', 'forward', true)
+  assert.equal(oldRelease.cleared, true)
+  oldRelease.callback()
+  assert.notDeepEqual(bot.controls.at(-1), ['forward', false])
+
+  manager.setControlState('held-controls', 'forward', false)
+  assert.deepEqual(bot.controls.at(-1), ['forward', false])
 })
 
 test('environment diagnostics do not add a second movement simulation after Mineflayer physics', (t) => {

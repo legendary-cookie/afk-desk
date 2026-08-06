@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('afkDesk', {
   disconnect: (id) => ipcRenderer.invoke('bot:disconnect', id),
   sendChat: (id, message) => ipcRenderer.invoke('bot:chat', { id, message }),
   control: (id, control, duration) => ipcRenderer.invoke('bot:control', { id, control, duration }),
+  setControlState: (id, control, active) => ipcRenderer.invoke('bot:control-state', { id, control, active }),
   look: (id, direction) => ipcRenderer.invoke('bot:look', { id, direction }),
   dropStack: (id, slot) => ipcRenderer.invoke('bot:drop-stack', { id, slot }),
   setAutoDeposit: (id, enabled) => ipcRenderer.invoke('bot:auto-deposit', { id, enabled }),

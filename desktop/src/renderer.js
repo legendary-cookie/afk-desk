@@ -1,5 +1,15 @@
 const api = window.afkDesk
 
+const KEY_CONTROLS = {
+  KeyW: 'forward',
+  KeyA: 'left',
+  KeyS: 'back',
+  KeyD: 'right',
+  Space: 'jump'
+}
+
+const activeManualInputs = new Map()
+
 const state = {
   accounts: [],
   selectedId: null,
@@ -70,7 +80,7 @@ function bindEvents() {
     state.logs.set(state.selectedId, [])
     renderConsole()
   })
-  document.querySelectorAll('[data-control]').forEach((button) => button.addEventListener('click', () => run(() => api.control(state.selectedId, button.dataset.control))))
+  bindManualMovement()
   document.querySelectorAll('[data-look]').forEach((button) => button.addEventListener('click', () => run(() => api.look(state.selectedId, button.dataset.look))))
   el['login-code'].addEventListener('click', async () => {
     await navigator.clipboard.writeText(state.login.code)
@@ -138,6 +148,7 @@ function renderAccountList() {
     indicator.setAttribute('aria-label', status)
     button.append(avatar, copy, indicator)
     button.addEventListener('click', () => {
+      releaseAllManualInputs()
       state.selectedId = account.id
       state.selectedInventorySlot = null
       render()
@@ -474,6 +485,67 @@ async function sendChat(event) {
   await sendChatMessage(message)
 }
 
+function bindManualMovement() {
+  document.querySelectorAll('[data-control]').forEach((button) => {
+    button.addEventListener('pointerdown', (event) => {
+      if (button.disabled || event.button !== 0) return
+      event.preventDefault()
+      button.setPointerCapture?.(event.pointerId)
+      pressManualInput(`pointer:${event.pointerId}:${button.dataset.control}`, button.dataset.control, button)
+    })
+    const release = (event) => releaseManualInput(`pointer:${event.pointerId}:${button.dataset.control}`)
+    button.addEventListener('pointerup', release)
+    button.addEventListener('pointercancel', release)
+  })
+  document.addEventListener('keydown', (event) => {
+    const control = KEY_CONTROLS[event.code]
+    if (!control || event.repeat || shouldIgnoreMovementKey(event.target, event.code)) return
+    event.preventDefault()
+    pressManualInput(`key:${event.code}`, control, document.querySelector(`[data-control="${control}"]`))
+  })
+  document.addEventListener('keyup', (event) => {
+    if (!KEY_CONTROLS[event.code]) return
+    releaseManualInput(`key:${event.code}`)
+  })
+  window.addEventListener('blur', releaseAllManualInputs)
+  document.addEventListener('visibilitychange', () => { if (document.hidden) releaseAllManualInputs() })
+}
+
+function shouldIgnoreMovementKey(target, code) {
+  if (!state.selectedId || document.querySelector('dialog[open]')) return true
+  if (target?.closest?.('input, textarea, select, [contenteditable="true"]')) return true
+  return code === 'Space' && Boolean(target?.closest?.('button, a'))
+}
+
+function pressManualInput(source, control, button) {
+  if (activeManualInputs.has(source) || !state.selectedId || getStatus(state.selectedId).status !== 'online') return
+  const input = { accountId: state.selectedId, control, button }
+  activeManualInputs.set(source, input)
+  button?.classList.add('pressed')
+  if ([...activeManualInputs.values()].filter((item) => item.accountId === input.accountId && item.control === control).length > 1) return
+  api.setControlState(input.accountId, control, true).catch((error) => {
+    activeManualInputs.delete(source)
+    button?.classList.remove('pressed')
+    toast(cleanError(error), 'error')
+  })
+}
+
+function releaseManualInput(source) {
+  const input = activeManualInputs.get(source)
+  if (!input) return
+  activeManualInputs.delete(source)
+  input.button?.classList.remove('pressed')
+  const stillHeld = [...activeManualInputs.values()].some((item) => item.accountId === input.accountId && item.control === input.control)
+  if (!stillHeld) api.setControlState(input.accountId, input.control, false).catch(() => {})
+}
+
+function releaseAllManualInputs(accountId = null) {
+  const sources = [...activeManualInputs.entries()]
+    .filter(([, input]) => !accountId || input.accountId === accountId)
+    .map(([source]) => source)
+  for (const source of sources) releaseManualInput(source)
+}
+
 async function sendChatMessage(message) {
   const text = String(message || '').trim().slice(0, 256)
   if (!text || !state.selectedId) return
@@ -588,6 +660,7 @@ async function saveMacros() {
 function handleBotEvent({ type, id, payload }) {
   if (type === 'status') {
     state.statuses.set(id, payload)
+    if (!['online', 'connected'].includes(payload.status)) releaseAllManualInputs(id)
     renderAccountList()
     if (id === state.selectedId) renderStatus(payload)
   }

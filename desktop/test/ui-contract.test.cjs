@@ -80,3 +80,19 @@ test('browser player state shows the closest chest coordinates', () => {
   assert.match(script, /telemetry\?\.nearestChest/)
   assert.match(script, /telemetry\?\.environment/)
 })
+
+test('desktop movement supports held buttons and physical WASD plus Space controls', () => {
+  const script = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer.js'), 'utf8')
+  const preload = fs.readFileSync(path.join(__dirname, '..', 'electron', 'preload.cjs'), 'utf8')
+  const main = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
+
+  assert.match(script, /pointerdown/)
+  assert.match(script, /pointerup/)
+  assert.match(script, /keydown/)
+  assert.match(script, /keyup/)
+  for (const mapping of ["KeyW: 'forward'", "KeyA: 'left'", "KeyS: 'back'", "KeyD: 'right'", "Space: 'jump'"]) {
+    assert.match(script, new RegExp(mapping.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+  }
+  assert.match(preload, /setControlState:.*bot:control-state/)
+  assert.match(main, /bot:control-state.*setControlState/)
+})
