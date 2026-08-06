@@ -967,7 +967,7 @@ function fluidCurrentAtBlock(bot, water) {
       const difference = adjacentDepth - currentDepth
       flowX += dx * difference
       flowZ += dz * difference
-    } else if (adjacent && adjacent.boundingBox === 'empty') {
+    } else if (canFluidSampleBelow(adjacent)) {
       const belowDepth = waterDepth(bot.blockAt(adjacentPosition.offset(0, -1, 0), false))
       if (belowDepth >= 0) {
         const difference = belowDepth - (currentDepth - 8)
@@ -978,6 +978,11 @@ function fluidCurrentAtBlock(bot, water) {
   }
   const length = Math.hypot(flowX, flowZ)
   return length > 0.001 ? { x: flowX / length, z: flowZ / length } : { x: 0, z: 0 }
+}
+
+function canFluidSampleBelow(block) {
+  if (!block || block.boundingBox !== 'empty') return false
+  return block.material === 'default' || block.name === 'cobweb' || block.name === 'bamboo_sapling'
 }
 
 function resetFluidMotion(state, status = 'dry') {

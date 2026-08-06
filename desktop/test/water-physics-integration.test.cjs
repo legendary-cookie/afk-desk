@@ -165,3 +165,56 @@ test('solid walls block fluid from sampling water beneath them', () => {
   assert.ok(Math.abs(bot.entity.position.x - 0.514) < 1e-9, `expected east-only current, got ${bot.entity.position.x}`)
   assert.ok(Math.abs(bot.entity.position.z - 0.5) < 1e-9, `solid south wall leaked current, got ${bot.entity.position.z}`)
 })
+
+test('a zero-collision wall sign still blocks fluid flow from water beneath it', () => {
+  const version = '1.21.1'
+  const registry = minecraftData(version)
+  const Block = prismarineBlock(version)
+  const block = (name, position, level = 0) => {
+    const definition = registry.blocksByName[name]
+    const value = Block.fromStateId(definition.minStateId + level, 0)
+    value.position = position.clone()
+    return value
+  }
+  const world = {
+    getBlock(position) {
+      const point = position.floored()
+      if (point.equals(new Vec3(0, 64, 0))) return block('water', point, 0)
+      if (point.equals(new Vec3(1, 64, 0))) return block('water', point, 1)
+      // State offset 1 is a dry north-facing wall sign. Offset 0 is waterlogged
+      // and would hide the incorrect "look through the sign" branch entirely.
+      if (point.equals(new Vec3(0, 64, 1))) return block('spruce_wall_sign', point, 1)
+      if (point.equals(new Vec3(0, 63, 1))) return block('water', point, 1)
+      return block(point.y < 64 ? 'stone' : 'air', point)
+    }
+  }
+  const bot = {
+    version,
+    registry,
+    inventory: { slots: [] },
+    jumpTicks: 0,
+    jumpQueued: false,
+    fireworkRocketDuration: 0,
+    entity: {
+      position: new Vec3(0.5, 64, 0.5),
+      velocity: new Vec3(0, 0, 0),
+      onGround: false,
+      isInWater: false,
+      isInLava: false,
+      isInWeb: false,
+      isCollidedHorizontally: false,
+      isCollidedVertically: false,
+      elytraFlying: false,
+      yaw: 0,
+      pitch: 0,
+      effects: {},
+      attributes: {}
+    }
+  }
+  const controls = { forward: false, back: false, left: false, right: false, jump: false, sprint: false, sneak: false }
+
+  Physics(registry, world).simulatePlayer(new PlayerState(bot, controls), world).apply(bot)
+
+  assert.ok(Math.abs(bot.entity.position.x - 0.514) < 1e-9, `expected east-only current, got ${bot.entity.position.x}`)
+  assert.ok(Math.abs(bot.entity.position.z - 0.5) < 1e-9, `wall sign leaked current, got ${bot.entity.position.z}`)
+})

@@ -467,6 +467,24 @@ test('fluid diagnostics do not report current through a solid wall', () => {
   assert.ok(Math.abs(motion.currentZ) < 1e-9, `solid wall leaked Z current: ${motion.currentZ}`)
 })
 
+test('fluid diagnostics do not report current through a dry wall sign', () => {
+  const bot = new FakeBot()
+  const motion = {}
+  bot.entity = { position: new Vec3(0.5, 64, 0.5), velocity: new Vec3(0, 0, 0), height: 1.8 }
+  bot.blockAt = (position) => {
+    const point = position.floored()
+    if (point.equals(new Vec3(0, 64, 0))) return { name: 'water', metadata: 0, position: point, boundingBox: 'empty', material: 'default' }
+    if (point.equals(new Vec3(1, 64, 0))) return { name: 'water', metadata: 1, position: point, boundingBox: 'empty', material: 'default' }
+    if (point.equals(new Vec3(0, 64, 1))) return { name: 'spruce_wall_sign', metadata: 1, position: point, boundingBox: 'empty', material: 'mineable/axe', isWaterlogged: false }
+    if (point.equals(new Vec3(0, 63, 1))) return { name: 'water', metadata: 1, position: point, boundingBox: 'empty', material: 'default' }
+    return { name: point.y < 64 ? 'stone' : 'air', metadata: 0, position: point, boundingBox: point.y < 64 ? 'block' : 'empty', material: point.y < 64 ? 'mineable/pickaxe' : 'default' }
+  }
+
+  assert.equal(inspectFluidCurrent(bot, motion), true)
+  assert.ok(Math.abs(motion.currentX - 1) < 1e-9)
+  assert.ok(Math.abs(motion.currentZ) < 1e-9, `wall sign leaked Z current: ${motion.currentZ}`)
+})
+
 test('flowing water intersecting the player bounding box is detected without changing velocity', () => {
   const bot = new FakeBot()
   bot.entity = { position: new Vec3(0.8, 64, 0.5), velocity: new Vec3(0, 0, 0) }

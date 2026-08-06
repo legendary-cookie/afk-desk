@@ -1,17 +1,35 @@
 diff --git a/node_modules/prismarine-physics/index.js b/node_modules/prismarine-physics/index.js
-index d95ce7f..aff1905 100644
+index d95ce7f..0b0432d 100644
 --- a/node_modules/prismarine-physics/index.js
 +++ b/node_modules/prismarine-physics/index.js
-@@ -639,7 +639,7 @@ function Physics (mcData, world) {
+@@ -632,6 +632,17 @@ function Physics (mcData, world) {
+     return meta >= 8 ? 0 : meta
+   }
+ 
++  function canFluidSampleBelow (block) {
++    if (!block || block.boundingBox !== 'empty') return false
++
++    // Minecraft only samples the fluid below when the adjacent block does not
++    // block movement. Prismarine does not expose BlockState.blocksMovement(),
++    // and collision shape alone is too broad: wall signs have no collision but
++    // still block this lookup. Default-material empty blocks cover air and
++    // replaceable plants; retain vanilla's explicit non-solid exceptions too.
++    return block.material === 'default' || block.name === 'cobweb' || block.name === 'bamboo_sapling'
++  }
++
+   function getFlow (world, block) {
+     const curlevel = getRenderedDepth(block)
+     const flow = new Vec3(0, 0, 0)
+@@ -639,7 +650,7 @@ function Physics (mcData, world) {
        const adjBlock = world.getBlock(block.position.offset(dx, 0, dz))
        const adjLevel = getRenderedDepth(adjBlock)
        if (adjLevel < 0) {
 -        if (adjBlock && adjBlock.boundingBox !== 'empty') {
-+        if (adjBlock && adjBlock.boundingBox === 'empty') {
++        if (canFluidSampleBelow(adjBlock)) {
            const adjLevel = getRenderedDepth(world.getBlock(block.position.offset(dx, -1, dz)))
            if (adjLevel >= 0) {
              const f = adjLevel - (curlevel - 8)
-@@ -676,7 +676,7 @@ function Physics (mcData, world) {
+@@ -676,7 +687,7 @@ function Physics (mcData, world) {
            const block = world.getBlock(cursor)
            if (block && (waterIds.includes(block.type) || waterLike.has(block.type) || block.isWaterlogged)) {
              const waterLevel = cursor.y + 1 - getLiquidHeightPcent(block)
@@ -20,7 +38,7 @@ index d95ce7f..aff1905 100644
            }
          }
        }
-@@ -688,17 +688,24 @@ function Physics (mcData, world) {
+@@ -688,17 +699,24 @@ function Physics (mcData, world) {
      const acceleration = new Vec3(0, 0, 0)
      const waterBlocks = getWaterInBB(world, bb)
      const isInWater = waterBlocks.length > 0
@@ -51,7 +69,7 @@ index d95ce7f..aff1905 100644
      return isInWater
    }
  
-@@ -706,7 +713,7 @@ function Physics (mcData, world) {
+@@ -706,7 +724,7 @@ function Physics (mcData, world) {
      const vel = entity.vel
      const pos = entity.pos
  
