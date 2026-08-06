@@ -8,6 +8,8 @@ const state = {
   statuses: new Map(),
   logs: new Map(),
   telemetry: new Map(),
+  chatHistory: new Map(),
+  settings: { uiScale: 100, macros: [] },
   login: { code: '', url: 'https://microsoft.com/link' }
 }
 
@@ -15,17 +17,18 @@ const el = Object.fromEntries([
   'account-list', 'account-count', 'add-account', 'browser-access', 'open-settings', 'settings-dialog', 'close-settings', 'start-with-windows', 'stagger-startup-connections', 'startup-connection-delay', 'save-settings', 'empty-state', 'dashboard', 'account-title',
   'edit-account', 'connection-button', 'status-banner', 'status-name', 'status-detail', 'server-address',
   'detail-username', 'detail-server', 'detail-version', 'detail-antiafk', 'detail-environment', 'detail-water', 'detail-health', 'detail-hunger', 'detail-coordinates', 'detail-chest', 'detail-dimension', 'inventory-count', 'inventory-grid', 'auto-deposit-toggle', 'drop-selected', 'console-log', 'clear-console',
-  'chat-form', 'chat-message', 'account-dialog', 'account-form', 'dialog-title', 'account-id', 'label',
+  'chat-form', 'chat-message', 'macro-pad', 'manage-macros', 'macro-editor', 'macro-rows', 'add-macro', 'cancel-macros', 'save-macros', 'account-dialog', 'account-form', 'dialog-title', 'account-id', 'label',
   'username', 'host', 'port', 'version', 'connect-on-startup', 'proxy-enabled', 'proxy-fields', 'proxy-type', 'proxy-host', 'proxy-port', 'proxy-username', 'proxy-password', 'proxy-password-help', 'proxy-clear-password', 'anti-afk', 'anti-afk-min-delay', 'anti-afk-max-delay', 'anti-afk-duration', 'anti-afk-look-degrees', 'anti-afk-walk-distance', 'anti-afk-jump', 'anti-afk-look', 'anti-afk-sneak', 'anti-afk-swing', 'anti-afk-walk', 'environmental-movement', 'auto-reconnect', 'auto-reconnect-delay', 'auto-reconnect-max', 'auto-deposit-setting', 'join-message', 'server-change-message',
   'message-delay', 'form-error', 'delete-account', 'login-dialog', 'login-code', 'open-login-private', 'open-login',
   'close-login', 'remote-dialog', 'close-remote', 'remote-local-url', 'open-dashboard', 'tailscale-command',
   'enable-tailscale', 'tailscale-result', 'remote-base-url', 'grant-label', 'grant-accounts', 'create-grant', 'generated-link', 'share-link',
-  'copy-share-link', 'grant-list', 'toast-region'
+  'copy-share-link', 'grant-list', 'ui-scale', 'ui-scale-value', 'toast-region'
 ].map((id) => [id, document.getElementById(id)]))
 
 async function init() {
-  state.accounts = await api.listAccounts()
+  ;[state.accounts, state.settings] = await Promise.all([api.listAccounts(), api.getSettings()])
   state.selectedId = state.accounts[0]?.id || null
+  applyUiScale(state.settings.uiScale)
   bindEvents()
   render()
   api.onBotEvent(handleBotEvent)
@@ -35,7 +38,10 @@ function bindEvents() {
   el['add-account'].addEventListener('click', () => openAccountDialog())
   el['browser-access'].addEventListener('click', openRemoteDialog)
   el['open-settings'].addEventListener('click', openSettingsDialog)
-  el['close-settings'].addEventListener('click', () => el['settings-dialog'].close())
+  el['close-settings'].addEventListener('click', () => {
+    applyUiScale(state.settings.uiScale)
+    el['settings-dialog'].close()
+  })
   el['save-settings'].addEventListener('click', saveSettings)
   el['stagger-startup-connections'].addEventListener('change', syncStartupDelay)
   document.querySelector('[data-action="add"]').addEventListener('click', () => openAccountDialog())
@@ -51,6 +57,15 @@ function bindEvents() {
     el['proxy-port'].value = el['proxy-type'].value === 'http' ? 8080 : 1080
   })
   el['chat-form'].addEventListener('submit', sendChat)
+  el['chat-message'].addEventListener('keydown', navigateChatHistory)
+  el['manage-macros'].addEventListener('click', () => el['macro-editor'].hidden ? openMacroEditor() : closeMacroEditor())
+  el['add-macro'].addEventListener('click', () => addMacroRow())
+  el['cancel-macros'].addEventListener('click', closeMacroEditor)
+  el['save-macros'].addEventListener('click', saveMacros)
+  el['ui-scale'].addEventListener('input', () => {
+    el['ui-scale-value'].textContent = `${el['ui-scale'].value}%`
+    applyUiScale(el['ui-scale'].value)
+  })
   el['clear-console'].addEventListener('click', () => {
     state.logs.set(state.selectedId, [])
     renderConsole()
@@ -94,6 +109,7 @@ function render() {
   el['auto-deposit-toggle'].checked = account.autoDepositToChest === true
   renderStatus(status)
   renderConsole()
+  renderMacroPad()
   renderTelemetry()
 }
 
@@ -220,6 +236,7 @@ function renderStatus({ status, detail }) {
   el['connection-button'].className = `button ${active ? 'secondary' : 'primary'}`
   el['chat-message'].disabled = !canInteract
   el['chat-form'].querySelector('button').disabled = !canInteract
+  renderMacroPad(canInteract)
   document.querySelectorAll('[data-control], [data-look]').forEach((button) => { button.disabled = !canInteract })
   updateInventoryActions(canInteract)
 }
@@ -454,8 +471,118 @@ async function sendChat(event) {
   event.preventDefault()
   const message = el['chat-message'].value.trim()
   if (!message) return
-  await run(() => api.sendChat(state.selectedId, message))
-  el['chat-message'].value = ''
+  await sendChatMessage(message)
+}
+
+async function sendChatMessage(message) {
+  const text = String(message || '').trim().slice(0, 256)
+  if (!text || !state.selectedId) return
+  rememberChatMessage(state.selectedId, text)
+  try {
+    await api.sendChat(state.selectedId, text)
+    el['chat-message'].value = ''
+  } catch (error) { toast(cleanError(error), 'error') }
+}
+
+function rememberChatMessage(accountId, message) {
+  const history = state.chatHistory.get(accountId) || { entries: [], index: 0, draft: '' }
+  if (history.entries.at(-1) !== message) history.entries = [...history.entries.slice(-99), message]
+  history.index = history.entries.length
+  history.draft = ''
+  state.chatHistory.set(accountId, history)
+}
+
+function navigateChatHistory(event) {
+  if (!['ArrowUp', 'ArrowDown'].includes(event.key) || !state.selectedId) return
+  const history = state.chatHistory.get(state.selectedId)
+  if (!history?.entries.length) return
+  event.preventDefault()
+  if (event.key === 'ArrowUp') {
+    if (history.index >= history.entries.length) history.draft = el['chat-message'].value
+    history.index = Math.max(0, history.index - 1)
+    el['chat-message'].value = history.entries[history.index]
+  } else if (history.index < history.entries.length - 1) {
+    history.index += 1
+    el['chat-message'].value = history.entries[history.index]
+  } else {
+    history.index = history.entries.length
+    el['chat-message'].value = history.draft
+  }
+  el['chat-message'].setSelectionRange(el['chat-message'].value.length, el['chat-message'].value.length)
+}
+
+function renderMacroPad(canInteract = ['online', 'connected'].includes(getStatus(state.selectedId).status)) {
+  const macros = state.settings.macros || []
+  if (!macros.length) {
+    const empty = document.createElement('span')
+    empty.className = 'macro-empty'
+    empty.textContent = 'No macros yet. Choose Edit to add one.'
+    el['macro-pad'].replaceChildren(empty)
+    return
+  }
+  el['macro-pad'].replaceChildren(...macros.map((macro) => {
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.className = 'macro-button'
+    button.textContent = macro.label
+    button.title = macro.message
+    button.disabled = !canInteract
+    button.addEventListener('click', () => sendChatMessage(macro.message))
+    return button
+  }))
+}
+
+function openMacroEditor() {
+  el['macro-rows'].replaceChildren()
+  for (const macro of state.settings.macros || []) addMacroRow(macro)
+  el['macro-editor'].hidden = false
+  el['manage-macros'].setAttribute('aria-expanded', 'true')
+  if (!state.settings.macros?.length) addMacroRow()
+  el['macro-rows'].querySelector('input')?.focus()
+}
+
+function closeMacroEditor() {
+  el['macro-editor'].hidden = true
+  el['manage-macros'].setAttribute('aria-expanded', 'false')
+}
+
+function addMacroRow(macro = {}) {
+  const row = document.createElement('div')
+  row.className = 'macro-row'
+  const label = document.createElement('input')
+  label.className = 'macro-label-input'
+  label.maxLength = 40
+  label.placeholder = 'Button label'
+  label.setAttribute('aria-label', 'Macro button label')
+  label.value = macro.label || ''
+  const message = document.createElement('input')
+  message.className = 'macro-message-input'
+  message.maxLength = 256
+  message.placeholder = 'Message or /command'
+  message.setAttribute('aria-label', 'Macro message or command')
+  message.value = macro.message || ''
+  const remove = document.createElement('button')
+  remove.type = 'button'
+  remove.className = 'icon-button macro-remove'
+  remove.textContent = '×'
+  remove.setAttribute('aria-label', 'Delete macro')
+  remove.addEventListener('click', () => row.remove())
+  row.append(label, message, remove)
+  el['macro-rows'].append(row)
+  message.focus()
+}
+
+async function saveMacros() {
+  const macros = [...el['macro-rows'].querySelectorAll('.macro-row')].map((row) => ({
+    label: row.querySelector('.macro-label-input').value,
+    message: row.querySelector('.macro-message-input').value
+  })).filter((macro) => macro.message.trim())
+  try {
+    state.settings = await api.saveSettings({ ...state.settings, macros })
+    closeMacroEditor()
+    renderMacroPad()
+    toast('Macro pad saved.')
+  } catch (error) { toast(cleanError(error), 'error') }
 }
 
 function handleBotEvent({ type, id, payload }) {
@@ -528,9 +655,12 @@ function renderGrantAccounts() {
 async function openSettingsDialog() {
   try {
     const settings = await api.getSettings()
+    state.settings = settings
     el['start-with-windows'].checked = settings.startWithWindows === true
     el['stagger-startup-connections'].checked = settings.staggerStartupConnections !== false
     el['startup-connection-delay'].value = settings.startupConnectionDelay || 3
+    el['ui-scale'].value = settings.uiScale || 100
+    el['ui-scale-value'].textContent = `${el['ui-scale'].value}%`
     syncStartupDelay()
     el['settings-dialog'].showModal()
   } catch (error) { toast(cleanError(error), 'error') }
@@ -538,14 +668,22 @@ async function openSettingsDialog() {
 
 async function saveSettings() {
   try {
-    await api.saveSettings({
+    state.settings = await api.saveSettings({
+      ...state.settings,
       startWithWindows: el['start-with-windows'].checked,
       staggerStartupConnections: el['stagger-startup-connections'].checked,
-      startupConnectionDelay: Number(el['startup-connection-delay'].value)
+      startupConnectionDelay: Number(el['startup-connection-delay'].value),
+      uiScale: Number(el['ui-scale'].value)
     })
+    applyUiScale(state.settings.uiScale)
     el['settings-dialog'].close()
     toast('Settings saved.')
   } catch (error) { toast(cleanError(error), 'error') }
+}
+
+function applyUiScale(value) {
+  const scale = Math.max(75, Math.min(Number(value) || 100, 125))
+  api.setUiScale(scale)
 }
 
 function describeWater(environment) {

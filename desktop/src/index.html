@@ -76,6 +76,22 @@
                 <input id="chat-message" autocomplete="off" placeholder="Message or /command" disabled />
                 <button class="send-button" type="submit" disabled aria-label="Send message">Send</button>
               </form>
+              <section class="macro-section" aria-labelledby="macro-title">
+                <header class="macro-header">
+                  <div><h3 id="macro-title">Macro pad</h3><span>Click to send saved text or commands</span></div>
+                  <button id="manage-macros" class="text-button" type="button" aria-expanded="false" aria-controls="macro-editor">Edit</button>
+                </header>
+                <div id="macro-pad" class="macro-pad" role="group" aria-label="Saved chat macros"></div>
+                <div id="macro-editor" class="macro-editor" hidden>
+                  <div id="macro-rows" class="macro-rows"></div>
+                  <div class="macro-editor-actions">
+                    <button id="add-macro" class="button secondary" type="button">Add macro</button>
+                    <span class="footer-spacer"></span>
+                    <button id="cancel-macros" class="button secondary" type="button">Cancel</button>
+                    <button id="save-macros" class="button primary" type="button">Save macros</button>
+                  </div>
+                </div>
+              </section>
             </section>
 
             <aside class="controls-column">
@@ -246,6 +262,7 @@
             <span><strong>Stagger startup account logins</strong><small>Connect startup accounts one at a time to reduce network and authentication spikes.</small></span>
           </label>
           <label class="field settings-delay"><span>Delay between accounts (seconds)</span><input id="startup-connection-delay" type="number" min="1" max="300" value="3" /></label>
+          <label class="field settings-delay"><span>Interface scale</span><input id="ui-scale" type="range" min="75" max="125" step="5" value="100" /><small><output id="ui-scale-value" for="ui-scale">100%</output> — smaller values fit more controls on screen.</small></label>
         </div>
         <footer class="dialog-footer">
           <span class="footer-spacer"></span>

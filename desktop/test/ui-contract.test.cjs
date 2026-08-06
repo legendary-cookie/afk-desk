@@ -19,10 +19,25 @@ test('desktop UI exposes cancellable account setup, settings, proxy, startup, an
   assert.match(html, /id="anti-afk-duration"[^>]*step="0\.05"[^>]*value="0\.25"/)
 })
 
-test('desktop console has a fixed viewport and scrolls messages internally', () => {
+test('desktop dashboard stays viewport-bound and scrolls only bounded regions', () => {
   const css = fs.readFileSync(path.join(__dirname, '..', 'src', 'styles.css'), 'utf8')
-  assert.match(css, /\.console-panel\s*\{[^}]*height:\s*560px;[^}]*min-height:\s*0;/s)
+  assert.match(css, /body\s*\{[^}]*height:\s*100vh;[^}]*overflow:\s*hidden;/s)
+  assert.match(css, /\.dashboard\s*\{[^}]*grid-template-rows:[^;}]*minmax\(0,\s*1fr\)[^;}]*;[^}]*height:\s*100%;/s)
+  assert.match(css, /\.console-panel\s*\{[^}]*height:\s*100%;[^}]*min-height:\s*0;/s)
   assert.match(css, /\.console-log\s*\{[^}]*min-height:\s*0;[^}]*overflow-y:\s*auto;/s)
+})
+
+test('chat exposes history navigation, editable macros, and interface scaling', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'src', 'index.html'), 'utf8')
+  const script = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer.js'), 'utf8')
+  const preload = fs.readFileSync(path.join(__dirname, '..', 'electron', 'preload.cjs'), 'utf8')
+  for (const id of ['macro-pad', 'manage-macros', 'macro-editor', 'macro-rows', 'add-macro', 'save-macros', 'ui-scale']) {
+    assert.match(html, new RegExp(`id="${id}"`))
+  }
+  assert.match(script, /ArrowUp.*ArrowDown/)
+  assert.match(script, /function renderMacroPad/)
+  assert.match(script, /function saveMacros/)
+  assert.match(preload, /setUiScale:.*setZoomFactor/)
 })
 
 test('account editor has explicit cancel controls and only its fields scroll', () => {

@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require('electron')
+const { contextBridge, ipcRenderer, webFrame } = require('electron')
 
 contextBridge.exposeInMainWorld('afkDesk', {
   listAccounts: () => ipcRenderer.invoke('accounts:list'),
@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('afkDesk', {
   openExternal: (url) => ipcRenderer.invoke('system:open-external', url),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   saveSettings: (settings) => ipcRenderer.invoke('settings:save', settings),
+  setUiScale: (percent) => webFrame.setZoomFactor(Math.max(0.75, Math.min(Number(percent) || 100, 125)) / 100),
   onBotEvent: (callback) => {
     const listener = (_event, data) => callback(data)
     ipcRenderer.on('bot:event', listener)
