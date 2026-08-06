@@ -672,6 +672,7 @@ test('repeated rejected corner movement triggers a bounded diagonal escape', (t)
   manager.connect({ id: 'adaptive-water', username: 'user@example.com', host: 'localhost', antiAfk: false, autoReconnect: false, environmentalMovement: true })
   t.after(() => manager.disconnect('adaptive-water'))
   bot.entity = { yaw: 0, position: new Vec3(0.5, 64, 0.5), velocity: new Vec3(0, 0, 0), isInWater: true, isCollidedHorizontally: true }
+  bot.physics = { stepHeight: 0.6 }
   bot.blockAt = (position) => {
     const x = Math.floor(position.x)
     const y = Math.floor(position.y)
@@ -684,8 +685,15 @@ test('repeated rejected corner movement triggers a bounded diagonal escape', (t)
   bot.emit('physicsTick')
 
   assert.equal(bot.controls.filter(([, enabled]) => enabled).length, 2)
+  assert.equal(bot.controls.some(([control]) => ['jump', 'sneak'].includes(control)), false)
+  assert.equal(Math.hypot(bot.entity.velocity.x, bot.entity.velocity.z), 0)
+  assert.equal(bot.entity.velocity.y, 0)
+  assert.equal(bot.physics.stepHeight, 0)
   assert.equal(timers.length, 1)
-  assert.equal(timers[0].delay, 800)
+  assert.equal(timers[0].delay, 200)
+  timers[0].callback()
+  assert.equal(bot.controls.filter(([, enabled]) => enabled === false).length, 2)
+  assert.equal(bot.physics.stepHeight, 0.6)
 })
 
 test('stopping water assistance tolerates a client destroyed during shutdown', () => {
@@ -787,7 +795,7 @@ test('rising head-level water remains passive and input-free', (t) => {
   assert.deepEqual(timers, [])
 })
 
-test('late corner corrections add jump after horizontal escapes fail', (t) => {
+test('late corner recovery stays horizontal and never climbs', (t) => {
   const bot = new FakeBot()
   const timers = []
   const manager = new BotManager({
@@ -797,7 +805,8 @@ test('late corner corrections add jump after horizontal escapes fail', (t) => {
   })
   manager.connect({ id: 'head-water', username: 'user@example.com', host: 'localhost', antiAfk: false, autoReconnect: false, environmentalMovement: true })
   t.after(() => manager.disconnect('head-water'))
-  bot.entity = { yaw: 0, position: new Vec3(0.5, 64, 0.5), velocity: new Vec3(0, 0, 0), isInWater: true, isCollidedHorizontally: true }
+  bot.entity = { yaw: 0, position: new Vec3(0.5, 64, 0.5), velocity: new Vec3(0, 0.08, 0), isInWater: true, isCollidedHorizontally: true }
+  bot.physics = { stepHeight: 0.6 }
   let upperLayerWater = true
   bot.blockAt = (position) => {
     const x = Math.floor(position.x)
@@ -811,16 +820,19 @@ test('late corner corrections add jump after horizontal escapes fail', (t) => {
 
   bot.emit('physicsTick')
 
-  assert.equal(bot.controls.filter(([, enabled]) => enabled).length, 2)
-  assert.equal(bot.controls.some(([control, enabled]) => control === 'jump' && enabled), true)
+  assert.equal(bot.controls.filter(([, enabled]) => enabled).length, 1)
+  assert.equal(bot.controls.some(([control]) => ['jump', 'sneak'].includes(control)), false)
+  assert.equal(bot.entity.velocity.y, 0.08)
+  assert.equal(bot.physics.stepHeight, 0)
   assert.equal(timers.length, 1)
-  assert.equal(timers[0].delay, 800)
+  assert.equal(timers[0].delay, 200)
 
   upperLayerWater = false
   bot.emit('physicsTick')
   timers[0].callback()
 
-  assert.equal(bot.controls.filter(([, enabled]) => enabled === false).length, 2)
+  assert.equal(bot.controls.filter(([, enabled]) => enabled === false).length, 1)
+  assert.equal(bot.physics.stepHeight, 0.6)
 })
 
 test('modern movement packets report the collision state calculated by physics', () => {

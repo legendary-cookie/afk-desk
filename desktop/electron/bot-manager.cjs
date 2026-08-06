@@ -21,7 +21,7 @@ const FLOW_DIRECTIONS = [[0, 1], [-1, 0], [0, -1], [1, 0]]
 const FLUID_CONTACT_GRACE_MS = 750
 const CORNER_RECOVERY_CONFIRMATIONS = 2
 const CORNER_RECOVERY_STEP_CORRECTIONS = 4
-const CORNER_RECOVERY_PULSE_MS = 800
+const CORNER_RECOVERY_PULSE_MS = 200
 const CORNER_RECOVERY_COOLDOWN_MS = 175
 const CHEST_SCAN_INTERVAL = 5000
 const CHEST_MAX_DISTANCE = 5
@@ -91,6 +91,7 @@ class BotManager {
       physicsRestoreTimer: null,
       fluidAssistTimer: null,
       fluidAssistControls: [],
+      fluidAssistStepHeight: null,
       manualControls: new Set(),
       manualControlTimers: new Map(),
       antiAfkActionTimers: new Set(),
@@ -686,15 +687,19 @@ class BotManager {
     const attempt = fluidRecoveryAttempt(motion.stalledCorrections)
     motion.recoveryAttempt = attempt
     const controls = fluidControlsForRecovery(bot.entity.yaw, motion.currentX, motion.currentZ, attempt)
-    if (attempt >= 2 && !controls.includes('jump')) controls.push('jump')
     if (controls.length === 0) return
     const progressEpoch = Math.max(0, Number(motion.progressEpoch) || 0)
+    if (Number.isFinite(bot.physics?.stepHeight) && session.fluidAssistStepHeight === null) {
+      session.fluidAssistStepHeight = bot.physics.stepHeight
+      bot.physics.stepHeight = 0
+    }
     session.fluidAssistControls = controls
+    for (const control of controls) bot.setControlState(control, true)
     motion.assisting = true
     motion.status = 'fallback'
-    for (const control of controls) bot.setControlState(control, true)
     session.fluidAssistTimer = this.scheduleAntiAfkTimer(() => {
       session.fluidAssistTimer = null
+      this.restoreFluidStepHeight(session)
       if (this.sessions.get(session.account.id) !== session) return
       for (const control of session.fluidAssistControls) bot.setControlState(control, false)
       session.fluidAssistControls = []
@@ -715,7 +720,14 @@ class BotManager {
       try { session.bot?.setControlState?.(control, false) } catch {}
     }
     session.fluidAssistControls = []
+    this.restoreFluidStepHeight(session)
     if (session.fluidMotion) session.fluidMotion.assisting = false
+  }
+
+  restoreFluidStepHeight(session) {
+    if (session?.fluidAssistStepHeight === null || session?.fluidAssistStepHeight === undefined) return
+    if (session.bot?.physics) session.bot.physics.stepHeight = session.fluidAssistStepHeight
+    session.fluidAssistStepHeight = null
   }
 
   clearSession(id) {
