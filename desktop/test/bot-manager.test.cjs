@@ -23,10 +23,12 @@ class FakeBot extends EventEmitter {
     this.controls = []
     this.messages = []
     this.writes = []
+    this.settings = { locale: 'en_us' }
     this._client = new EventEmitter()
     this._client.write = (name, payload) => this.writes.push([name, payload])
   }
   chat(message) { this.messages.push(message) }
+  setSettings(settings) { this.writes.push(['settings', settings]) }
   setControlState(control, value) { this.controls.push([control, value]) }
   look() { return Promise.resolve() }
   tossStack(item) { this.tossed = item; return Promise.resolve() }
@@ -88,8 +90,8 @@ test('sends separate join and server-change messages', async (t) => {
   bot.emit('respawn')
   bot.emit('health')
   await new Promise((resolve) => setTimeout(resolve, 5))
-  assert.deepEqual(bot.messages, ['joined'])
-  assert.deepEqual(bot.writes, [['chat_command', { command: 'server survival' }]])
+  assert.deepEqual(bot.messages, ['joined', '/server survival'])
+  assert.deepEqual(bot.writes, [])
 })
 
 test('does not resend the same automatic server switch after its resulting respawn', async (t) => {
@@ -108,7 +110,8 @@ test('does not resend the same automatic server switch after its resulting respa
   bot.emit('health')
   await new Promise((resolve) => setTimeout(resolve, 5))
 
-  assert.deepEqual(bot.writes, [['chat_command', { command: 'server towny' }]])
+  assert.deepEqual(bot.messages, ['/server towny'])
+  assert.deepEqual(bot.writes, [])
 })
 
 test('automatic server switches wait until the world reports ready', async (t) => {
@@ -126,7 +129,8 @@ test('automatic server switches wait until the world reports ready', async (t) =
 
   bot.emit('health')
   await new Promise((resolve) => setTimeout(resolve, 550))
-  assert.deepEqual(bot.writes, [['chat_command', { command: 'server towny' }]])
+  assert.deepEqual(bot.messages, ['/server towny'])
+  assert.deepEqual(bot.writes, [])
 })
 
 test('live chat marks a session online and a late login event cannot downgrade it', () => {
@@ -146,16 +150,16 @@ test('live chat marks a session online and a late login event cannot downgrade i
   manager.disconnect('ordering')
 })
 
-test('uses the unsigned command packet for proxy switches without signable arguments', () => {
+test('uses the protocol chat path so modern proxy commands include required session fields', () => {
   const bot = new FakeBot()
   const manager = new BotManager({ profilesPath: 'profiles', emit: () => {}, createBot: () => bot })
   manager.connect({ id: 'proxy', username: 'user@example.com', host: 'localhost', port: 25565, antiAfk: false, autoReconnect: false })
   bot.entity = { yaw: 0, pitch: 0 }
   manager.sendChat('proxy', '/server towny')
-  assert.deepEqual(bot.writes, [['chat_command', { command: 'server towny' }]])
-  assert.deepEqual(bot.messages, [])
+  assert.deepEqual(bot.writes, [])
+  assert.deepEqual(bot.messages, ['/server towny'])
   manager.sendChat('proxy', '/home')
-  assert.deepEqual(bot.messages, ['/home'])
+  assert.deepEqual(bot.messages, ['/server towny', '/home'])
   manager.disconnect('proxy')
 })
 
@@ -265,7 +269,7 @@ test('finds the closest chest and deposits all inventory stacks only when enable
   manager.disconnect('chest')
 })
 
-test('lets the protocol client own the Velocity configuration handshake', () => {
+test('resends client settings after Velocity enters configuration', async () => {
   const events = []
   const bot = new FakeBot()
   const manager = new BotManager({ profilesPath: 'profiles', emit: (...event) => events.push(event), createBot: () => bot })
@@ -276,8 +280,9 @@ test('lets the protocol client own the Velocity configuration handshake', () => 
   bot.emit('health')
   bot._client.on('start_configuration', () => bot._client.write('configuration_acknowledged', {}))
   bot._client.emit('start_configuration')
+  await new Promise((resolve) => queueMicrotask(resolve))
 
-  assert.deepEqual(bot.writes.map(([name]) => name), ['configuration_acknowledged'])
+  assert.deepEqual(bot.writes.map(([name]) => name), ['configuration_acknowledged', 'settings'])
   assert.equal(events.at(-1)[2].detail, 'Switching servers…')
   bot._client.emit('finish_configuration')
   assert.equal(events.filter(([type]) => type === 'status').at(-1)[2].detail, 'Joining world…')
@@ -614,6 +619,7 @@ test('maps a rejected world-current direction to the closest normal movement inp
 test('water recovery prioritizes the measured wall-cancelling diagonal at loop corners', () => {
   const yaw = 6.773926
   assert.deepEqual(fluidControlsForRecovery(yaw, 0.707, 0.707, 1), ['forward', 'right'])
+  assert.deepEqual(fluidControlsForRecovery(yaw, 0.707, 0.707, 2), ['left'])
   assert.deepEqual(fluidControlsForRecovery(yaw, -0.707, 0.707, 1), ['right', 'back'])
   assert.deepEqual(fluidControlsForRecovery(yaw, 0.707, -0.707, 1), ['left', 'forward'])
 })
@@ -655,7 +661,7 @@ test('historical water corrections do not keep fallback active after server posi
   assert.deepEqual(bot.controls, [])
 })
 
-test('repeated corrections do not inject diagonal movement into passive water flow', (t) => {
+test('repeated rejected corner movement triggers a bounded diagonal escape', (t) => {
   const bot = new FakeBot()
   const timers = []
   const manager = new BotManager({
@@ -673,12 +679,13 @@ test('repeated corrections do not inject diagonal movement into passive water fl
     if (y !== 64) return { name: 'stone', metadata: 0, position: new Vec3(x, y, z), boundingBox: 'block' }
     return { name: 'water', metadata: x === 1 && z === 0 ? 2 : 1, position: new Vec3(x, y, z), boundingBox: 'empty' }
   }
-  Object.assign(manager.sessions.get('adaptive-water').fluidMotion, { serverCorrections: 43, stalledCorrections: 43, recoveryAttempt: 0 })
+  Object.assign(manager.sessions.get('adaptive-water').fluidMotion, { serverCorrections: 23, stalledCorrections: 23, recoveryAttempt: 0 })
 
   bot.emit('physicsTick')
 
-  assert.deepEqual(bot.controls, [])
-  assert.deepEqual(timers, [])
+  assert.equal(bot.controls.filter(([, enabled]) => enabled).length, 2)
+  assert.equal(timers.length, 1)
+  assert.equal(timers[0].delay, 2500)
 })
 
 test('stopping water assistance tolerates a client destroyed during shutdown', () => {
@@ -780,7 +787,7 @@ test('rising head-level water remains passive and input-free', (t) => {
   assert.deepEqual(timers, [])
 })
 
-test('late head-level corrections remain passive and input-free', (t) => {
+test('late corner corrections add jump after horizontal escapes fail', (t) => {
   const bot = new FakeBot()
   const timers = []
   const manager = new BotManager({
@@ -804,14 +811,15 @@ test('late head-level corrections remain passive and input-free', (t) => {
 
   bot.emit('physicsTick')
 
-  assert.deepEqual(bot.controls, [])
-  assert.deepEqual(timers, [])
+  assert.equal(bot.controls.filter(([, enabled]) => enabled).length, 2)
+  assert.equal(bot.controls.some(([control, enabled]) => control === 'jump' && enabled), true)
+  assert.equal(timers.length, 1)
 
   upperLayerWater = false
   bot.emit('physicsTick')
+  timers[0].callback()
 
-  assert.deepEqual(bot.controls, [])
-  assert.deepEqual(timers, [])
+  assert.equal(bot.controls.filter(([, enabled]) => enabled === false).length, 2)
 })
 
 test('modern movement packets report the collision state calculated by physics', () => {

@@ -130,6 +130,13 @@ class BotManager {
     bot._client?.on?.('start_configuration', () => {
       session.switching = true
       session.worldReadyAt = 0
+      // A server transfer re-enters the configuration state without emitting a
+      // new login packet. Mineflayer normally sends client settings on login,
+      // so resend them here as vanilla does for the new configuration session.
+      queueMicrotask(() => {
+        if (this.sessions.get(account.id) !== session || !session.switching) return
+        try { bot.setSettings?.({}) } catch {}
+      })
       this.status(account.id, 'connected', 'Switching servers…')
     })
 
@@ -220,8 +227,12 @@ class BotManager {
     bot.on('health', () => { markWorldReady(); emitTelemetry() })
     bot.on('physicsTick', () => {
       if (session.account.environmentalMovement !== false) {
-        inspectFluidCurrent(bot, session.fluidMotion)
-        this.stopFluidAssist(session)
+        const flowing = inspectFluidCurrent(bot, session.fluidMotion)
+        const rejectedAtCorner = flowing &&
+          (session.fluidMotion.stalledCorrections || 0) >= 8 &&
+          bot.entity?.isCollidedHorizontally === true
+        if (rejectedAtCorner) this.assistRejectedFluidCurrent(session)
+        else if (!flowing) this.stopFluidAssist(session)
       }
     })
     bot.inventory?.on?.('updateSlot', emitTelemetry)
@@ -330,11 +341,10 @@ class BotManager {
     const bot = this.requireOnline(id)
     const trimmed = String(message || '').trim()
     if (!trimmed) return
-    if (/^\/server(?:\s|$)/i.test(trimmed) && typeof bot._client?.write === 'function') {
-      bot._client.write('chat_command', { command: trimmed.slice(1) })
-    } else {
-      bot.chat(trimmed)
-    }
+    // minecraft-protocol's chat path adds the version-specific timestamp,
+    // acknowledgement, session, and checksum fields required by modern
+    // Velocity backends. A hand-written command-only packet is incomplete.
+    bot.chat(trimmed)
     this.emit('log', id, { kind: 'sent', message: trimmed, at: Date.now() })
   }
 
@@ -539,9 +549,12 @@ class BotManager {
       headSubmerged: session.fluidMotion?.headSubmerged === true,
       correctionCount: Math.max(0, Number(session.fluidMotion?.serverCorrections) || 0)
     }
-    if (!session.movementBlocksCaptured && clientPosition && entry.flow) {
+    const movementBlockCaptureKey = clientPosition
+      ? `${Math.floor(clientPosition.x)},${Math.floor(clientPosition.y)},${Math.floor(clientPosition.z)}`
+      : ''
+    if (movementBlockCaptureKey && movementBlockCaptureKey !== session.movementBlockCaptureKey && entry.flow) {
       entry.nearbyBlocks = snapshotNearbyBlocks(session.bot, clientPosition)
-      session.movementBlocksCaptured = true
+      session.movementBlockCaptureKey = movementBlockCaptureKey
     }
     try {
       this.diagnose(entry)
@@ -669,6 +682,7 @@ class BotManager {
     const attempt = Math.floor(Math.max(0, (Number(motion.stalledCorrections) || 0) - 3) / 20) % 4
     motion.recoveryAttempt = attempt
     const controls = fluidControlsForRecovery(bot.entity.yaw, motion.currentX, motion.currentZ, attempt)
+    if (attempt >= 2 && !controls.includes('jump')) controls.push('jump')
     if (controls.length === 0) return
     const progressEpoch = Math.max(0, Number(motion.progressEpoch) || 0)
     session.fluidAssistControls = controls
@@ -1104,8 +1118,8 @@ function fluidControlsForRecovery(yaw, currentX, currentZ, attempt = 0) {
   const choices = [
     [components.primary],
     [opposite[components.primary], components.secondary],
-    [components.primary, opposite[components.secondary]],
-    [components.primary, components.secondary]
+    [opposite[components.secondary]],
+    [components.primary, opposite[components.secondary]]
   ]
   return [...choices[Math.max(0, Number(attempt) || 0) % choices.length]]
 }
