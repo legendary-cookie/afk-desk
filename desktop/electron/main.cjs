@@ -8,6 +8,7 @@ const { BotManager, normalizeSkinUrl } = require('./bot-manager.cjs')
 const { AccessStore } = require('./remote/access-store.cjs')
 const { RemoteAccessServer } = require('./remote/server.cjs')
 const { sendToWindow } = require('./window-events.cjs')
+const { DiagnosticLog } = require('./diagnostic-log.cjs')
 const execFileAsync = promisify(execFile)
 const movementDiagnosticsEnabled = process.env.AFK_DESK_MOVEMENT_DIAGNOSTICS === '1'
 
@@ -17,6 +18,7 @@ let settingsStore
 let bots
 let accessStore
 let remoteAccess
+let diagnosticLog
 const runtime = new Map()
 
 function createWindow() {
@@ -42,12 +44,14 @@ app.whenReady().then(async () => {
   store = new AccountStore(app.getPath('userData'))
   settingsStore = new SettingsStore(app.getPath('userData'))
   accessStore = new AccessStore(app.getPath('userData'))
+  diagnosticLog = new DiagnosticLog(app.getPath('userData'))
   bots = new BotManager({
     profilesPath: path.join(app.getPath('userData'), 'profiles'),
     emit: emitBotEvent,
-    diagnose: movementDiagnosticsEnabled
-      ? (entry) => console.log(`[movement-diagnostic] ${JSON.stringify(entry)}`)
-      : undefined
+    diagnose: (entry) => {
+      diagnosticLog.write(entry)
+      if (movementDiagnosticsEnabled) console.log(`[movement-diagnostic] ${JSON.stringify(entry)}`)
+    }
   })
   remoteAccess = new RemoteAccessServer({
     accessStore,
@@ -192,6 +196,9 @@ function openIsolatedLogin(id, rawUrl, code) {
 }
 
 function emitBotEvent(type, id, payload) {
+  if (type === 'status') diagnosticLog?.write({ event: 'status', at: payload.at, accountId: id, status: payload.status, detail: payload.detail })
+  if (type === 'telemetry') diagnosticLog?.write({ event: 'telemetry', at: payload.at, accountId: id, position: payload.position, environment: payload.environment, health: payload.health })
+  if (type === 'log' && payload.kind === 'error') diagnosticLog?.write({ event: 'error', at: payload.at, accountId: id, message: payload.message })
   if (movementDiagnosticsEnabled && type === 'status') {
     console.log(`[movement-status] ${JSON.stringify({ accountId: id, status: payload.status })}`)
   }
@@ -291,7 +298,7 @@ function validateAccount(input, existing) {
     proxy: validateProxy(input?.proxy, existing?.proxy),
     joinMessage: String(input?.joinMessage || '').trim().slice(0, 256),
     serverChangeMessage: String(input?.serverChangeMessage || '').trim().slice(0, 256),
-    messageDelay: Math.max(0, Math.min(input?.messageDelay === '' || input?.messageDelay == null ? 5 : Number(input.messageDelay) || 0, 30))
+    messageDelay: Math.max(0, Math.min(input?.messageDelay === '' || input?.messageDelay == null ? 6 : Number(input.messageDelay) || 0, 30))
   }
 }
 

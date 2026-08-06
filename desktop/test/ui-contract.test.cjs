@@ -15,7 +15,7 @@ test('desktop UI exposes cancellable account setup, settings, proxy, startup, an
     'anti-afk-walk', 'environmental-movement', 'stagger-startup-connections', 'startup-connection-delay'
   ]) assert.match(html, new RegExp(`id="${id}"`))
   assert.match(html, /id="proxy-password" type="password"/)
-  assert.match(html, /id="message-delay"[^>]*value="5"/)
+  assert.match(html, /id="message-delay"[^>]*value="6"/)
   assert.match(html, /id="anti-afk-duration"[^>]*step="0\.05"[^>]*value="0\.25"/)
 })
 
@@ -52,7 +52,7 @@ test('desktop bridge exposes inventory actions and accounts default automatic de
   assert.match(preload, /dropStack:.*bot:drop-stack/)
   assert.match(preload, /setAutoDeposit:.*bot:auto-deposit/)
   assert.match(main, /autoDepositToChest:\s*input\?\.autoDepositToChest === true/)
-  assert.match(main, /messageDelay:.*\? 5 :/)
+  assert.match(main, /messageDelay:.*\? 6 :/)
   assert.match(main, /environmentalMovement:\s*input\?\.environmentalMovement !== false/)
   assert.match(main, /startupConnectionDelay\(settings, index\)/)
 })

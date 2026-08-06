@@ -73,21 +73,23 @@ test('connects, emits status, sends chat, and disconnects', () => {
   assert.equal(events.at(-1)[2].status, 'offline')
 })
 
-test('sends separate join and server-change messages', async () => {
+test('sends separate join and server-change messages', async (t) => {
   const bot = new FakeBot()
   const manager = new BotManager({ profilesPath: 'profiles', emit: () => {}, createBot: () => bot })
   manager.connect({
     id: 'messages', username: 'user@example.com', host: 'localhost', port: 25565,
     antiAfk: false, autoReconnect: false, joinMessage: 'joined', serverChangeMessage: '/server survival', messageDelay: 0
   })
+  t.after(() => manager.disconnect('messages'))
   bot.entity = { yaw: 0, pitch: 0 }
   bot.emit('spawn')
+  bot.emit('health')
   await new Promise((resolve) => setTimeout(resolve, 5))
   bot.emit('respawn')
+  bot.emit('health')
   await new Promise((resolve) => setTimeout(resolve, 5))
   assert.deepEqual(bot.messages, ['joined'])
   assert.deepEqual(bot.writes, [['chat_command', { command: 'server survival' }]])
-  manager.disconnect('messages')
 })
 
 test('does not resend the same automatic server switch after its resulting respawn', async (t) => {
@@ -100,10 +102,30 @@ test('does not resend the same automatic server switch after its resulting respa
   t.after(() => manager.disconnect('one-switch'))
   bot.entity = { yaw: 0, pitch: 0 }
   bot.emit('spawn')
+  bot.emit('health')
   await new Promise((resolve) => setTimeout(resolve, 5))
   bot.emit('respawn')
+  bot.emit('health')
   await new Promise((resolve) => setTimeout(resolve, 5))
 
+  assert.deepEqual(bot.writes, [['chat_command', { command: 'server towny' }]])
+})
+
+test('automatic server switches wait until the world reports ready', async (t) => {
+  const bot = new FakeBot()
+  const manager = new BotManager({ profilesPath: 'profiles', emit: () => {}, createBot: () => bot })
+  manager.connect({
+    id: 'wait-for-world', username: 'user@example.com', host: 'localhost', port: 25565,
+    antiAfk: false, autoReconnect: false, joinMessage: '/server towny', messageDelay: 0
+  })
+  t.after(() => manager.disconnect('wait-for-world'))
+  bot.entity = { yaw: 0, pitch: 0 }
+  bot.emit('spawn')
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.deepEqual(bot.writes, [])
+
+  bot.emit('health')
+  await new Promise((resolve) => setTimeout(resolve, 550))
   assert.deepEqual(bot.writes, [['chat_command', { command: 'server towny' }]])
 })
 
@@ -251,6 +273,7 @@ test('lets the protocol client own the Velocity configuration handshake', () => 
 
   bot.entity = { yaw: 0, pitch: 0 }
   bot.emit('spawn')
+  bot.emit('health')
   bot._client.on('start_configuration', () => bot._client.write('configuration_acknowledged', {}))
   bot._client.emit('start_configuration')
 

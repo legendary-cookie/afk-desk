@@ -48,6 +48,7 @@ class BotManager {
     this.diagnose = diagnose
     this.sessions = new Map()
     this.reconnects = new Map()
+    this.nextAutomaticServerSwitchAt = 0
   }
 
   connect(account, { reconnecting = false } = {}) {
@@ -93,6 +94,7 @@ class BotManager {
       switching: false,
       depositing: false,
       joinMessageSent: false,
+      worldReadyAt: 0,
       nearestChest: null,
       fluidMotion: {
         status: account.environmentalMovement === false ? 'disabled' : 'checking',
@@ -125,6 +127,7 @@ class BotManager {
 
     bot._client?.on?.('start_configuration', () => {
       session.switching = true
+      session.worldReadyAt = 0
       this.status(account.id, 'connected', 'Switching servers…')
     })
 
@@ -209,9 +212,10 @@ class BotManager {
       else if (!session.ready) this.status(account.id, 'connected', 'Authenticated. Joining world…')
       emitIdentity()
     })
-    bot.on('playerJoined', (player) => { if (player?.username === bot.username) emitIdentity() })
-    bot.on('playerUpdated', (player) => { if (player?.username === bot.username) emitIdentity() })
-    bot.on('health', emitTelemetry)
+    const markWorldReady = () => { session.worldReadyAt ||= Date.now() }
+    bot.on('playerJoined', (player) => { if (player?.username === bot.username) { markWorldReady(); emitIdentity() } })
+    bot.on('playerUpdated', (player) => { if (player?.username === bot.username) { markWorldReady(); emitIdentity() } })
+    bot.on('health', () => { markWorldReady(); emitTelemetry() })
     bot.on('physicsTick', () => {
       if (session.account.environmentalMovement !== false) {
         inspectFluidCurrent(bot, session.fluidMotion)
@@ -231,10 +235,12 @@ class BotManager {
       }
     })
     bot.on('respawn', () => {
+      session.worldReadyAt = 0
       markReady()
       if (account.serverChangeMessage) this.scheduleMessage(account.id, account.serverChangeMessage, account.messageDelay)
     })
     bot.on('messagestr', (message, _position, originalMessage) => {
+      markWorldReady()
       markReady()
       const formatted = originalMessage?.toMotd?.() || message
       this.emit('log', account.id, { kind: 'chat', message, segments: parseMinecraftFormatting(formatted), at: Date.now() })
@@ -415,13 +421,43 @@ class BotManager {
     if (automaticSwitch && session.automaticServerSwitches.has(automaticSwitch)) return
     if (automaticSwitch) session.automaticServerSwitches.add(automaticSwitch)
     const delay = Math.max(0, Math.min(Number(delaySeconds) || 0, 30)) * 1000
-    const timer = setTimeout(() => {
-      session.messageTimers.delete(timer)
+    const startedAt = Date.now()
+    const schedule = (callback, wait) => {
+      const timer = setTimeout(() => {
+        session.messageTimers.delete(timer)
+        callback()
+      }, wait)
+      session.messageTimers.add(timer)
+    }
+    const send = () => {
+      if (!this.sessions.has(id)) return
+      if (automaticSwitch && !session.worldReadyAt && Date.now() - startedAt < 20_000) {
+        schedule(send, 500)
+        return
+      }
+      if (automaticSwitch) {
+        const now = Date.now()
+        const readyAt = session.worldReadyAt || startedAt + 20_000
+        const readyDelayEndsAt = readyAt + delay
+        if (readyDelayEndsAt > now) {
+          schedule(send, readyDelayEndsAt - now)
+          return
+        }
+        const sendAt = Math.max(now, this.nextAutomaticServerSwitchAt)
+        this.nextAutomaticServerSwitchAt = sendAt + 3000
+        if (sendAt > now) {
+          schedule(sendNow, sendAt - now)
+          return
+        }
+      }
+      sendNow()
+    }
+    const sendNow = () => {
       if (!this.sessions.has(id)) return
       try { this.sendChat(id, String(message).slice(0, 256)) }
       catch (error) { this.emit('log', id, { kind: 'error', message: `Automatic message failed: ${error.message}`, at: Date.now() }) }
-    }, delay)
-    session.messageTimers.add(timer)
+    }
+    schedule(send, delay)
   }
 
   enableAntiAfk(id, input = {}) {

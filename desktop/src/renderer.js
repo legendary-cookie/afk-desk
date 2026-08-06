@@ -362,7 +362,7 @@ function openAccountDialog(account) {
   el['auto-deposit-setting'].checked = account?.autoDepositToChest === true
   el['join-message'].value = account?.joinMessage || ''
   el['server-change-message'].value = account?.serverChangeMessage || ''
-  el['message-delay'].value = account?.messageDelay ?? 5
+  el['message-delay'].value = account?.messageDelay ?? 6
   el['dialog-title'].textContent = account ? 'Edit account' : 'Add account'
   el['delete-account'].hidden = !account
   el['account-dialog'].showModal()
