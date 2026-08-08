@@ -2,6 +2,23 @@
 
 For the complete desktop history from 0.1.0 onward, including source tags, installers, and comparisons, see [HISTORY.md](HISTORY.md).
 
+## Desktop 0.7.0 — 2026-08-09
+
+### Added
+
+- Independent persistent drag handles for resizing the console/control columns and inventory height, with keyboard controls and double-click reset.
+- A new AFK Desk application icon plus installed-version labels in the sidebar and Settings.
+
+### Changed
+
+- Removed the local browser dashboard, shared-access grants, Tailscale integration, and remote HTTP server while that workflow is being reconsidered.
+
+### Fixed
+
+- Made connection details, movement buttons, and the inventory toolbar reflow and compact as their panels are resized, while preserving a usable inventory content area.
+- Prevented an auto-detected proxy lobby protocol from being remembered until the account remains stable for one minute.
+- Auto-version accounts can reuse a proven explicit or stable version from another account on the same server, preventing repeated selection of a lobby-only protocol when the destination backend uses a different compatible protocol.
+
 ## Desktop 0.6.0 — 2026-08-07
 
 ### Added

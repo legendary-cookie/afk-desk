@@ -19,34 +19,38 @@ const state = {
   logs: new Map(),
   telemetry: new Map(),
   chatHistory: new Map(),
-  settings: { uiScale: 100, macros: [] },
+  settings: { uiScale: 100, sidePanelWidth: 300, inventoryHeight: 112, macros: [] },
+  resolvedVersions: new Map(),
   login: { code: '', url: 'https://microsoft.com/link' }
 }
 
 const el = Object.fromEntries([
-  'account-list', 'account-count', 'add-account', 'browser-access', 'open-settings', 'settings-dialog', 'close-settings', 'start-with-windows', 'stagger-startup-connections', 'startup-connection-delay', 'save-settings', 'empty-state', 'dashboard', 'account-title',
+  'account-list', 'account-count', 'add-account', 'open-settings', 'settings-dialog', 'close-settings', 'start-with-windows', 'stagger-startup-connections', 'startup-connection-delay', 'save-settings', 'empty-state', 'dashboard', 'account-title', 'app-version', 'settings-app-version',
   'edit-account', 'connection-button', 'status-banner', 'status-name', 'status-detail', 'server-address',
   'detail-username', 'detail-server', 'detail-version', 'detail-antiafk', 'detail-environment', 'detail-water', 'detail-health', 'detail-hunger', 'detail-coordinates', 'detail-chest', 'detail-dimension', 'inventory-count', 'inventory-grid', 'auto-deposit-toggle', 'drop-selected', 'console-log', 'clear-console',
   'chat-form', 'chat-message', 'macro-pad', 'manage-macros', 'macro-editor', 'macro-rows', 'add-macro', 'cancel-macros', 'save-macros', 'account-dialog', 'account-form', 'dialog-title', 'account-id', 'label',
   'username', 'host', 'port', 'version', 'connect-on-startup', 'proxy-enabled', 'proxy-fields', 'proxy-type', 'proxy-host', 'proxy-port', 'proxy-username', 'proxy-password', 'proxy-password-help', 'proxy-clear-password', 'anti-afk', 'anti-afk-min-delay', 'anti-afk-max-delay', 'anti-afk-duration', 'anti-afk-look-degrees', 'anti-afk-walk-distance', 'anti-afk-jump', 'anti-afk-look', 'anti-afk-sneak', 'anti-afk-swing', 'anti-afk-walk', 'environmental-movement', 'auto-reconnect', 'auto-reconnect-delay', 'auto-reconnect-max', 'auto-deposit-setting', 'join-message', 'server-change-message',
   'message-delay', 'form-error', 'delete-account', 'login-dialog', 'login-code', 'open-login-private', 'open-login',
-  'close-login', 'remote-dialog', 'close-remote', 'remote-local-url', 'open-dashboard', 'tailscale-command',
-  'enable-tailscale', 'tailscale-result', 'remote-base-url', 'grant-label', 'grant-accounts', 'create-grant', 'generated-link', 'share-link',
-  'copy-share-link', 'grant-list', 'ui-scale', 'ui-scale-value', 'toast-region'
+  'close-login', 'ui-scale', 'ui-scale-value', 'column-resizer', 'inventory-resizer', 'toast-region'
 ].map((id) => [id, document.getElementById(id)]))
 
 async function init() {
-  ;[state.accounts, state.settings] = await Promise.all([api.listAccounts(), api.getSettings()])
+  const [accounts, settings, appVersion] = await Promise.all([api.listAccounts(), api.getSettings(), api.getAppVersion()])
+  state.accounts = accounts
+  state.settings = settings
+  el['app-version'].textContent = `v${appVersion}`
+  el['settings-app-version'].textContent = `Version ${appVersion}`
   state.selectedId = state.accounts[0]?.id || null
   applyUiScale(state.settings.uiScale)
+  applyPanelLayout(state.settings)
   bindEvents()
   render()
+  observePanelFit()
   api.onBotEvent(handleBotEvent)
 }
 
 function bindEvents() {
   el['add-account'].addEventListener('click', () => openAccountDialog())
-  el['browser-access'].addEventListener('click', openRemoteDialog)
   el['open-settings'].addEventListener('click', openSettingsDialog)
   el['close-settings'].addEventListener('click', () => {
     applyUiScale(state.settings.uiScale)
@@ -81,6 +85,7 @@ function bindEvents() {
     renderConsole()
   })
   bindManualMovement()
+  bindPanelResizers()
   document.querySelectorAll('[data-look]').forEach((button) => button.addEventListener('click', () => run(() => api.look(state.selectedId, button.dataset.look))))
   el['login-code'].addEventListener('click', async () => {
     await navigator.clipboard.writeText(state.login.code)
@@ -89,14 +94,6 @@ function bindEvents() {
   el['open-login'].addEventListener('click', () => run(() => api.openExternal(state.login.url)))
   el['open-login-private'].addEventListener('click', () => run(() => api.openIsolatedLogin(state.login.accountId, state.login.url, state.login.code)))
   el['close-login'].addEventListener('click', () => el['login-dialog'].close())
-  el['close-remote'].addEventListener('click', () => el['remote-dialog'].close())
-  el['open-dashboard'].addEventListener('click', () => run(() => api.openRemoteDashboard()))
-  el['enable-tailscale'].addEventListener('click', enableTailscale)
-  el['create-grant'].addEventListener('click', createRemoteGrant)
-  el['copy-share-link'].addEventListener('click', async () => {
-    await navigator.clipboard.writeText(el['share-link'].value)
-    toast('Access link copied.')
-  })
 }
 
 function render() {
@@ -111,7 +108,8 @@ function render() {
   el['server-address'].textContent = `${account.host}:${account.port}`
   el['detail-username'].textContent = account.username
   el['detail-server'].textContent = `${account.host}:${account.port}`
-  el['detail-version'].textContent = account.version || 'Auto-detect'
+  const resolvedVersion = state.resolvedVersions.get(account.id) || account.lastSuccessfulVersion
+  el['detail-version'].textContent = account.version || (resolvedVersion ? `${resolvedVersion} (auto)` : 'Auto-detect')
   const minDelay = account.antiAfkMinDelay ?? account.antiAfkInterval ?? 45
   const maxDelay = account.antiAfkMaxDelay ?? account.antiAfkInterval ?? minDelay
   el['detail-antiafk'].textContent = account.antiAfk ? `${minDelay}–${maxDelay} seconds` : 'Disabled'
@@ -673,6 +671,12 @@ function handleBotEvent({ type, id, payload }) {
     state.telemetry.set(id, payload)
     if (id === state.selectedId) renderTelemetry()
   }
+  if (type === 'version') {
+    state.resolvedVersions.set(id, payload.version)
+    const account = state.accounts.find((item) => item.id === id)
+    if (account) account.lastSuccessfulVersion = payload.version
+    if (id === state.selectedId) el['detail-version'].textContent = account?.version || `${payload.version} (auto)`
+  }
   if (type === 'identity') {
     const account = state.accounts.find((item) => item.id === id)
     if (account) {
@@ -698,31 +702,6 @@ function handleBotEvent({ type, id, payload }) {
     el['login-code'].textContent = payload.code || 'See console'
     if (!el['login-dialog'].open) el['login-dialog'].showModal()
   }
-}
-
-async function openRemoteDialog() {
-  try {
-    const status = await api.remoteStatus()
-    el['remote-local-url'].textContent = status.localUrl
-    el['tailscale-command'].textContent = `tailscale serve --bg ${status.port}`
-    renderGrantAccounts()
-    await renderGrantList()
-    el['generated-link'].hidden = true
-    el['remote-dialog'].showModal()
-  } catch (error) { toast(cleanError(error), 'error') }
-}
-
-function renderGrantAccounts() {
-  el['grant-accounts'].replaceChildren(...state.accounts.map((account) => {
-    const label = document.createElement('label')
-    const checkbox = document.createElement('input')
-    checkbox.type = 'checkbox'
-    checkbox.value = account.id
-    const text = document.createElement('span')
-    text.textContent = `${account.label} — ${account.host}`
-    label.append(checkbox, text)
-    return label
-  }))
 }
 
 async function openSettingsDialog() {
@@ -759,6 +738,103 @@ function applyUiScale(value) {
   api.setUiScale(scale)
 }
 
+function applyPanelLayout(settings = state.settings) {
+  const sidePanelWidth = Math.max(240, Math.min(Number(settings.sidePanelWidth) || 300, 520))
+  const inventoryHeight = Math.max(minimumInventoryHeight(), Math.min(Number(settings.inventoryHeight) || 112, 360))
+  state.settings.sidePanelWidth = sidePanelWidth
+  state.settings.inventoryHeight = inventoryHeight
+  document.documentElement.style.setProperty('--side-panel-width', `${sidePanelWidth}px`)
+  document.documentElement.style.setProperty('--inventory-height', `${inventoryHeight}px`)
+  el['column-resizer'].setAttribute('aria-valuetext', `Controls ${sidePanelWidth} pixels wide`)
+  el['inventory-resizer'].setAttribute('aria-valuetext', `Inventory ${inventoryHeight} pixels high`)
+}
+
+function bindPanelResizers() {
+  const resizeSide = (sidePanelWidth) => {
+    const workspaceWidth = document.querySelector('.workspace-grid')?.clientWidth || 900
+    state.settings.sidePanelWidth = Math.max(240, Math.min(sidePanelWidth, Math.min(520, workspaceWidth - 360)))
+    applyPanelLayout(state.settings)
+  }
+  const resizeInventory = (inventoryHeight) => {
+    const dashboardHeight = el.dashboard?.clientHeight || 700
+    const minimum = minimumInventoryHeight()
+    const maximum = Math.max(minimum, Math.min(360, dashboardHeight - 260))
+    state.settings.inventoryHeight = Math.max(minimum, Math.min(inventoryHeight, maximum))
+    applyPanelLayout(state.settings)
+  }
+  bindSplitter(el['column-resizer'], {
+    axis: 'x', value: () => state.settings.sidePanelWidth || 300,
+    resize: (start, delta) => resizeSide(start - delta),
+    keys: { ArrowLeft: 1, ArrowRight: -1 }
+  })
+  bindSplitter(el['inventory-resizer'], {
+    axis: 'y', value: () => state.settings.inventoryHeight || 112,
+    resize: (start, delta) => resizeInventory(start - delta),
+    keys: { ArrowUp: 1, ArrowDown: -1 }
+  })
+}
+
+function minimumInventoryHeight() {
+  const headerHeight = document.querySelector('.inventory-header')?.scrollHeight || 36
+  return Math.max(84, Math.min(220, Math.ceil(headerHeight) + 48))
+}
+
+function observePanelFit() {
+  const inventoryHeader = document.querySelector('.inventory-header')
+  if (!inventoryHeader || typeof ResizeObserver !== 'function') return
+  const observer = new ResizeObserver(() => {
+    if (el.dashboard.hidden) return
+    const minimum = minimumInventoryHeight()
+    if ((state.settings.inventoryHeight || 112) >= minimum) return
+    state.settings.inventoryHeight = minimum
+    applyPanelLayout(state.settings)
+  })
+  observer.observe(inventoryHeader)
+  requestAnimationFrame(() => applyPanelLayout(state.settings))
+}
+
+function bindSplitter(handle, config) {
+  let drag = null
+  handle.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0) return
+    drag = { pointerId: event.pointerId, position: config.axis === 'x' ? event.clientX : event.clientY, value: config.value() }
+    handle.setPointerCapture(event.pointerId)
+    handle.classList.add('dragging')
+    event.preventDefault()
+  })
+  handle.addEventListener('pointermove', (event) => {
+    if (!drag || drag.pointerId !== event.pointerId) return
+    const position = config.axis === 'x' ? event.clientX : event.clientY
+    config.resize(drag.value, position - drag.position)
+  })
+  const finish = (event) => {
+    if (!drag || drag.pointerId !== event.pointerId) return
+    drag = null
+    handle.classList.remove('dragging')
+    savePanelLayout()
+  }
+  handle.addEventListener('pointerup', finish)
+  handle.addEventListener('pointercancel', finish)
+  handle.addEventListener('dblclick', () => {
+    config.resize(config.axis === 'x' ? 300 : 112, 0)
+    savePanelLayout()
+  })
+  handle.addEventListener('keydown', (event) => {
+    if (!config.keys[event.key]) return
+    event.preventDefault()
+    const step = event.shiftKey ? 20 : 8
+    config.resize(config.value() + config.keys[event.key] * step, 0)
+    savePanelLayout()
+  })
+}
+
+async function savePanelLayout() {
+  try {
+    state.settings = await api.saveSettings({ ...state.settings })
+    applyPanelLayout(state.settings)
+  } catch (error) { toast(`Panel size was not saved: ${cleanError(error)}`, 'error') }
+}
+
 function describeWater(environment) {
   if (!environment) return 'Connect to inspect'
   if (!environment.enabled) return 'Disabled'
@@ -777,67 +853,6 @@ function describeWater(environment) {
 
 function syncStartupDelay() {
   el['startup-connection-delay'].disabled = !el['stagger-startup-connections'].checked
-}
-
-async function createRemoteGrant() {
-  const accountIds = [...el['grant-accounts'].querySelectorAll('input:checked')].map((input) => input.value)
-  const permissions = ['view', ...[...document.querySelectorAll('[data-permission]:checked:not(:disabled)')].map((input) => input.dataset.permission)]
-  try {
-    const created = await api.createRemoteGrant({ label: el['grant-label'].value, accountIds, permissions })
-    const base = el['remote-base-url'].value.trim().replace(/\/$/, '')
-    el['share-link'].value = base ? `${base}${created.sharePath}` : created.localUrl
-    el['generated-link'].hidden = false
-    await renderGrantList()
-    el['share-link'].select()
-  } catch (error) { toast(cleanError(error), 'error') }
-}
-
-async function enableTailscale() {
-  el['enable-tailscale'].disabled = true
-  try {
-    const result = await api.enableTailscale()
-    el['tailscale-result'].textContent = result.output || 'Tailscale browser access is enabled.'
-    el['tailscale-result'].hidden = false
-    if (result.url) el['remote-base-url'].value = result.url
-  } catch (error) {
-    el['tailscale-result'].textContent = `Could not enable Tailscale: ${cleanError(error)}`
-    el['tailscale-result'].hidden = false
-  } finally { el['enable-tailscale'].disabled = false }
-}
-
-async function renderGrantList() {
-  const grants = await api.listRemoteGrants()
-  if (!grants.length) {
-    const empty = document.createElement('div')
-    empty.className = 'grant-empty'
-    empty.textContent = 'No browser access links created yet.'
-    el['grant-list'].replaceChildren(empty)
-    return
-  }
-  el['grant-list'].replaceChildren(...grants.sort((a, b) => b.createdAt - a.createdAt).map((grant) => {
-    const item = document.createElement('div')
-    item.className = `grant-item ${grant.revokedAt ? 'revoked' : ''}`
-    const copy = document.createElement('div')
-    const title = document.createElement('strong')
-    title.textContent = grant.label
-    const detail = document.createElement('span')
-    detail.textContent = `${grant.accountIds.length} account${grant.accountIds.length === 1 ? '' : 's'} · ${grant.permissions.join(', ')}${grant.revokedAt ? ' · revoked' : ''}`
-    copy.append(title, detail)
-    item.append(copy)
-    if (!grant.revokedAt) {
-      const revoke = document.createElement('button')
-      revoke.type = 'button'
-      revoke.className = 'button danger'
-      revoke.textContent = 'Revoke'
-      revoke.addEventListener('click', async () => {
-        await api.revokeRemoteGrant(grant.id)
-        await renderGrantList()
-        toast('Browser access revoked.')
-      })
-      item.append(revoke)
-    }
-    return item
-  }))
 }
 
 function selectedAccount() {

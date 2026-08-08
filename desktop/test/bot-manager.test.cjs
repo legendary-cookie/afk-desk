@@ -95,6 +95,71 @@ test('sends separate join and server-change messages', async (t) => {
   assert.deepEqual(bot.writes, [])
 })
 
+test('auto version reuses the last successful protocol and reports the resolved version', () => {
+  const events = []
+  const bot = new FakeBot()
+  bot.version = '1.21.1'
+  let options
+  const manager = new BotManager({
+    profilesPath: 'profiles',
+    emit: (...event) => events.push(event),
+    createBot: (input) => { options = input; return bot }
+  })
+  manager.connect({
+    id: 'auto-version', username: 'user@example.com', host: 'localhost', port: 25565,
+    version: '', lastSuccessfulVersion: '1.21.1', antiAfk: false, autoReconnect: false
+  })
+  assert.equal(options.version, '1.21.1')
+  bot.entity = { yaw: 0, pitch: 0 }
+  bot.emit('spawn')
+  assert.deepEqual(events.find(([type]) => type === 'version'), ['version', 'auto-version', { version: '1.21.1', automatic: true, stable: false }])
+  manager.disconnect('auto-version')
+})
+
+test('an auto-detected version is confirmed only after a stable minute online', () => {
+  const events = []
+  const bot = new FakeBot()
+  bot.version = '1.21.1'
+  let stableCallback
+  const manager = new BotManager({
+    profilesPath: 'profiles',
+    emit: (...event) => events.push(event),
+    createBot: () => bot,
+    scheduleNetworkTimer: (callback, delay) => {
+      if (delay === 60_000) stableCallback = callback
+      return `network-${delay}`
+    },
+    clearNetworkTimer: () => {}
+  })
+  manager.connect({ id: 'stable-version', username: 'user@example.com', host: 'localhost', version: '', antiAfk: false, autoReconnect: false })
+  bot.entity = { yaw: 0, pitch: 0 }
+  bot.emit('spawn')
+  assert.equal(events.filter(([type]) => type === 'version').length, 1)
+  stableCallback()
+  assert.deepEqual(events.filter(([type]) => type === 'version').at(-1), ['version', 'stable-version', { version: '1.21.1', automatic: true, stable: true }])
+  manager.disconnect('stable-version')
+})
+
+test('a remembered auto version falls back to fresh detection if it fails before the world loads', () => {
+  const bots = [new FakeBot(), new FakeBot()]
+  const versions = []
+  let scheduled
+  const manager = new BotManager({
+    profilesPath: 'profiles',
+    emit: () => {},
+    createBot: (input) => { versions.push(input.version); return bots[versions.length - 1] },
+    scheduleReconnectTimer: (callback) => { scheduled = callback; return 'retry' }
+  })
+  manager.connect({
+    id: 'stale-version', username: 'user@example.com', host: 'localhost', port: 25565,
+    version: '', lastSuccessfulVersion: '1.21.1', antiAfk: false, autoReconnect: true
+  })
+  bots[0].emit('end', 'unsupported protocol')
+  scheduled()
+  assert.deepEqual(versions, ['1.21.1', false])
+  manager.disconnect('stale-version')
+})
+
 test('nearby entity diagnostics are bounded and contain no account credentials', () => {
   const self = { id: 1, position: new Vec3(0, 64, 0) }
   const bot = {
