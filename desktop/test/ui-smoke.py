@@ -9,10 +9,11 @@ STUB = r"""
 window.__sent = [];
 window.__controls = [];
 window.__scale = 100;
-window.__settings = { startWithWindows: false, staggerStartupConnections: true, startupConnectionDelay: 3, uiScale: 100, macros: [{ label: 'Town', message: '/server towny' }] };
+window.__settings = { startWithWindows: false, staggerStartupConnections: true, startupConnectionDelay: 3, uiScale: 100, sidePanelWidth: 300, inventoryHeight: 112, macros: [{ label: 'Town', message: '/server towny' }] };
 window.afkDesk = {
   listAccounts: async () => [{ id: 'one', label: 'TestPlayer', username: 'test@example.com', host: 'play.example.com', port: 25565, antiAfk: true, environmentalMovement: true }],
   getSettings: async () => ({ ...window.__settings }),
+  getAppVersion: async () => '0.7.0-test',
   saveSettings: async (input) => (window.__settings = { ...window.__settings, ...input }),
   setUiScale: (value) => { window.__scale = value; },
   onBotEvent: (callback) => { setTimeout(() => callback({ type: 'status', id: 'one', payload: { status: 'online', detail: 'Ready', at: Date.now() } }), 0); return () => {}; },
@@ -20,9 +21,7 @@ window.afkDesk = {
   reorderAccounts: async () => [], control: async () => {}, setControlState: async (_id, control, active) => { window.__controls.push([control, active]); }, look: async () => {},
   connect: async () => {}, disconnect: async () => {}, dropStack: async () => {}, setAutoDeposit: async () => {},
   saveAccount: async (value) => value, deleteAccount: async () => {},
-  remoteStatus: async () => ({ localUrl: 'http://127.0.0.1', port: 37123 }),
-  listRemoteGrants: async () => [], createRemoteGrant: async () => ({}), revokeRemoteGrant: async () => {},
-  openExternal: async () => {}, openIsolatedLogin: async () => {}, openRemoteDashboard: async () => {}, enableTailscale: async () => ({})
+  openExternal: async () => {}, openIsolatedLogin: async () => {}
 };
 """
 
@@ -60,6 +59,35 @@ def run() -> None:
         assert page.evaluate("window.__scale") == 90
         page.locator("#close-settings").click()
         assert page.evaluate("window.__scale") == 100
+        handle = page.locator("#column-resizer")
+        box = handle.bounding_box()
+        page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+        page.mouse.down()
+        page.mouse.move(box["x"] - 50, box["y"])
+        page.mouse.up()
+        assert page.evaluate("window.__settings.sidePanelWidth > 300")
+        handle = page.locator("#inventory-resizer")
+        box = handle.bounding_box()
+        page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+        page.mouse.down()
+        page.mouse.move(box["x"], box["y"] - 30)
+        page.mouse.up()
+        assert page.evaluate("window.__settings.inventoryHeight > 112")
+        assert page.locator("#app-version").inner_text() == "v0.7.0-test"
+        column = page.locator("#column-resizer").bounding_box()
+        page.mouse.move(column["x"] + column["width"] / 2, column["y"] + column["height"] / 2)
+        page.mouse.down()
+        page.mouse.move(column["x"] + 400, column["y"])
+        page.mouse.up()
+        assert page.evaluate("getComputedStyle(document.querySelector('.details-list')).gridTemplateColumns.split(' ').length <= 2")
+        assert page.evaluate("getComputedStyle(document.querySelector('.movement-actions')).gridTemplateColumns.split(' ').length <= 2")
+        inventory = page.locator("#inventory-resizer").bounding_box()
+        page.mouse.move(inventory["x"] + inventory["width"] / 2, inventory["y"] + inventory["height"] / 2)
+        page.mouse.down()
+        page.mouse.move(inventory["x"], inventory["y"] + 500)
+        page.mouse.up()
+        inventory_fit = page.evaluate("({ panel: document.querySelector('.inventory-panel').offsetHeight, header: document.querySelector('.inventory-header').scrollHeight, setting: window.__settings.inventoryHeight })")
+        assert inventory_fit["panel"] >= inventory_fit["header"] + 48, inventory_fit
         assert page.evaluate("document.body.scrollHeight <= innerHeight")
         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
         assert page.locator("#macro-pad").is_visible()

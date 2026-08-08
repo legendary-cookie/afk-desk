@@ -66,7 +66,7 @@ class BotManager {
       port: Number(account.port) || 25565,
       username: account.username,
       auth: 'microsoft',
-      version: account.version || false,
+      version: account.version || account.lastSuccessfulVersion || false,
       profilesFolder: path.join(this.profilesPath, account.id),
       connect: createProxyConnect(account.proxy, { host: account.host, port: Number(account.port) || 25565 }),
       hideErrors: true,
@@ -105,7 +105,9 @@ class BotManager {
       pendingServerPosition: null,
       lastMovementDiagnosticAt: 0,
       identityKey: '',
-      telemetryKey: ''
+      telemetryKey: '',
+      versionReported: false,
+      versionConfirmed: false
     }
     bot.__afkDeskPacketDiagnostic = (entry) => this.diagnose({ ...entry, accountId: account.id, version: bot.version || account.version || 'auto' })
     bot._client?.on?.('packet', (_data, meta) => {
@@ -151,9 +153,17 @@ class BotManager {
         session.reconnectResetTimer = null
         if (this.sessions.get(account.id) === session && session.ready && !session.switching) {
           reconnectState.attempts = 0
+          if (!session.versionConfirmed && bot.version) {
+            session.versionConfirmed = true
+            this.emit('version', account.id, { version: String(bot.version).slice(0, 32), automatic: !account.version, stable: true })
+          }
         }
       }, 60_000)
       this.status(account.id, 'online', `Online as ${bot.username}`)
+      if (!session.versionReported && bot.version) {
+        session.versionReported = true
+        this.emit('version', account.id, { version: String(bot.version).slice(0, 32), automatic: !account.version, stable: false })
+      }
       emitIdentity()
       emitTelemetry()
       if (!session.telemetryTimer) session.telemetryTimer = setInterval(emitTelemetry, 2000)
@@ -274,9 +284,16 @@ class BotManager {
       }
     })
     bot.on('end', (reason) => {
+      const retryWithoutRememberedVersion = !session.ready && !account.version && Boolean(account.lastSuccessfulVersion)
       this.clearSession(account.id)
       if (account.autoReconnect !== false && !reconnectState.manual) {
-        this.scheduleReconnect(account, session.lastKickReason || session.lastNetworkReason || reason)
+        if (retryWithoutRememberedVersion) {
+          this.emit('log', account.id, { kind: 'error', message: `Minecraft ${account.lastSuccessfulVersion} did not reach the world. Retrying with fresh version detection.`, at: Date.now() })
+        }
+        this.scheduleReconnect(
+          retryWithoutRememberedVersion ? { ...account, lastSuccessfulVersion: '' } : account,
+          session.lastKickReason || session.lastNetworkReason || reason
+        )
       } else {
         this.reconnects.delete(account.id)
         this.status(account.id, 'offline', reason ? `Disconnected: ${reason}` : 'Disconnected')

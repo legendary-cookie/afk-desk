@@ -16,6 +16,8 @@ This archive preserves the actual desktop source snapshot and Windows installer 
 | 0.4.0 | 2026-07-29 15:23 +08:00 | Added automatic IGN discovery, account ordering, proxies, startup connections, inventory, coordinates, health, hunger, and resource-use improvements. | [source](https://github.com/legendary-cookie/afk-desk/tree/v0.4.0) · [changes](https://github.com/legendary-cookie/afk-desk/compare/v0.3.0...v0.4.0) · [release](https://github.com/legendary-cookie/afk-desk/releases/tag/v0.4.0) |
 | 0.4.1 | 2026-07-30 13:53 +08:00 | Fixed the desktop console viewport and scrolling, hardened shutdown, updated Electron packaging, and introduced the Android/iOS-source mobile client. | [desktop snapshot](https://github.com/legendary-cookie/afk-desk/tree/desktop-v0.4.1) · [desktop changes](https://github.com/legendary-cookie/afk-desk/compare/v0.4.0...desktop-v0.4.1) · [monorepo changes](https://github.com/legendary-cookie/afk-desk/compare/desktop-v0.4.1...main) · [release](https://github.com/legendary-cookie/afk-desk/releases/tag/v0.4.1) |
 | 0.5.0 | 2026-07-30 23:09 +08:00 | Added selected-stack dropping, opt-in nearby-chest auto-deposit, traceable chest coordinates, and a five-second default automatic-message delay. | [source](https://github.com/legendary-cookie/afk-desk/tree/v0.5.0) · [changes](https://github.com/legendary-cookie/afk-desk/compare/v0.4.1...v0.5.0) · [release](https://github.com/legendary-cookie/afk-desk/releases/tag/v0.5.0) |
+| 0.6.0 | 2026-08-07 | Added configurable anti-AFK behavior, native environmental movement, startup staggering, chat history/macros, interface scaling, held controls, network recovery, modern Velocity switching, and extensive water-physics corrections. | [source](https://github.com/legendary-cookie/afk-desk/tree/v0.6.0) · [changes](https://github.com/legendary-cookie/afk-desk/compare/v0.5.0...v0.6.0) · [release](https://github.com/legendary-cookie/afk-desk/releases/tag/v0.6.0) |
+| 0.7.0 | 2026-08-09 | Added branded/versioned UI and independently resizable responsive panels; fixed stable automatic version selection; temporarily removed browser and remote access. | [source](https://github.com/legendary-cookie/afk-desk/tree/v0.7.0) · [changes](https://github.com/legendary-cookie/afk-desk/compare/v0.6.0...v0.7.0) · [release](https://github.com/legendary-cookie/afk-desk/releases/tag/v0.7.0) |
 
 ## Archive layout
 
@@ -23,6 +25,7 @@ This archive preserves the actual desktop source snapshot and Windows installer 
 - Tag `desktop-v0.4.1` preserves the final desktop-only snapshot.
 - Tag `v0.4.1` points to the current desktop/mobile monorepo release.
 - Tag `v0.5.0` points to the inventory-control and chest-automation desktop release in the monorepo.
+- Tags `v0.6.0` and `v0.7.0` point to the water-physics and responsive desktop releases in the monorepo.
 - Every historical release includes its original Windows installer and an explicit desktop source ZIP.
 - [RELEASE_CHECKSUMS.txt](RELEASE_CHECKSUMS.txt) contains SHA-256 hashes for the preserved artifacts.
 

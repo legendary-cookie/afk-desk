@@ -11,7 +11,7 @@
     <div class="app-shell">
       <aside class="sidebar" aria-label="Accounts">
         <header class="brand">
-          <div class="brand-mark" aria-hidden="true">A</div>
+          <img class="brand-mark" src="../assets/afk-desk-icon.png" alt="" />
           <div>
             <strong>AFK Desk</strong>
             <span>Local Minecraft client</span>
@@ -27,9 +27,9 @@
         <button id="add-account" class="button primary sidebar-action" type="button">
           <span aria-hidden="true">＋</span> Add account
         </button>
-        <button id="browser-access" class="button secondary sidebar-action browser-action" type="button">Browser access</button>
         <button id="open-settings" class="button secondary sidebar-action browser-action" type="button">Settings</button>
         <p class="privacy-note">Credentials stay in Microsoft’s sign-in flow. AFK Desk never stores your password.</p>
+        <div class="sidebar-version">AFK Desk <span id="app-version">v…</span></div>
       </aside>
 
       <main id="main-content" class="main-content">
@@ -93,7 +93,7 @@
                 </div>
               </section>
             </section>
-
+            <div id="column-resizer" class="layout-resizer column-resizer" role="separator" aria-orientation="vertical" tabindex="0" aria-label="Resize console and controls" aria-valuetext="Controls 300 pixels wide"></div>
             <aside class="controls-column">
               <section class="panel details-panel" aria-labelledby="details-title">
                 <header class="panel-header"><h2 id="details-title">Connection</h2></header>
@@ -130,6 +130,7 @@
               </section>
             </aside>
           </div>
+          <div id="inventory-resizer" class="layout-resizer inventory-resizer" role="separator" aria-orientation="horizontal" tabindex="0" aria-label="Resize inventory" aria-valuetext="Inventory 112 pixels high"></div>
           <section class="panel inventory-panel" aria-labelledby="inventory-title">
             <header class="panel-header inventory-header">
               <div><h2 id="inventory-title">Inventory</h2><p id="inventory-count">Connect to view items</p></div>
@@ -263,54 +264,12 @@
           </label>
           <label class="field settings-delay"><span>Delay between accounts (seconds)</span><input id="startup-connection-delay" type="number" min="1" max="300" value="3" /></label>
           <label class="field settings-delay"><span>Interface scale</span><input id="ui-scale" type="range" min="75" max="125" step="5" value="100" /><small><output id="ui-scale-value" for="ui-scale">100%</output> — smaller values fit more controls on screen.</small></label>
+          <section class="settings-about" aria-label="About AFK Desk"><img src="../assets/afk-desk-icon.png" alt="" /><div><strong>AFK Desk</strong><span id="settings-app-version">Version …</span></div></section>
         </div>
         <footer class="dialog-footer">
           <span class="footer-spacer"></span>
           <button id="save-settings" class="button primary" type="button">Save settings</button>
         </footer>
-      </div>
-    </dialog>
-
-    <dialog id="remote-dialog" class="wide-dialog" aria-labelledby="remote-title">
-      <div>
-        <header class="dialog-header">
-          <div><div class="eyebrow">Secure sharing</div><h2 id="remote-title">Browser access</h2></div>
-          <button id="close-remote" class="icon-button" type="button" aria-label="Close">×</button>
-        </header>
-        <div class="remote-body">
-          <section class="remote-intro">
-            <div><strong>Local dashboard</strong><span id="remote-local-url">Starting…</span></div>
-            <button id="open-dashboard" class="button secondary" type="button">Open dashboard</button>
-          </section>
-          <section class="remote-section">
-            <h3>Make it available remotely</h3>
-            <p>AFK Desk listens only on your computer. Tailscale can privately carry it to your phone or invited people without opening a public port.</p>
-            <code id="tailscale-command">tailscale serve --bg 37123</code>
-            <button id="enable-tailscale" class="button secondary" type="button">Enable with Tailscale</button>
-            <p id="tailscale-result" class="inline-result" hidden role="status"></p>
-            <label class="field"><span>Your Tailscale HTTPS address (optional)</span><input id="remote-base-url" type="url" placeholder="https://your-pc.your-tailnet.ts.net" /></label>
-          </section>
-          <section class="remote-section">
-            <h3>Create shared access</h3>
-            <label class="field"><span>Person or access name</span><input id="grant-label" maxlength="60" placeholder="Alex" /></label>
-            <fieldset><legend>Accounts they can use</legend><div id="grant-accounts" class="check-grid"></div></fieldset>
-            <fieldset><legend>Permissions</legend><div class="check-grid permissions-grid">
-              <label><input type="checkbox" data-permission="view" checked disabled /> View status and console</label>
-              <label><input type="checkbox" data-permission="chat" checked /> Send chat and commands</label>
-              <label><input type="checkbox" data-permission="control" /> Movement controls</label>
-              <label><input type="checkbox" data-permission="connect" /> Connect and disconnect</label>
-            </div></fieldset>
-            <button id="create-grant" class="button primary" type="button">Create access link</button>
-            <div id="generated-link" class="generated-link" hidden>
-              <label class="field"><span>Copy this link now — it is shown only once</span><input id="share-link" readonly /></label>
-              <button id="copy-share-link" class="button secondary" type="button">Copy link</button>
-            </div>
-          </section>
-          <section class="remote-section">
-            <h3>Active and revoked access</h3>
-            <div id="grant-list" class="grant-list"></div>
-          </section>
-        </div>
       </div>
     </dialog>
 

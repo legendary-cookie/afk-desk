@@ -14,15 +14,10 @@ contextBridge.exposeInMainWorld('afkDesk', {
   dropStack: (id, slot) => ipcRenderer.invoke('bot:drop-stack', { id, slot }),
   setAutoDeposit: (id, enabled) => ipcRenderer.invoke('bot:auto-deposit', { id, enabled }),
   openIsolatedLogin: (id, url, code) => ipcRenderer.invoke('auth:open-isolated', { id, url, code }),
-  remoteStatus: () => ipcRenderer.invoke('remote:status'),
-  openRemoteDashboard: () => ipcRenderer.invoke('remote:open-owner'),
-  enableTailscale: () => ipcRenderer.invoke('remote:enable-tailscale'),
-  listRemoteGrants: () => ipcRenderer.invoke('remote:list-grants'),
-  createRemoteGrant: (input) => ipcRenderer.invoke('remote:create-grant', input),
-  revokeRemoteGrant: (id) => ipcRenderer.invoke('remote:revoke-grant', id),
   openExternal: (url) => ipcRenderer.invoke('system:open-external', url),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   saveSettings: (settings) => ipcRenderer.invoke('settings:save', settings),
+  getAppVersion: () => ipcRenderer.invoke('app:version'),
   setUiScale: (percent) => webFrame.setZoomFactor(Math.max(0.75, Math.min(Number(percent) || 100, 125)) / 100),
   onBotEvent: (callback) => {
     const listener = (_event, data) => callback(data)

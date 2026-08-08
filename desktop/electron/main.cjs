@@ -1,23 +1,17 @@
 const { app, BrowserWindow, ipcMain, shell, safeStorage } = require('electron')
 const path = require('node:path')
 const crypto = require('node:crypto')
-const { execFile } = require('node:child_process')
-const { promisify } = require('node:util')
 const { AccountStore, SettingsStore, startupConnectionDelay } = require('./store.cjs')
 const { BotManager, normalizeSkinUrl } = require('./bot-manager.cjs')
-const { AccessStore } = require('./remote/access-store.cjs')
-const { RemoteAccessServer } = require('./remote/server.cjs')
 const { sendToWindow } = require('./window-events.cjs')
 const { DiagnosticLog } = require('./diagnostic-log.cjs')
-const execFileAsync = promisify(execFile)
+const { preferredVersionForAccount } = require('./version-compatibility.cjs')
 const movementDiagnosticsEnabled = process.env.AFK_DESK_MOVEMENT_DIAGNOSTICS === '1'
 
 let mainWindow
 let store
 let settingsStore
 let bots
-let accessStore
-let remoteAccess
 let diagnosticLog
 const runtime = new Map()
 
@@ -29,6 +23,7 @@ function createWindow() {
     minHeight: 600,
     backgroundColor: '#0b0e13',
     title: 'AFK Desk',
+    icon: path.join(__dirname, '..', 'assets', 'afk-desk-icon.png'),
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
@@ -43,7 +38,6 @@ function createWindow() {
 app.whenReady().then(async () => {
   store = new AccountStore(app.getPath('userData'))
   settingsStore = new SettingsStore(app.getPath('userData'))
-  accessStore = new AccessStore(app.getPath('userData'))
   diagnosticLog = new DiagnosticLog(app.getPath('userData'))
   bots = new BotManager({
     profilesPath: path.join(app.getPath('userData'), 'profiles'),
@@ -53,13 +47,6 @@ app.whenReady().then(async () => {
       if (movementDiagnosticsEnabled) console.log(`[movement-diagnostic] ${JSON.stringify(entry)}`)
     }
   })
-  remoteAccess = new RemoteAccessServer({
-    accessStore,
-    getAccounts: () => store.list(),
-    getRuntime: getRuntime,
-    handleAction: handleRemoteAction
-  })
-  await remoteAccess.start()
   registerIpc()
   createWindow()
   autoConnectConfiguredAccounts()
@@ -72,7 +59,6 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   for (const account of store?.list() || []) bots?.disconnect(account.id)
-  remoteAccess?.stop()
 })
 
 function registerIpc() {
@@ -106,24 +92,6 @@ function registerIpc() {
     return publicAccount(updated)
   })
   ipcMain.handle('auth:open-isolated', (_event, { id, url, code }) => openIsolatedLogin(id, url, code))
-  ipcMain.handle('remote:status', () => remoteAccess.status())
-  ipcMain.handle('remote:open-owner', () => shell.openExternal(remoteAccess.ownerUrl()))
-  ipcMain.handle('remote:enable-tailscale', async () => {
-    const { stdout, stderr } = await execFileAsync('tailscale', ['serve', '--bg', String(remoteAccess.port)], { timeout: 20_000, windowsHide: true })
-    const output = `${stdout || ''}\n${stderr || ''}`.trim()
-    const url = output.match(/https:\/\/[^\s]+/)?.[0]?.replace(/[.,]$/, '') || ''
-    return { output: output.slice(0, 1000), url }
-  })
-  ipcMain.handle('remote:list-grants', () => accessStore.publicList())
-  ipcMain.handle('remote:create-grant', (_event, input) => {
-    const created = remoteAccess.createGrant(input || {})
-    return {
-      grant: created.grant,
-      localUrl: `${remoteAccess.status().localUrl}/session?token=${encodeURIComponent(created.token)}`,
-      sharePath: `/session?token=${encodeURIComponent(created.token)}`
-    }
-  })
-  ipcMain.handle('remote:revoke-grant', (_event, id) => accessStore.revoke(String(id)))
   ipcMain.handle('system:open-external', (_event, url) => {
     const parsed = new URL(url)
     if (!['https:', 'http:'].includes(parsed.protocol)) throw new Error('Unsupported link.')
@@ -133,6 +101,7 @@ function registerIpc() {
     startWithWindows: app.getLoginItemSettings().openAtLogin,
     ...settingsStore.get()
   }))
+  ipcMain.handle('app:version', () => app.getVersion())
   ipcMain.handle('settings:save', (_event, input) => {
     const startWithWindows = input?.startWithWindows === true
     app.setLoginItemSettings({ openAtLogin: startWithWindows })
@@ -213,6 +182,13 @@ function emitBotEvent(type, id, payload) {
   if (type === 'status') runtime.set(id, { ...current, status: payload.status, detail: payload.detail })
   if (type === 'log') runtime.set(id, { ...current, logs: [...current.logs.slice(-499), payload] })
   if (type === 'telemetry') runtime.set(id, { ...current, telemetry: payload })
+  if (type === 'version') {
+    runtime.set(id, { ...current, resolvedVersion: payload.version })
+    const account = store.list().find((item) => item.id === id)
+    if (account && payload.version && payload.stable === true) {
+      store.save({ ...account, lastSuccessfulVersion: String(payload.version).slice(0, 32), lastSuccessfulVersionStable: true })
+    }
+  }
   if (type === 'identity') {
     const account = store.list().find((item) => item.id === id)
     if (account) {
@@ -231,15 +207,6 @@ function emitBotEvent(type, id, payload) {
 
 function getRuntime(id) {
   return runtime.get(id) || { status: 'offline', detail: 'Ready to connect', logs: [] }
-}
-
-function handleRemoteAction(id, action, payload) {
-  if (action === 'connect') return bots.connect(requireAccount(id))
-  if (action === 'disconnect') return bots.disconnect(id)
-  if (action === 'chat') return bots.sendChat(id, payload.message)
-  if (action === 'control') return bots.control(id, payload.control, payload.duration)
-  if (action === 'look') return bots.look(id, payload.direction)
-  throw new Error('Unknown remote action.')
 }
 
 function requireAccount(id) {
@@ -272,6 +239,8 @@ function validateAccount(input, existing) {
     host,
     port,
     version: String(input?.version || '').trim(),
+    lastSuccessfulVersion: String(input?.lastSuccessfulVersion || existing?.lastSuccessfulVersion || existing?.version || '').trim().slice(0, 32),
+    lastSuccessfulVersionStable: input?.lastSuccessfulVersionStable === true || existing?.lastSuccessfulVersionStable === true,
     minecraftName,
     minecraftUuid: normalizeUuid(input?.minecraftUuid),
     skinUrl: normalizeSkinUrl(input?.skinUrl),
@@ -353,7 +322,8 @@ function withProxyPassword(account) {
     try { password = safeStorage.decryptString(Buffer.from(proxy.passwordEncrypted, 'base64')) }
     catch { throw new Error('Could not decrypt this account’s proxy password. Re-enter it in account settings.') }
   }
-  return { ...account, proxy: { ...proxy, password } }
+  const lastSuccessfulVersion = account.version ? account.lastSuccessfulVersion : preferredVersionForAccount(account, store.list())
+  return { ...account, lastSuccessfulVersion, proxy: { ...proxy, password } }
 }
 
 function publicAccount(account) {

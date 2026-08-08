@@ -27,6 +27,61 @@ test('desktop dashboard stays viewport-bound and scrolls only bounded regions', 
   assert.match(css, /\.console-log\s*\{[^}]*min-height:\s*0;[^}]*overflow-y:\s*auto;/s)
 })
 
+test('chat, controls, and inventory expose independent persistent splitters', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'src', 'index.html'), 'utf8')
+  const css = fs.readFileSync(path.join(__dirname, '..', 'src', 'styles.css'), 'utf8')
+  const script = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer.js'), 'utf8')
+  assert.match(html, /id="column-resizer"[^>]*role="separator"[^>]*aria-orientation="vertical"[^>]*tabindex="0"/)
+  assert.match(html, /id="inventory-resizer"[^>]*role="separator"[^>]*aria-orientation="horizontal"[^>]*tabindex="0"/)
+  assert.match(css, /--side-panel-width:\s*300px/)
+  assert.match(css, /--inventory-height:\s*112px/)
+  assert.match(css, /\.column-resizer\s*\{[^}]*cursor:\s*col-resize;/s)
+  assert.match(css, /\.inventory-resizer\s*\{[^}]*cursor:\s*row-resize;/s)
+  assert.match(script, /function bindPanelResizers/)
+  assert.match(script, /pointerdown/)
+  assert.match(script, /function applyPanelLayout/)
+  assert.match(script, /function savePanelLayout/)
+})
+
+test('resized panels reflow their contents and preserve enough usable height', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', 'src', 'styles.css'), 'utf8')
+  const script = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer.js'), 'utf8')
+  assert.match(css, /\.controls-column\s*\{[^}]*container-type:\s*inline-size;/s)
+  assert.match(css, /@container controls \(max-width:\s*280px\)/)
+  assert.match(css, /@container controls \(max-width:\s*250px\)/)
+  assert.match(css, /@container inventory \(max-width:\s*680px\)/)
+  assert.match(css, /overflow-wrap:\s*anywhere/)
+  assert.match(script, /function minimumInventoryHeight/)
+  assert.match(script, /ResizeObserver/)
+})
+
+test('desktop branding exposes the packaged icon and installed app version', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'src', 'index.html'), 'utf8')
+  const preload = fs.readFileSync(path.join(__dirname, '..', 'electron', 'preload.cjs'), 'utf8')
+  const main = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'))
+  assert.match(html, /id="app-version"/)
+  assert.match(html, /id="settings-app-version"/)
+  assert.match(html, /afk-desk-icon\.png/)
+  assert.match(preload, /getAppVersion:.*app:version/)
+  assert.match(main, /app:version.*app\.getVersion/)
+  assert.equal(manifest.build.win.icon, 'assets/afk-desk.ico')
+  assert.equal(fs.existsSync(path.join(__dirname, '..', 'assets', 'afk-desk-icon.png')), true)
+  assert.equal(fs.existsSync(path.join(__dirname, '..', 'assets', 'afk-desk.ico')), true)
+})
+
+test('browser and remote access are absent from the desktop application', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'src', 'index.html'), 'utf8')
+  const script = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer.js'), 'utf8')
+  const preload = fs.readFileSync(path.join(__dirname, '..', 'electron', 'preload.cjs'), 'utf8')
+  const main = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
+  assert.doesNotMatch(html, /browser-access|remote-dialog|Browser access|Tailscale/i)
+  assert.doesNotMatch(script, /openRemoteDialog|remoteStatus|createRemoteGrant|enableTailscale/)
+  assert.doesNotMatch(preload, /remote:|RemoteGrant|enableTailscale/)
+  assert.doesNotMatch(main, /RemoteAccessServer|AccessStore|remote:/)
+  assert.equal(fs.existsSync(path.join(__dirname, '..', 'electron', 'remote')), false)
+})
+
 test('chat exposes history navigation, editable macros, and interface scaling', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'src', 'index.html'), 'utf8')
   const script = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer.js'), 'utf8')
@@ -70,15 +125,6 @@ test('desktop bridge exposes inventory actions and accounts default automatic de
   assert.match(main, /messageDelay:.*\? 6 :/)
   assert.match(main, /environmentalMovement:\s*input\?\.environmentalMovement !== false/)
   assert.match(main, /startupConnectionDelay\(settings, index\)/)
-})
-
-test('browser player state shows the closest chest coordinates', () => {
-  const html = fs.readFileSync(path.join(__dirname, '..', 'electron', 'remote', 'public', 'index.html'), 'utf8')
-  const script = fs.readFileSync(path.join(__dirname, '..', 'electron', 'remote', 'public', 'app.js'), 'utf8')
-  assert.match(html, /id="chest"/)
-  assert.match(html, /id="water"/)
-  assert.match(script, /telemetry\?\.nearestChest/)
-  assert.match(script, /telemetry\?\.environment/)
 })
 
 test('desktop movement supports held buttons and physical WASD plus Space controls', () => {
