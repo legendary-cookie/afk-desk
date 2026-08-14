@@ -66,7 +66,10 @@
                   <h2 id="console-title">Console</h2>
                   <p id="server-address">server.example.com</p>
                 </div>
-                <button id="clear-console" class="text-button" type="button">Clear</button>
+                <div class="panel-header-actions">
+                  <button id="focus-chat" class="text-button" type="button" aria-pressed="false" title="Temporarily collapse inventory and maximize chat">Focus chat</button>
+                  <button id="clear-console" class="text-button" type="button">Clear</button>
+                </div>
               </header>
               <div id="console-log" class="console-log" role="log" aria-live="polite" aria-label="Server messages">
                 <div class="console-placeholder">Server messages will appear here after you connect.</div>
@@ -133,17 +136,18 @@
           <div id="inventory-resizer" class="layout-resizer inventory-resizer" role="separator" aria-orientation="horizontal" tabindex="0" aria-label="Resize inventory" aria-valuetext="Inventory 112 pixels high"></div>
           <section class="panel inventory-panel" aria-labelledby="inventory-title">
             <header class="panel-header inventory-header">
-              <div><h2 id="inventory-title">Inventory</h2><p id="inventory-count">Connect to view items</p></div>
+              <div class="inventory-heading"><h2 id="inventory-title">Inventory</h2><p id="inventory-count">Connect to view items</p></div>
               <div class="inventory-toolbar">
-                <label class="compact-toggle"><input id="auto-deposit-toggle" type="checkbox" /><span>Auto-deposit to closest chest or barrel</span></label>
-                <button id="move-selected" class="button secondary" type="button" disabled>Move selected</button>
-                <button id="hold-selected" class="button secondary" type="button" disabled>Hold in hand</button>
+                <button id="toggle-inventory" class="button secondary" type="button" aria-expanded="true" title="Collapse inventory and give chat more room">Collapse</button>
+                <label class="compact-toggle" title="Deposit unlocked items into the closest chest or barrel"><input id="auto-deposit-toggle" type="checkbox" /><span>Auto-deposit</span></label>
+                <button id="move-selected" class="button secondary" type="button" disabled>Move</button>
+                <button id="hold-selected" class="button secondary" type="button" disabled>Hold</button>
                 <select id="equip-destination" class="compact-select" aria-label="Equipment destination">
                   <option value="auto">Auto gear slot</option><option value="head">Head</option><option value="torso">Chest</option><option value="legs">Legs</option><option value="feet">Feet</option><option value="off-hand">Off-hand</option>
                 </select>
-                <button id="equip-selected" class="button secondary" type="button" disabled>Equip selected</button>
-                <button id="lock-selected" class="button secondary" type="button" disabled>Lock selected stack</button>
-                <button id="drop-selected" class="button danger" type="button" disabled>Drop selected stack</button>
+                <button id="equip-selected" class="button secondary" type="button" disabled>Equip</button>
+                <button id="lock-selected" class="button secondary" type="button" disabled>Lock</button>
+                <button id="drop-selected" class="button danger" type="button" disabled>Drop</button>
               </div>
             </header>
             <div id="inventory-grid" class="inventory-grid"><div class="inventory-empty">Inventory will appear while this account is online.</div></div>

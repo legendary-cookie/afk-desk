@@ -68,7 +68,8 @@ const state = {
   telemetry: new Map(),
   serverWindows: new Map(),
   chatHistory: new Map(),
-  settings: { uiScale: 100, sidePanelWidth: 300, inventoryHeight: 400, macros: [] },
+  settings: { uiScale: 100, sidePanelWidth: 300, inventoryHeight: 260, macros: [] },
+  inventoryCollapsed: false,
   resolvedVersions: new Map(),
   login: { code: '', url: 'https://microsoft.com/link' }
 }
@@ -76,7 +77,7 @@ const state = {
 const el = Object.fromEntries([
   'account-list', 'account-count', 'add-account', 'open-settings', 'settings-dialog', 'close-settings', 'start-with-windows', 'stagger-startup-connections', 'startup-connection-delay', 'save-settings', 'empty-state', 'dashboard', 'account-title', 'app-version', 'settings-app-version',
   'edit-account', 'connection-button', 'status-banner', 'status-name', 'status-detail', 'server-address',
-  'detail-username', 'detail-server', 'detail-version', 'detail-antiafk', 'detail-environment', 'detail-water', 'detail-health', 'detail-hunger', 'detail-coordinates', 'detail-chest', 'detail-dimension', 'inventory-count', 'inventory-grid', 'auto-deposit-toggle', 'move-selected', 'hold-selected', 'equip-destination', 'equip-selected', 'lock-selected', 'drop-selected', 'console-log', 'clear-console',
+  'detail-username', 'detail-server', 'detail-version', 'detail-antiafk', 'detail-environment', 'detail-water', 'detail-health', 'detail-hunger', 'detail-coordinates', 'detail-chest', 'detail-dimension', 'inventory-count', 'inventory-grid', 'auto-deposit-toggle', 'move-selected', 'hold-selected', 'equip-destination', 'equip-selected', 'lock-selected', 'drop-selected', 'toggle-inventory', 'focus-chat', 'console-log', 'clear-console',
   'chat-form', 'chat-message', 'macro-pad', 'manage-macros', 'macro-editor', 'macro-rows', 'add-macro', 'cancel-macros', 'save-macros', 'account-dialog', 'account-form', 'dialog-title', 'account-id', 'label',
   'username', 'host', 'port', 'version', 'connect-on-startup', 'proxy-enabled', 'proxy-fields', 'proxy-type', 'proxy-host', 'proxy-port', 'proxy-username', 'proxy-password', 'proxy-password-help', 'proxy-clear-password', 'anti-afk', 'anti-afk-min-delay', 'anti-afk-max-delay', 'anti-afk-duration', 'anti-afk-look-degrees', 'anti-afk-walk-distance', 'anti-afk-jump', 'anti-afk-look', 'anti-afk-sneak', 'anti-afk-swing', 'anti-afk-walk', 'environmental-movement', 'auto-reconnect', 'auto-reconnect-delay', 'auto-reconnect-max', 'auto-deposit-setting', 'join-message', 'server-change-message',
   'message-delay', 'form-error', 'delete-account', 'login-dialog', 'login-code', 'open-login-private', 'open-login',
@@ -139,6 +140,8 @@ function bindEvents() {
     state.logs.set(state.selectedId, [])
     renderConsole()
   })
+  el['toggle-inventory'].addEventListener('click', toggleInventory)
+  el['focus-chat'].addEventListener('click', toggleInventory)
   bindManualMovement()
   bindPanelResizers()
   document.querySelectorAll('[data-look]').forEach((button) => button.addEventListener('click', () => run(() => api.look(state.selectedId, button.dataset.look))))
@@ -419,6 +422,20 @@ function createSlotContents(item, { locked = false, held = false } = {}) {
     durability.style.setProperty('--durability', `${item.durability.percent}%`)
     fragment.append(durability)
   }
+  if (item.enchants?.length) {
+    const badge = document.createElement('span')
+    badge.className = 'minecraft-enchanted'
+    badge.textContent = '✦'
+    badge.title = `${item.enchants.length} enchantment${item.enchants.length === 1 ? '' : 's'}`
+    fragment.append(badge)
+  }
+  if (item.lore?.length) {
+    const badge = document.createElement('span')
+    badge.className = 'minecraft-lore'
+    badge.textContent = '▤'
+    badge.title = `${item.lore.length} lore line${item.lore.length === 1 ? '' : 's'}`
+    fragment.append(badge)
+  }
   if (locked) { const badge = document.createElement('span'); badge.className = 'minecraft-lock'; badge.textContent = '◆'; fragment.append(badge) }
   if (held) { const badge = document.createElement('span'); badge.className = 'minecraft-held'; badge.textContent = '▲'; fragment.append(badge) }
   return fragment
@@ -544,11 +561,13 @@ function updateInventoryActions(canInteract = ['online', 'connected'].includes(g
   const item = telemetry?.inventory?.find((entry) => entry.slot === state.selectedInventorySlot)
   const locked = item && isSelectedAccountSlotLocked(item.slot)
   el['drop-selected'].disabled = !canInteract || !item || locked
-  el['drop-selected'].textContent = item ? locked ? `${item.displayName} is locked` : `Drop ${item.count} × ${item.displayName}` : 'Drop selected stack'
+  el['drop-selected'].textContent = 'Drop'
+  el['drop-selected'].title = item ? locked ? `${item.displayName} is locked` : `Drop ${item.count} × ${item.displayName}` : 'Select a stack to drop'
   el['lock-selected'].disabled = !item
-  el['lock-selected'].textContent = item ? `${locked ? 'Unlock' : 'Lock'} ${item.displayName}` : 'Lock selected stack'
+  el['lock-selected'].textContent = locked ? 'Unlock' : 'Lock'
+  el['lock-selected'].title = item ? `${locked ? 'Unlock' : 'Lock'} ${item.displayName}` : 'Select a stack to lock'
   el['move-selected'].disabled = !canInteract || !item
-  el['move-selected'].textContent = state.movingInventorySlot == null ? 'Move selected' : 'Cancel move'
+  el['move-selected'].textContent = state.movingInventorySlot == null ? 'Move' : 'Cancel'
   el['hold-selected'].disabled = !canInteract || !item
   el['equip-selected'].disabled = !canInteract || !item
 }
@@ -1087,12 +1106,14 @@ function applyPanelLayout(settings = state.settings) {
   const sidePanelWidth = Math.max(240, Math.min(Number(settings.sidePanelWidth) || 300, 520))
   const minimum = minimumInventoryHeight()
   const dashboardHeight = el.dashboard?.clientHeight || document.querySelector('.main-content')?.clientHeight || innerHeight
-  const maximum = Math.max(minimum, Math.min(480, dashboardHeight - 260))
-  const inventoryHeight = Math.max(minimum, Math.min(Number(settings.inventoryHeight) || 400, maximum))
+  const reservedWorkspace = innerHeight <= 680 ? 190 : 285
+  const chromeHeight = (document.querySelector('.topbar')?.offsetHeight || 46) + (el['status-banner']?.offsetHeight || 52) + 40
+  const maximum = Math.max(minimum, Math.min(420, dashboardHeight - chromeHeight - reservedWorkspace))
+  const inventoryHeight = Math.max(minimum, Math.min(Number(settings.inventoryHeight) || 260, maximum))
   state.settings.sidePanelWidth = sidePanelWidth
   state.settings.inventoryHeight = inventoryHeight
   document.documentElement.style.setProperty('--side-panel-width', `${sidePanelWidth}px`)
-  document.documentElement.style.setProperty('--inventory-height', `${inventoryHeight}px`)
+  document.documentElement.style.setProperty('--inventory-height', `${state.inventoryCollapsed ? 58 : inventoryHeight}px`)
   el['column-resizer'].setAttribute('aria-valuetext', `Controls ${sidePanelWidth} pixels wide`)
   el['inventory-resizer'].setAttribute('aria-valuetext', `Inventory ${inventoryHeight} pixels high`)
 }
@@ -1106,7 +1127,9 @@ function bindPanelResizers() {
   const resizeInventory = (inventoryHeight) => {
     const dashboardHeight = el.dashboard?.clientHeight || 700
     const minimum = minimumInventoryHeight()
-    const maximum = Math.max(minimum, Math.min(480, dashboardHeight - 260))
+    const reservedWorkspace = innerHeight <= 680 ? 190 : 285
+    const chromeHeight = (document.querySelector('.topbar')?.offsetHeight || 46) + (el['status-banner']?.offsetHeight || 52) + 40
+    const maximum = Math.max(minimum, Math.min(420, dashboardHeight - chromeHeight - reservedWorkspace))
     state.settings.inventoryHeight = Math.max(minimum, Math.min(inventoryHeight, maximum))
     applyPanelLayout(state.settings)
   }
@@ -1116,16 +1139,25 @@ function bindPanelResizers() {
     keys: { ArrowLeft: 1, ArrowRight: -1 }
   })
   bindSplitter(el['inventory-resizer'], {
-    axis: 'y', value: () => state.settings.inventoryHeight || 400,
+    axis: 'y', value: () => state.settings.inventoryHeight || 260,
     resize: (start, delta) => resizeInventory(start - delta),
     keys: { ArrowUp: 1, ArrowDown: -1 }
   })
 }
 
 function minimumInventoryHeight() {
-  const headerHeight = document.querySelector('.inventory-header')?.scrollHeight || 36
-  if (matchMedia('(max-width: 960px)').matches || innerHeight <= 680) return Math.max(130, Math.min(240, Math.ceil(headerHeight) + 72))
-  return Math.max(240, Math.min(420, Math.ceil(headerHeight) + 240))
+  return matchMedia('(max-width: 960px)').matches || innerHeight <= 680 ? 120 : 150
+}
+
+function toggleInventory() {
+  state.inventoryCollapsed = !state.inventoryCollapsed
+  el.dashboard.classList.toggle('inventory-collapsed', state.inventoryCollapsed)
+  el['toggle-inventory'].textContent = state.inventoryCollapsed ? 'Expand' : 'Collapse'
+  el['toggle-inventory'].setAttribute('aria-expanded', String(!state.inventoryCollapsed))
+  el['focus-chat'].textContent = state.inventoryCollapsed ? 'Show inventory' : 'Focus chat'
+  el['focus-chat'].setAttribute('aria-pressed', String(state.inventoryCollapsed))
+  el['inventory-resizer'].hidden = state.inventoryCollapsed
+  applyPanelLayout(state.settings)
 }
 
 function observePanelFit() {

@@ -12,7 +12,7 @@ window.__windowClicks = [];
 window.__inventoryMoves = [];
 window.__equips = [];
 window.__scale = 100;
-window.__settings = { startWithWindows: false, staggerStartupConnections: true, startupConnectionDelay: 3, uiScale: 100, sidePanelWidth: 300, inventoryHeight: 400, macros: [{ label: 'Town', message: '/server towny' }] };
+window.__settings = { startWithWindows: false, staggerStartupConnections: true, startupConnectionDelay: 3, uiScale: 100, sidePanelWidth: 300, inventoryHeight: 260, macros: [{ label: 'Town', message: '/server towny' }] };
 window.afkDesk = {
   listAccounts: async () => [{ id: 'one', label: 'TestPlayer', username: 'test@example.com', host: 'play.example.com', port: 25565, antiAfk: true, environmentalMovement: true }],
   getSettings: async () => ({ ...window.__settings }),
@@ -78,7 +78,7 @@ def run() -> None:
         page.mouse.down()
         page.mouse.move(box["x"], box["y"] - 30)
         page.mouse.up()
-        assert page.evaluate("window.__settings.inventoryHeight > 400")
+        assert page.evaluate("window.__settings.inventoryHeight > 260")
         assert page.locator("#app-version").inner_text() == "v0.7.0-test"
         column = page.locator("#column-resizer").bounding_box()
         page.mouse.move(column["x"] + column["width"] / 2, column["y"] + column["height"] / 2)
@@ -93,7 +93,14 @@ def run() -> None:
         page.mouse.move(inventory["x"], inventory["y"] + 500)
         page.mouse.up()
         inventory_fit = page.evaluate("({ panel: document.querySelector('.inventory-panel').offsetHeight, header: document.querySelector('.inventory-header').scrollHeight, setting: window.__settings.inventoryHeight })")
-        assert inventory_fit["panel"] >= min(420, inventory_fit["header"] + 240), inventory_fit
+        assert inventory_fit["panel"] >= 150, inventory_fit
+        assert inventory_fit["header"] <= 72, inventory_fit
+        assert page.locator(".console-panel").bounding_box()["height"] >= 260
+        normal_chat_height = page.locator(".console-panel").bounding_box()["height"]
+        page.locator("#focus-chat").click()
+        assert page.locator(".inventory-panel").bounding_box()["height"] <= 60
+        assert page.locator(".console-panel").bounding_box()["height"] > normal_chat_height
+        page.locator("#focus-chat").click()
         assert page.evaluate("document.body.scrollHeight <= innerHeight")
         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
         assert page.locator("#macro-pad").is_visible()
@@ -104,6 +111,8 @@ def run() -> None:
         assert "minecraft:diamond_helmet" in page.locator("#item-tooltip").inner_text()
         assert "minecraft-items.png" in helmet.locator(".minecraft-item-icon").evaluate("element => getComputedStyle(element).backgroundImage")
         sword = page.locator('.minecraft-slot[aria-label^="Town Blade"]')
+        assert sword.locator(".minecraft-enchanted").count() == 1
+        assert sword.locator(".minecraft-lore").count() == 1
         sword.hover()
         tooltip = page.locator("#item-tooltip").inner_text()
         assert "Sharpness V" in tooltip and "Bound to town" in tooltip, tooltip

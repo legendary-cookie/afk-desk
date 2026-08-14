@@ -324,6 +324,28 @@ test('includes armor slots and remaining durability for equipment and inventory 
   ])
 })
 
+test('reads modern component enchantments, lore, and names when item getters are unavailable', () => {
+  const bot = new FakeBot()
+  const item = {
+    slot: 36, name: 'netherite_sword', displayName: 'Netherite Sword', count: 1,
+    get customName () { throw new Error('unsupported getter') },
+    get customLore () { throw new Error('unsupported getter') },
+    get enchants () { throw new Error('unsupported getter') },
+    componentMap: new Map([
+      ['custom_name', { data: '{"text":"Star Blade","color":"aqua"}' }],
+      ['lore', { data: { lines: ['{"text":"Ancient relic","color":"dark_purple"}'] } }],
+      ['enchantments', { data: { levels: { 'minecraft:sharpness': 5, 'minecraft:mending': 1 } } }]
+    ])
+  }
+  bot.inventory.slots[36] = item
+  bot.inventory.items = () => [item]
+
+  const [snapshot] = buildTelemetry(bot).inventory
+  assert.equal(snapshot.customName, 'Star Blade')
+  assert.deepEqual(snapshot.lore, ['Ancient relic'])
+  assert.deepEqual(snapshot.enchants, [{ name: 'sharpness', level: 5 }, { name: 'mending', level: 1 }])
+})
+
 test('drops only the inventory stack selected by slot', async () => {
   const events = []
   const bot = new FakeBot()

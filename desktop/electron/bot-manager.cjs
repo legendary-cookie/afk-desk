@@ -1220,20 +1220,33 @@ function itemTooltipDetails(item) {
   let lore = []
   let loreSegments = []
   let enchants = []
-  try { customName = String(extractText(item?.customName) || '').slice(0, 160) } catch {}
   try {
-    const source = Array.isArray(item?.customLore) ? item.customLore : item?.customLore ? [item.customLore] : []
+    const rawName = safeItemProperty(item, 'customName') ?? item?.componentMap?.get?.('custom_name')?.data ?? item?.components?.find?.((component) => component?.type === 'custom_name')?.data
+    customName = String(extractText(rawName) || '').slice(0, 160)
+  } catch {}
+  try {
+    const rawLore = safeItemProperty(item, 'customLore') ?? item?.componentMap?.get?.('lore')?.data ?? item?.components?.find?.((component) => component?.type === 'lore')?.data
+    const loreValue = rawLore?.lines ?? rawLore
+    const source = Array.isArray(loreValue) ? loreValue : loreValue ? [loreValue] : []
     const details = source.map(loreLineDetails).filter((line) => line.text).slice(0, 20)
     lore = details.map((line) => line.text)
     loreSegments = details.map((line) => line.segments)
   } catch {}
   try {
-    enchants = (item?.enchants || []).map((enchant) => ({
-      name: String(enchant?.name || '').replace(/^minecraft:/, '').slice(0, 80),
-      level: Math.max(1, Math.min(Number(enchant?.lvl) || 1, 255))
+    const rawEnchants = safeItemProperty(item, 'enchants') ?? item?.componentMap?.get?.('enchantments')?.data ?? item?.components?.find?.((component) => component?.type === 'enchantments')?.data ?? []
+    const enchantList = Array.isArray(rawEnchants)
+      ? rawEnchants
+      : Object.entries(rawEnchants?.levels || rawEnchants || {}).map(([name, level]) => ({ name, level }))
+    enchants = enchantList.map((enchant) => ({
+      name: String(enchant?.name || enchant?.id || '').replace(/^minecraft:/, '').slice(0, 80),
+      level: Math.max(1, Math.min(Number(enchant?.lvl ?? enchant?.level) || 1, 255))
     })).filter((enchant) => enchant.name).slice(0, 20)
   } catch {}
   return { ...(customName ? { customName } : {}), ...(lore.length ? { lore, loreSegments } : {}), ...(enchants.length ? { enchants } : {}) }
+}
+
+function safeItemProperty(item, key) {
+  try { return item?.[key] } catch { return undefined }
 }
 
 function loreLineDetails(value) {
