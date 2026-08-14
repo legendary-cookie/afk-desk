@@ -13,6 +13,8 @@ contextBridge.exposeInMainWorld('afkDesk', {
   look: (id, direction) => ipcRenderer.invoke('bot:look', { id, direction }),
   dropStack: (id, slot) => ipcRenderer.invoke('bot:drop-stack', { id, slot }),
   setItemLock: (id, slot, locked) => ipcRenderer.invoke('bot:item-lock', { id, slot, locked }),
+  moveInventorySlot: (id, sourceSlot, destinationSlot) => ipcRenderer.invoke('bot:inventory-move', { id, sourceSlot, destinationSlot }),
+  equipInventoryItem: (id, slot, destination) => ipcRenderer.invoke('bot:equip-item', { id, slot, destination }),
   setAutoDeposit: (id, enabled) => ipcRenderer.invoke('bot:auto-deposit', { id, enabled }),
   clickWindowSlot: (id, slot) => ipcRenderer.invoke('bot:window-click', { id, slot }),
   closeServerWindow: (id) => ipcRenderer.invoke('bot:window-close', id),

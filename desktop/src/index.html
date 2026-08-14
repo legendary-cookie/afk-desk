@@ -136,6 +136,12 @@
               <div><h2 id="inventory-title">Inventory</h2><p id="inventory-count">Connect to view items</p></div>
               <div class="inventory-toolbar">
                 <label class="compact-toggle"><input id="auto-deposit-toggle" type="checkbox" /><span>Auto-deposit to closest chest or barrel</span></label>
+                <button id="move-selected" class="button secondary" type="button" disabled>Move selected</button>
+                <button id="hold-selected" class="button secondary" type="button" disabled>Hold in hand</button>
+                <select id="equip-destination" class="compact-select" aria-label="Equipment destination">
+                  <option value="auto">Auto gear slot</option><option value="head">Head</option><option value="torso">Chest</option><option value="legs">Legs</option><option value="feet">Feet</option><option value="off-hand">Off-hand</option>
+                </select>
+                <button id="equip-selected" class="button secondary" type="button" disabled>Equip selected</button>
                 <button id="lock-selected" class="button secondary" type="button" disabled>Lock selected stack</button>
                 <button id="drop-selected" class="button danger" type="button" disabled>Drop selected stack</button>
               </div>
@@ -285,7 +291,9 @@
       </div>
     </dialog>
 
+    <div id="item-tooltip" class="minecraft-tooltip" role="tooltip" hidden></div>
     <div id="toast-region" class="toast-region" aria-live="polite"></div>
+    <script src="../assets/minecraft-items.js"></script>
     <script src="renderer.js"></script>
   </body>
 </html>

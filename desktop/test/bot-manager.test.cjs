@@ -25,6 +25,7 @@ class FakeBot extends EventEmitter {
     this.messages = []
     this.writes = []
     this.settings = { locale: 'en_us' }
+    this.quickBarSlot = 0
     this._client = new EventEmitter()
     this._client.write = (name, payload) => this.writes.push([name, payload])
   }
@@ -34,6 +35,9 @@ class FakeBot extends EventEmitter {
   look() { return Promise.resolve() }
   tossStack(item) { this.tossed = item; return Promise.resolve() }
   clickWindow(slot, mouseButton, mode) { this.clickedWindow = [slot, mouseButton, mode]; return Promise.resolve() }
+  moveSlotItem(sourceSlot, destinationSlot) { this.movedSlot = [sourceSlot, destinationSlot]; return Promise.resolve() }
+  equip(item, destination) { this.equippedItem = [item, destination]; if (destination === 'hand') this.quickBarSlot = item.slot >= 36 && item.slot <= 44 ? item.slot - 36 : 2; return Promise.resolve() }
+  setQuickBarSlot(slot) { this.quickBarSlot = slot }
   closeWindow(window) { this.closedWindow = window; this.currentWindow = null; this.emit('windowClose', window) }
   end(reason) { this.emit('end', reason) }
   quit() { this.emit('end', 'quit') }
@@ -299,14 +303,15 @@ test('builds a bounded player health, position, and inventory snapshot', () => {
     position: { x: 12.3, y: 64, z: -8.8 },
     dimension: 'overworld',
     nearestChest: null,
-    inventory: [{ slot: 36, slotType: 'inventory', name: 'diamond_sword', displayName: 'Diamond Sword', count: 1 }]
+    inventory: [{ slot: 36, slotType: 'inventory', name: 'diamond_sword', displayName: 'Diamond Sword', count: 1 }],
+    selectedHotbarSlot: 0
   })
 })
 
 test('includes armor slots and remaining durability for equipment and inventory tools', () => {
   const bot = new FakeBot()
   const helmet = { slot: 5, name: 'diamond_helmet', displayName: 'Diamond Helmet', count: 1, maxDurability: 363, durabilityUsed: 13 }
-  const sword = { slot: 36, name: 'diamond_sword', displayName: 'Diamond Sword', count: 1, maxDurability: 1561, durabilityUsed: 61 }
+  const sword = { slot: 36, name: 'diamond_sword', displayName: 'Diamond Sword', customName: 'Town Blade', customLore: ['Bound to town'], enchants: [{ name: 'sharpness', lvl: 5 }], count: 1, maxDurability: 1561, durabilityUsed: 61 }
   bot.inventory.slots[5] = helmet
   bot.inventory.slots[36] = sword
   bot.inventory.items = () => [sword]
@@ -315,7 +320,7 @@ test('includes armor slots and remaining durability for equipment and inventory 
 
   assert.deepEqual(snapshot.inventory, [
     { slot: 5, slotType: 'helmet', name: 'diamond_helmet', displayName: 'Diamond Helmet', count: 1, durability: { remaining: 350, maximum: 363, percent: 96 } },
-    { slot: 36, slotType: 'inventory', name: 'diamond_sword', displayName: 'Diamond Sword', count: 1, durability: { remaining: 1500, maximum: 1561, percent: 96 } }
+    { slot: 36, slotType: 'inventory', name: 'diamond_sword', displayName: 'Diamond Sword', count: 1, durability: { remaining: 1500, maximum: 1561, percent: 96 }, customName: 'Town Blade', lore: ['Bound to town'], enchants: [{ name: 'sharpness', level: 5 }] }
   ])
 })
 
@@ -349,6 +354,40 @@ test('locked inventory stacks cannot be dropped', async () => {
   await assert.rejects(manager.dropStack('locked-drop', 37), /locked/i)
   assert.equal(bot.tossed, undefined)
   manager.disconnect('locked-drop')
+})
+
+test('moves or swaps player inventory slots and blocks changes while a server window is open', async () => {
+  const bot = new FakeBot()
+  const item = { slot: 9, type: 1, name: 'stone', displayName: 'Stone', count: 1 }
+  bot.inventory.slots[9] = item
+  const manager = new BotManager({ profilesPath: 'profiles', emit: () => {}, createBot: () => bot })
+  manager.connect({ id: 'move', username: 'user@example.com', host: 'localhost', antiAfk: false, autoReconnect: false })
+  bot.entity = { position: { x: 0, y: 64, z: 0 } }
+
+  await manager.moveInventorySlot('move', 9, 36)
+  assert.deepEqual(bot.movedSlot, [9, 36])
+  await assert.rejects(manager.moveInventorySlot('move', 9, 9), /different destination/i)
+  bot.currentWindow = { id: 2 }
+  await assert.rejects(manager.moveInventorySlot('move', 9, 37), /close the server menu/i)
+  manager.disconnect('move')
+})
+
+test('equips selected gear and can hold an inventory or hotbar item', async () => {
+  const bot = new FakeBot()
+  const helmet = { slot: 9, type: 310, name: 'diamond_helmet', displayName: 'Diamond Helmet', count: 1 }
+  const sword = { slot: 40, type: 276, name: 'diamond_sword', displayName: 'Diamond Sword', count: 1 }
+  bot.inventory.slots[9] = helmet
+  bot.inventory.slots[40] = sword
+  const manager = new BotManager({ profilesPath: 'profiles', emit: () => {}, createBot: () => bot })
+  manager.connect({ id: 'equip', username: 'user@example.com', host: 'localhost', antiAfk: false, autoReconnect: false })
+  bot.entity = { position: { x: 0, y: 64, z: 0 } }
+
+  assert.deepEqual(await manager.equipInventoryItem('equip', 9, 'auto'), { sourceSlot: 9, targetSlot: 5, destination: 'head' })
+  assert.deepEqual(bot.equippedItem, [helmet, 'head'])
+  assert.deepEqual(await manager.equipInventoryItem('equip', 40, 'hand'), { sourceSlot: 40, targetSlot: 40, destination: 'hand' })
+  assert.equal(bot.quickBarSlot, 4)
+  await assert.rejects(manager.equipInventoryItem('equip', 9, 'invalid'), /equipment destination/i)
+  manager.disconnect('equip')
 })
 
 test('finds the closest chest and deposits all inventory stacks only when enabled', async () => {

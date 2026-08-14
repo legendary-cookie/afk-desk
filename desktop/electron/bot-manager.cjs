@@ -16,7 +16,8 @@ applyProtocolFixes()
 const mineflayer = require('mineflayer')
 
 const CHEST_NAMES = new Set(['chest', 'trapped_chest', 'barrel'])
-const ARMOR_SLOT_TYPES = new Map([[5, 'helmet'], [6, 'chestplate'], [7, 'leggings'], [8, 'boots']])
+const ARMOR_SLOT_TYPES = new Map([[5, 'helmet'], [6, 'chestplate'], [7, 'leggings'], [8, 'boots'], [45, 'off-hand']])
+const EQUIPMENT_DESTINATION_SLOTS = new Map([['head', 5], ['torso', 6], ['legs', 7], ['feet', 8], ['off-hand', 45]])
 const WATER_NAMES = new Set(['water', 'flowing_water'])
 const WATERLIKE_NAMES = new Set(['bubble_column', 'seagrass', 'tall_seagrass', 'kelp', 'kelp_plant'])
 const FLOW_DIRECTIONS = [[0, 1], [-1, 0], [0, -1], [1, 0]]
@@ -95,6 +96,7 @@ class BotManager {
       ready: false,
       switching: false,
       depositing: false,
+      inventoryAction: false,
       joinMessageSent: false,
       worldReadyAt: 0,
       nearestChest: null,
@@ -412,15 +414,53 @@ class BotManager {
   }
 
   async dropStack(id, slot) {
+    return this.withInventoryAction(id, async (bot, session) => {
+      const safeSlot = playerInventorySlot(slot)
+      if (lockedSlotSet(session.account).has(safeSlot)) throw new Error('That inventory stack is locked. Unlock it before dropping it.')
+      const item = bot.inventory?.slots?.[safeSlot] || bot.inventory?.items?.().find((entry) => entry.slot === safeSlot)
+      if (!item) throw new Error('That inventory stack is no longer available.')
+      await bot.tossStack(item)
+      this.emit('log', id, { kind: 'sent', message: `Dropped ${item.count} × ${item.displayName || item.name}`, at: Date.now() })
+    })
+  }
+
+  async moveInventorySlot(id, sourceSlot, destinationSlot) {
+    return this.withInventoryAction(id, async (bot) => {
+      const source = playerInventorySlot(sourceSlot)
+      const destination = playerInventorySlot(destinationSlot)
+      if (source === destination) throw new Error('Choose a different destination slot.')
+      if (!bot.inventory?.slots?.[source]) throw new Error('The source inventory slot is empty.')
+      await bot.moveSlotItem(source, destination)
+      return { sourceSlot: source, targetSlot: destination }
+    })
+  }
+
+  async equipInventoryItem(id, slot, requestedDestination) {
+    return this.withInventoryAction(id, async (bot) => {
+      const sourceSlot = playerInventorySlot(slot)
+      const item = bot.inventory?.slots?.[sourceSlot]
+      if (!item) throw new Error('That inventory stack is no longer available.')
+      const destination = resolveEquipmentDestination(item, requestedDestination)
+      if (destination === 'hand' && sourceSlot >= 36 && sourceSlot <= 44) bot.setQuickBarSlot(sourceSlot - 36)
+      else await bot.equip(item, destination)
+      const targetSlot = destination === 'hand'
+        ? 36 + Math.max(0, Math.min(Number(bot.quickBarSlot) || 0, 8))
+        : EQUIPMENT_DESTINATION_SLOTS.get(destination)
+      return { sourceSlot, targetSlot, destination }
+    })
+  }
+
+  async withInventoryAction(id, action) {
     const session = this.sessions.get(id)
     const bot = this.requireOnline(id)
-    const safeSlot = Math.max(0, Math.min(Number(slot) || 0, 255))
-    if (lockedSlotSet(session.account).has(safeSlot)) throw new Error('That inventory stack is locked. Unlock it before dropping it.')
-    const item = bot.inventory?.slots?.[safeSlot] || bot.inventory?.items?.().find((entry) => entry.slot === safeSlot)
-    if (!item) throw new Error('That inventory stack is no longer available.')
-    await bot.tossStack(item)
-    this.emit('log', id, { kind: 'sent', message: `Dropped ${item.count} × ${item.displayName || item.name}`, at: Date.now() })
-    this.emitTelemetry(id)
+    if (bot.currentWindow) throw new Error('Close the server menu before managing player inventory.')
+    if (session.depositing || session.inventoryAction) throw new Error('Another inventory action is still running.')
+    session.inventoryAction = true
+    try { return await action(bot, session) }
+    finally {
+      session.inventoryAction = false
+      this.emitTelemetry(id)
+    }
   }
 
   setItemLocks(id, slots) {
@@ -457,7 +497,7 @@ class BotManager {
 
   async refreshChest(id) {
     const session = this.sessions.get(id)
-    if (!session?.bot?.entity || session.depositing) return
+    if (!session?.bot?.entity || session.depositing || session.inventoryAction || session.bot.currentWindow) return
     const block = findNearestChest(session.bot)
     session.nearestChest = block ? chestLocation(session.bot, block) : null
     this.emitTelemetry(id)
@@ -1128,7 +1168,8 @@ function buildTelemetry(bot, nearestChest = null, environmentalMovement, fluidMo
     name: String(item.name || '').slice(0, 80),
     displayName: String(item.displayName || item.name || 'Unknown item').slice(0, 100),
     count: Math.max(1, Math.min(Number(item.count) || 1, 127)),
-    ...itemDurability(item)
+    ...itemDurability(item),
+    ...itemTooltipDetails(item)
   }))
   const environment = environmentalMovement === undefined ? undefined : {
     enabled: environmentalMovement !== false,
@@ -1154,6 +1195,7 @@ function buildTelemetry(bot, nearestChest = null, environmentalMovement, fluidMo
     dimension: String(bot?.game?.dimension || 'unknown').slice(0, 80),
     nearestChest,
     inventory,
+    selectedHotbarSlot: Math.max(0, Math.min(Number(bot?.quickBarSlot) || 0, 8)),
     ...(environment ? { environment } : {}),
     at: Date.now()
   }
@@ -1165,6 +1207,43 @@ function itemDurability(item) {
   const used = Math.max(0, Math.min(Number(item?.durabilityUsed) || 0, maximum))
   const remaining = Math.round(maximum - used)
   return { durability: { remaining, maximum: Math.round(maximum), percent: Math.round((remaining / maximum) * 100) } }
+}
+
+function itemTooltipDetails(item) {
+  let customName = ''
+  let lore = []
+  let enchants = []
+  try { customName = String(extractText(item?.customName) || '').slice(0, 160) } catch {}
+  try {
+    const source = Array.isArray(item?.customLore) ? item.customLore : item?.customLore ? [item.customLore] : []
+    lore = source.map((line) => String(extractText(line) || line || '').slice(0, 200)).filter(Boolean).slice(0, 20)
+  } catch {}
+  try {
+    enchants = (item?.enchants || []).map((enchant) => ({
+      name: String(enchant?.name || '').replace(/^minecraft:/, '').slice(0, 80),
+      level: Math.max(1, Math.min(Number(enchant?.lvl) || 1, 255))
+    })).filter((enchant) => enchant.name).slice(0, 20)
+  } catch {}
+  return { ...(customName ? { customName } : {}), ...(lore.length ? { lore } : {}), ...(enchants.length ? { enchants } : {}) }
+}
+
+function playerInventorySlot(value) {
+  const slot = Number(value)
+  if (!Number.isInteger(slot) || slot < 5 || slot > 45) throw new Error('Invalid player inventory slot.')
+  return slot
+}
+
+function resolveEquipmentDestination(item, requested) {
+  const allowed = new Set(['auto', 'hand', ...EQUIPMENT_DESTINATION_SLOTS.keys()])
+  const destination = String(requested || 'auto')
+  if (!allowed.has(destination)) throw new Error('Invalid equipment destination.')
+  if (destination !== 'auto') return destination
+  const name = String(item?.name || '')
+  if (name.endsWith('_helmet') || name.endsWith('_skull') || ['player_head', 'carved_pumpkin'].includes(name)) return 'head'
+  if (name.endsWith('_chestplate') || name === 'elytra') return 'torso'
+  if (name.endsWith('_leggings')) return 'legs'
+  if (name.endsWith('_boots')) return 'feet'
+  throw new Error('Choose an equipment destination for this item.')
 }
 
 function normalizeLockedSlots(slots) {
@@ -1188,7 +1267,8 @@ function buildWindowSnapshot(window) {
     name: String(item.name || '').slice(0, 80),
     displayName: String(item.displayName || item.name || 'Unknown item').slice(0, 100),
     count: Math.max(1, Math.min(Number(item.count) || 1, 127)),
-    ...itemDurability(item)
+    ...itemDurability(item),
+    ...itemTooltipDetails(item)
   } : null).filter(Boolean)
   return { open: true, title: String(extractText(window?.title) || 'Server menu').slice(0, 100), size: limit, slots }
 }

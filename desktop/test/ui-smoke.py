@@ -9,8 +9,10 @@ STUB = r"""
 window.__sent = [];
 window.__controls = [];
 window.__windowClicks = [];
+window.__inventoryMoves = [];
+window.__equips = [];
 window.__scale = 100;
-window.__settings = { startWithWindows: false, staggerStartupConnections: true, startupConnectionDelay: 3, uiScale: 100, sidePanelWidth: 300, inventoryHeight: 112, macros: [{ label: 'Town', message: '/server towny' }] };
+window.__settings = { startWithWindows: false, staggerStartupConnections: true, startupConnectionDelay: 3, uiScale: 100, sidePanelWidth: 300, inventoryHeight: 400, macros: [{ label: 'Town', message: '/server towny' }] };
 window.afkDesk = {
   listAccounts: async () => [{ id: 'one', label: 'TestPlayer', username: 'test@example.com', host: 'play.example.com', port: 25565, antiAfk: true, environmentalMovement: true }],
   getSettings: async () => ({ ...window.__settings }),
@@ -21,6 +23,8 @@ window.afkDesk = {
   sendChat: async (_id, message) => { window.__sent.push(message); },
   reorderAccounts: async () => [], control: async () => {}, setControlState: async (_id, control, active) => { window.__controls.push([control, active]); }, look: async () => {},
   connect: async () => {}, disconnect: async () => {}, dropStack: async () => {}, setItemLock: async (_id, slot, locked) => ({ lockedInventorySlots: locked ? [slot] : [] }), setAutoDeposit: async () => {},
+  moveInventorySlot: async (_id, sourceSlot, destinationSlot) => { window.__inventoryMoves.push([sourceSlot, destinationSlot]); return { account: {}, sourceSlot, targetSlot: destinationSlot }; },
+  equipInventoryItem: async (_id, slot, destination) => { window.__equips.push([slot, destination]); return { account: {}, sourceSlot: slot, targetSlot: slot, destination: destination === 'auto' ? 'head' : destination }; },
   clickWindowSlot: async (_id, slot) => { window.__windowClicks.push(slot); }, closeServerWindow: async () => { window.__botEvent({ type: 'window', id: 'one', payload: { open: false } }); },
   saveAccount: async (value) => value, deleteAccount: async () => {},
   openExternal: async () => {}, openIsolatedLogin: async () => {}
@@ -74,7 +78,7 @@ def run() -> None:
         page.mouse.down()
         page.mouse.move(box["x"], box["y"] - 30)
         page.mouse.up()
-        assert page.evaluate("window.__settings.inventoryHeight > 112")
+        assert page.evaluate("window.__settings.inventoryHeight > 400")
         assert page.locator("#app-version").inner_text() == "v0.7.0-test"
         column = page.locator("#column-resizer").bounding_box()
         page.mouse.move(column["x"] + column["width"] / 2, column["y"] + column["height"] / 2)
@@ -89,16 +93,29 @@ def run() -> None:
         page.mouse.move(inventory["x"], inventory["y"] + 500)
         page.mouse.up()
         inventory_fit = page.evaluate("({ panel: document.querySelector('.inventory-panel').offsetHeight, header: document.querySelector('.inventory-header').scrollHeight, setting: window.__settings.inventoryHeight })")
-        assert inventory_fit["panel"] >= inventory_fit["header"] + 48, inventory_fit
+        assert inventory_fit["panel"] >= min(420, inventory_fit["header"] + 240), inventory_fit
         assert page.evaluate("document.body.scrollHeight <= innerHeight")
         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
         assert page.locator("#macro-pad").is_visible()
-        page.evaluate("window.__botEvent({ type: 'telemetry', id: 'one', payload: { health: 20, food: 20, position: {x: 1, y: 64, z: 2}, dimension: 'overworld', nearestChest: { type: 'barrel', x: 2, y: 64, z: 2, distance: 1 }, inventory: [{ slot: 5, slotType: 'helmet', name: 'diamond_helmet', displayName: 'Diamond Helmet', count: 1, durability: { remaining: 350, maximum: 363, percent: 96 } }, { slot: 36, slotType: 'inventory', name: 'diamond_sword', displayName: 'Diamond Sword', count: 1, durability: { remaining: 1500, maximum: 1561, percent: 96 } }] } })")
-        assert "350/363 durability" in page.locator(".inventory-slot", has_text="Diamond Helmet").inner_text()
-        sword = page.locator(".inventory-slot", has_text="Diamond Sword")
+        page.evaluate("window.__botEvent({ type: 'telemetry', id: 'one', payload: { health: 20, food: 20, selectedHotbarSlot: 0, position: {x: 1, y: 64, z: 2}, dimension: 'overworld', nearestChest: { type: 'barrel', x: 2, y: 64, z: 2, distance: 1 }, inventory: [{ slot: 5, slotType: 'helmet', name: 'diamond_helmet', displayName: 'Diamond Helmet', count: 1, durability: { remaining: 350, maximum: 363, percent: 96 } }, { slot: 36, slotType: 'inventory', name: 'diamond_sword', displayName: 'Diamond Sword', customName: 'Town Blade', lore: ['Bound to town'], enchants: [{name: 'sharpness', level: 5}], count: 1, durability: { remaining: 1500, maximum: 1561, percent: 96 } }] } })")
+        helmet = page.locator('.minecraft-slot[aria-label^="Diamond Helmet"]')
+        helmet.hover()
+        assert "Durability: 350 / 363" in page.locator("#item-tooltip").inner_text()
+        assert "minecraft:diamond_helmet" in page.locator("#item-tooltip").inner_text()
+        assert "minecraft-items.png" in helmet.locator(".minecraft-item-icon").evaluate("element => getComputedStyle(element).backgroundImage")
+        sword = page.locator('.minecraft-slot[aria-label^="Town Blade"]')
+        sword.hover()
+        tooltip = page.locator("#item-tooltip").inner_text()
+        assert "Sharpness V" in tooltip and "Bound to town" in tooltip, tooltip
+        sword.click()
+        page.locator("#hold-selected").click()
+        assert page.evaluate("window.__equips") == [[36, "hand"]]
+        page.locator("#move-selected").click()
+        page.locator('.minecraft-slot[data-slot="37"]').click()
+        assert page.evaluate("window.__inventoryMoves") == [[36, 37]]
         sword.click()
         page.locator("#lock-selected").click()
-        assert "Locked" in sword.inner_text()
+        assert "locked" in sword.get_attribute("class")
         assert page.locator("#drop-selected").is_disabled()
         page.evaluate("window.__botEvent({ type: 'window', id: 'one', payload: { open: true, title: 'Town Menu', size: 9, slots: [{ slot: 0, name: 'emerald', displayName: 'Join Town', count: 1 }] } })")
         page.locator("#server-window-dialog").wait_for(state="visible")

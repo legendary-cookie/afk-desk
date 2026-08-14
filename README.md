@@ -47,7 +47,10 @@ See the [complete 0.7.0 release notes](https://github.com/legendary-cookie/afk-d
 - Optional Windows startup and per-account automatic connections with configurable staggering
 - Live health, hunger, coordinates, dimension, water-current, chest, and inventory views
 - Selection and explicit dropping of individual inventory stacks
+- Minecraft-style gear, inventory, and hotbar grids with vanilla item icons, stack counts, durability bars, enchantment glint, and hover tooltips
+- Drag or move stacks between slots, choose the held hotbar item, and equip armor or off-hand gear
 - Optional nearby-chest auto-deposit with traceable chest coordinates
+- Interactive Minecraft-style chest-menu popups for server commands
 - Modern Velocity server-switch compatibility
 - Interface scaling and persistent responsive panel layouts
 

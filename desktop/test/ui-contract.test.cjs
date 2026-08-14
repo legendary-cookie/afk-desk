@@ -9,7 +9,7 @@ test('desktop UI exposes cancellable account setup, settings, proxy, startup, an
   for (const id of [
     'open-settings', 'start-with-windows', 'connect-on-startup', 'proxy-enabled', 'proxy-type',
     'proxy-host', 'proxy-port', 'proxy-username', 'proxy-password', 'detail-health', 'detail-environment', 'detail-water',
-    'detail-coordinates', 'detail-chest', 'inventory-grid', 'lock-selected', 'drop-selected', 'auto-deposit-toggle', 'auto-deposit-setting',
+    'detail-coordinates', 'detail-chest', 'inventory-grid', 'move-selected', 'hold-selected', 'equip-destination', 'equip-selected', 'lock-selected', 'drop-selected', 'auto-deposit-toggle', 'auto-deposit-setting',
     'server-window-dialog', 'server-window-title', 'server-window-grid', 'close-server-window',
     'anti-afk-min-delay', 'anti-afk-max-delay', 'anti-afk-duration', 'anti-afk-look-degrees',
     'anti-afk-walk-distance', 'anti-afk-jump', 'anti-afk-look', 'anti-afk-sneak', 'anti-afk-swing',
@@ -18,6 +18,7 @@ test('desktop UI exposes cancellable account setup, settings, proxy, startup, an
   assert.match(html, /id="proxy-password" type="password"/)
   assert.match(html, /id="message-delay"[^>]*value="6"/)
   assert.match(html, /id="anti-afk-duration"[^>]*step="0\.05"[^>]*value="0\.25"/)
+  assert.match(html, /minecraft-items\.js/)
 })
 
 test('desktop dashboard stays viewport-bound and scrolls only bounded regions', () => {
@@ -26,6 +27,18 @@ test('desktop dashboard stays viewport-bound and scrolls only bounded regions', 
   assert.match(css, /\.dashboard\s*\{[^}]*grid-template-rows:[^;}]*minmax\(0,\s*1fr\)[^;}]*;[^}]*height:\s*100%;/s)
   assert.match(css, /\.console-panel\s*\{[^}]*height:\s*100%;[^}]*min-height:\s*0;/s)
   assert.match(css, /\.console-log\s*\{[^}]*min-height:\s*0;[^}]*overflow-y:\s*auto;/s)
+})
+
+test('inventory and server menus use a Minecraft-style icon grid and hover tooltip', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', 'src', 'styles.css'), 'utf8')
+  const script = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer.js'), 'utf8')
+  assert.match(css, /\.minecraft-slot-grid\s*\{[^}]*repeat\(9,\s*40px\)/s)
+  assert.match(css, /\.minecraft-item-icon\s*\{[^}]*minecraft-items\.png/s)
+  assert.match(css, /\.minecraft-tooltip\s*\{[^}]*position:\s*fixed/s)
+  assert.match(script, /createInventorySection\('Inventory'/)
+  assert.match(script, /createInventorySection\('Hotbar'/)
+  assert.match(script, /item\.enchants/)
+  assert.match(script, /item\.lore/)
 })
 
 test('chat, controls, and inventory expose independent persistent splitters', () => {
@@ -123,6 +136,8 @@ test('desktop bridge exposes inventory actions and accounts default automatic de
   assert.match(preload, /dropStack:.*bot:drop-stack/)
   assert.match(preload, /setAutoDeposit:.*bot:auto-deposit/)
   assert.match(preload, /setItemLock:.*bot:item-lock/)
+  assert.match(preload, /moveInventorySlot:.*bot:inventory-move/)
+  assert.match(preload, /equipInventoryItem:.*bot:equip-item/)
   assert.match(preload, /clickWindowSlot:.*bot:window-click/)
   assert.match(preload, /closeServerWindow:.*bot:window-close/)
   assert.match(main, /lockedInventorySlots:/)

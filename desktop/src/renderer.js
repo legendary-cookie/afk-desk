@@ -14,13 +14,14 @@ const state = {
   accounts: [],
   selectedId: null,
   selectedInventorySlot: null,
+  movingInventorySlot: null,
   draggedAccountId: null,
   statuses: new Map(),
   logs: new Map(),
   telemetry: new Map(),
   serverWindows: new Map(),
   chatHistory: new Map(),
-  settings: { uiScale: 100, sidePanelWidth: 300, inventoryHeight: 112, macros: [] },
+  settings: { uiScale: 100, sidePanelWidth: 300, inventoryHeight: 400, macros: [] },
   resolvedVersions: new Map(),
   login: { code: '', url: 'https://microsoft.com/link' }
 }
@@ -28,11 +29,11 @@ const state = {
 const el = Object.fromEntries([
   'account-list', 'account-count', 'add-account', 'open-settings', 'settings-dialog', 'close-settings', 'start-with-windows', 'stagger-startup-connections', 'startup-connection-delay', 'save-settings', 'empty-state', 'dashboard', 'account-title', 'app-version', 'settings-app-version',
   'edit-account', 'connection-button', 'status-banner', 'status-name', 'status-detail', 'server-address',
-  'detail-username', 'detail-server', 'detail-version', 'detail-antiafk', 'detail-environment', 'detail-water', 'detail-health', 'detail-hunger', 'detail-coordinates', 'detail-chest', 'detail-dimension', 'inventory-count', 'inventory-grid', 'auto-deposit-toggle', 'lock-selected', 'drop-selected', 'console-log', 'clear-console',
+  'detail-username', 'detail-server', 'detail-version', 'detail-antiafk', 'detail-environment', 'detail-water', 'detail-health', 'detail-hunger', 'detail-coordinates', 'detail-chest', 'detail-dimension', 'inventory-count', 'inventory-grid', 'auto-deposit-toggle', 'move-selected', 'hold-selected', 'equip-destination', 'equip-selected', 'lock-selected', 'drop-selected', 'console-log', 'clear-console',
   'chat-form', 'chat-message', 'macro-pad', 'manage-macros', 'macro-editor', 'macro-rows', 'add-macro', 'cancel-macros', 'save-macros', 'account-dialog', 'account-form', 'dialog-title', 'account-id', 'label',
   'username', 'host', 'port', 'version', 'connect-on-startup', 'proxy-enabled', 'proxy-fields', 'proxy-type', 'proxy-host', 'proxy-port', 'proxy-username', 'proxy-password', 'proxy-password-help', 'proxy-clear-password', 'anti-afk', 'anti-afk-min-delay', 'anti-afk-max-delay', 'anti-afk-duration', 'anti-afk-look-degrees', 'anti-afk-walk-distance', 'anti-afk-jump', 'anti-afk-look', 'anti-afk-sneak', 'anti-afk-swing', 'anti-afk-walk', 'environmental-movement', 'auto-reconnect', 'auto-reconnect-delay', 'auto-reconnect-max', 'auto-deposit-setting', 'join-message', 'server-change-message',
   'message-delay', 'form-error', 'delete-account', 'login-dialog', 'login-code', 'open-login-private', 'open-login',
-  'close-login', 'ui-scale', 'ui-scale-value', 'column-resizer', 'inventory-resizer', 'server-window-dialog', 'server-window-title', 'server-window-grid', 'close-server-window', 'toast-region'
+  'close-login', 'ui-scale', 'ui-scale-value', 'column-resizer', 'inventory-resizer', 'server-window-dialog', 'server-window-title', 'server-window-grid', 'close-server-window', 'item-tooltip', 'toast-region'
 ].map((id) => [id, document.getElementById(id)]))
 
 async function init() {
@@ -66,6 +67,9 @@ function bindEvents() {
   el['delete-account'].addEventListener('click', deleteAccount)
   el['connection-button'].addEventListener('click', toggleConnection)
   el['drop-selected'].addEventListener('click', dropSelectedStack)
+  el['move-selected'].addEventListener('click', toggleMoveSelected)
+  el['hold-selected'].addEventListener('click', holdSelectedItem)
+  el['equip-selected'].addEventListener('click', equipSelectedItem)
   el['lock-selected'].addEventListener('click', toggleSelectedItemLock)
   el['auto-deposit-toggle'].addEventListener('change', toggleAutoDeposit)
   el['close-server-window'].addEventListener('click', closeServerWindow)
@@ -154,6 +158,8 @@ function renderAccountList() {
       releaseAllManualInputs()
       state.selectedId = account.id
       state.selectedInventorySlot = null
+      state.movingInventorySlot = null
+      hideItemTooltip()
       render()
     })
     const controls = document.createElement('span')
@@ -288,34 +294,145 @@ function renderTelemetry() {
   el['detail-dimension'].textContent = telemetry ? String(telemetry.dimension || 'unknown').replace(/^minecraft:/, '') : '—'
   const items = telemetry?.inventory || []
   if (!items.some((item) => item.slot === state.selectedInventorySlot)) state.selectedInventorySlot = null
+  if (!items.some((item) => item.slot === state.movingInventorySlot)) state.movingInventorySlot = null
   el['inventory-count'].textContent = telemetry ? `${items.length} occupied slot${items.length === 1 ? '' : 's'}` : 'Connect to view items'
-  if (!items.length) {
+  if (!telemetry) {
     const empty = document.createElement('div')
     empty.className = 'inventory-empty'
-    empty.textContent = telemetry ? 'Inventory is empty.' : 'Inventory will appear while this account is online.'
+    empty.textContent = 'Inventory will appear while this account is online.'
     el['inventory-grid'].replaceChildren(empty)
     updateInventoryActions()
     return
   }
-  el['inventory-grid'].replaceChildren(...items.map((item) => {
-    const slot = document.createElement('button')
-    slot.type = 'button'
-    const locked = isSelectedAccountSlotLocked(item.slot)
-    slot.className = `inventory-slot${item.slot === state.selectedInventorySlot ? ' selected' : ''}${locked ? ' locked' : ''}`
-    slot.setAttribute('aria-pressed', item.slot === state.selectedInventorySlot ? 'true' : 'false')
-    slot.addEventListener('click', () => {
-      state.selectedInventorySlot = state.selectedInventorySlot === item.slot ? null : item.slot
-      renderTelemetry()
-    })
-    const name = document.createElement('strong')
-    name.textContent = item.displayName
-    const meta = document.createElement('span')
-    const details = [`×${item.count}`, formatSlotType(item), item.durability ? `${item.durability.remaining}/${item.durability.maximum} durability (${item.durability.percent}%)` : '', locked ? 'Locked' : ''].filter(Boolean)
-    meta.textContent = details.join(' · ')
-    slot.append(name, meta)
-    return slot
-  }))
+  const bySlot = new Map(items.map((item) => [item.slot, item]))
+  const shell = document.createElement('div')
+  shell.className = 'minecraft-inventory'
+  const equipment = createInventorySection('Gear', [5, 6, 7, 8, 45], bySlot, telemetry, 'equipment')
+  const storage = createInventorySection('Inventory', Array.from({ length: 27 }, (_, index) => index + 9), bySlot, telemetry, 'storage')
+  const hotbar = createInventorySection('Hotbar', Array.from({ length: 9 }, (_, index) => index + 36), bySlot, telemetry, 'hotbar')
+  const main = document.createElement('div')
+  main.className = 'minecraft-inventory-main'
+  main.append(storage, hotbar)
+  shell.append(equipment, main)
+  el['inventory-grid'].replaceChildren(shell)
   updateInventoryActions()
+}
+
+function createInventorySection(labelText, slots, bySlot, telemetry, kind) {
+  const section = document.createElement('section')
+  section.className = `minecraft-inventory-section ${kind}`
+  const label = document.createElement('div')
+  label.className = 'minecraft-section-label'
+  label.textContent = labelText
+  const grid = document.createElement('div')
+  grid.className = `minecraft-slot-grid ${kind}`
+  grid.replaceChildren(...slots.map((slotNumber) => createPlayerSlot(slotNumber, bySlot.get(slotNumber), telemetry)))
+  section.append(label, grid)
+  return section
+}
+
+function createPlayerSlot(slotNumber, item, telemetry) {
+  const slot = document.createElement('button')
+  slot.type = 'button'
+  const locked = item && isSelectedAccountSlotLocked(slotNumber)
+  const held = slotNumber === 36 + (telemetry.selectedHotbarSlot || 0)
+  slot.className = `minecraft-slot${item ? '' : ' empty'}${slotNumber === state.selectedInventorySlot ? ' selected' : ''}${slotNumber === state.movingInventorySlot ? ' moving' : ''}${locked ? ' locked' : ''}${held ? ' held' : ''}`
+  slot.dataset.slot = slotNumber
+  slot.setAttribute('aria-label', item ? `${itemTooltipName(item)}, slot ${slotNumber}${locked ? ', locked' : ''}${held ? ', held' : ''}` : `Empty slot ${slotNumber}`)
+  slot.append(createSlotContents(item, { locked, held }))
+  slot.addEventListener('click', () => {
+    if (state.movingInventorySlot != null) return void moveInventoryItem(state.movingInventorySlot, slotNumber)
+    if (!item) return
+    state.selectedInventorySlot = state.selectedInventorySlot === slotNumber ? null : slotNumber
+    renderTelemetry()
+  })
+  if (item) {
+    slot.draggable = true
+    slot.addEventListener('dragstart', (event) => { event.dataTransfer.setData('text/plain', String(slotNumber)); event.dataTransfer.effectAllowed = 'move' })
+    bindItemTooltip(slot, item)
+  }
+  slot.addEventListener('dragover', (event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move' })
+  slot.addEventListener('drop', (event) => { event.preventDefault(); const source = Number(event.dataTransfer.getData('text/plain')); if (Number.isInteger(source)) void moveInventoryItem(source, slotNumber) })
+  return slot
+}
+
+function createSlotContents(item, { locked = false, held = false } = {}) {
+  const fragment = document.createDocumentFragment()
+  if (!item) return fragment
+  fragment.append(createItemIcon(item))
+  if (item.count > 1) {
+    const count = document.createElement('span')
+    count.className = 'minecraft-item-count'
+    count.textContent = item.count
+    fragment.append(count)
+  }
+  if (item.durability) {
+    const durability = document.createElement('span')
+    durability.className = 'minecraft-durability'
+    durability.style.setProperty('--durability', `${item.durability.percent}%`)
+    fragment.append(durability)
+  }
+  if (locked) { const badge = document.createElement('span'); badge.className = 'minecraft-lock'; badge.textContent = '◆'; fragment.append(badge) }
+  if (held) { const badge = document.createElement('span'); badge.className = 'minecraft-held'; badge.textContent = '▲'; fragment.append(badge) }
+  return fragment
+}
+
+function createItemIcon(item) {
+  const icon = document.createElement('span')
+  icon.className = `minecraft-item-icon${item.enchants?.length ? ' enchanted' : ''}`
+  const atlas = window.__minecraftItemAtlas
+  const index = atlas?.items?.[item.name]
+  if (Number.isInteger(index)) {
+    icon.style.backgroundPosition = `${-(index % atlas.columns) * atlas.cell}px ${-Math.floor(index / atlas.columns) * atlas.cell}px`
+    icon.style.backgroundSize = `${atlas.columns * atlas.cell}px ${atlas.rows * atlas.cell}px`
+  } else icon.classList.add('missing')
+  return icon
+}
+
+function itemTooltipName(item) { return item.customName || item.displayName || item.name || 'Unknown item' }
+
+function bindItemTooltip(target, item) {
+  target.addEventListener('mouseenter', (event) => showItemTooltip(item, event))
+  target.addEventListener('mousemove', positionItemTooltip)
+  target.addEventListener('mouseleave', hideItemTooltip)
+  target.addEventListener('focus', (event) => showItemTooltip(item, event))
+  target.addEventListener('blur', hideItemTooltip)
+}
+
+function showItemTooltip(item, event) {
+  const lines = []
+  const title = document.createElement('strong')
+  title.textContent = itemTooltipName(item)
+  lines.push(title)
+  for (const enchant of item.enchants || []) { const line = document.createElement('span'); line.className = 'enchant'; line.textContent = `${formatMinecraftName(enchant.name)} ${romanNumeral(enchant.level)}`; lines.push(line) }
+  for (const loreText of item.lore || []) { const line = document.createElement('span'); line.className = 'lore'; line.textContent = loreText; lines.push(line) }
+  if (item.durability) { const line = document.createElement('span'); line.textContent = `Durability: ${item.durability.remaining} / ${item.durability.maximum}`; lines.push(line) }
+  const technical = document.createElement('span')
+  technical.className = 'technical'
+  technical.textContent = `minecraft:${item.name} · ×${item.count}`
+  lines.push(technical)
+  el['item-tooltip'].replaceChildren(...lines)
+  el['item-tooltip'].hidden = false
+  positionItemTooltip(event)
+}
+
+function positionItemTooltip(event) {
+  if (el['item-tooltip'].hidden) return
+  const x = Number(event.clientX) || event.currentTarget?.getBoundingClientRect().right || 0
+  const y = Number(event.clientY) || event.currentTarget?.getBoundingClientRect().top || 0
+  const width = el['item-tooltip'].offsetWidth
+  const height = el['item-tooltip'].offsetHeight
+  el['item-tooltip'].style.left = `${Math.max(8, Math.min(x + 14, innerWidth - width - 8))}px`
+  el['item-tooltip'].style.top = `${Math.max(8, Math.min(y + 14, innerHeight - height - 8))}px`
+}
+
+function hideItemTooltip() { el['item-tooltip'].hidden = true }
+
+function formatMinecraftName(value) { return String(value || '').replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()) }
+
+function romanNumeral(value) {
+  const known = ['', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X']
+  return known[value] || String(value)
 }
 
 function updateInventoryActions(canInteract = ['online', 'connected'].includes(getStatus(state.selectedId).status)) {
@@ -326,6 +443,49 @@ function updateInventoryActions(canInteract = ['online', 'connected'].includes(g
   el['drop-selected'].textContent = item ? locked ? `${item.displayName} is locked` : `Drop ${item.count} × ${item.displayName}` : 'Drop selected stack'
   el['lock-selected'].disabled = !item
   el['lock-selected'].textContent = item ? `${locked ? 'Unlock' : 'Lock'} ${item.displayName}` : 'Lock selected stack'
+  el['move-selected'].disabled = !canInteract || !item
+  el['move-selected'].textContent = state.movingInventorySlot == null ? 'Move selected' : 'Cancel move'
+  el['hold-selected'].disabled = !canInteract || !item
+  el['equip-selected'].disabled = !canInteract || !item
+}
+
+function toggleMoveSelected() {
+  state.movingInventorySlot = state.movingInventorySlot == null ? state.selectedInventorySlot : null
+  if (state.movingInventorySlot != null) toast('Choose an empty or occupied destination slot, or drag the item.')
+  renderTelemetry()
+}
+
+async function moveInventoryItem(sourceSlot, destinationSlot) {
+  if (sourceSlot === destinationSlot) { state.movingInventorySlot = null; renderTelemetry(); return }
+  hideItemTooltip()
+  try {
+    const result = await api.moveInventorySlot(state.selectedId, sourceSlot, destinationSlot)
+    const account = selectedAccount()
+    if (account && result.account) Object.assign(account, result.account)
+    state.selectedInventorySlot = result.targetSlot
+    state.movingInventorySlot = null
+    toast(`Moved item to slot ${result.targetSlot}.`)
+  } catch (error) { toast(cleanError(error), 'error') }
+  renderTelemetry()
+}
+
+async function holdSelectedItem() { await equipOrHoldSelected('hand') }
+
+async function equipSelectedItem() { await equipOrHoldSelected(el['equip-destination'].value) }
+
+async function equipOrHoldSelected(destination) {
+  const slot = state.selectedInventorySlot
+  if (slot == null) return
+  hideItemTooltip()
+  try {
+    const result = await api.equipInventoryItem(state.selectedId, slot, destination)
+    const account = selectedAccount()
+    if (account && result.account) Object.assign(account, result.account)
+    state.selectedInventorySlot = result.targetSlot
+    state.movingInventorySlot = null
+    toast(result.destination === 'hand' ? 'Selected item is now held.' : `Equipped to ${formatMinecraftName(result.destination)}.`)
+  } catch (error) { toast(cleanError(error), 'error') }
+  renderTelemetry()
 }
 
 async function toggleSelectedItemLock() {
@@ -762,18 +922,16 @@ function renderServerWindow() {
     const item = slots.get(slotNumber)
     if (!item) {
       const empty = document.createElement('span')
-      empty.className = 'server-window-empty'
+      empty.className = 'minecraft-slot empty server-window-empty'
       empty.setAttribute('aria-hidden', 'true')
       return empty
     }
     const button = document.createElement('button')
     button.type = 'button'
-    button.className = 'server-window-slot'
-    const name = document.createElement('strong')
-    name.textContent = item.displayName
-    const meta = document.createElement('span')
-    meta.textContent = [`×${item.count}`, `slot ${item.slot}`, item.durability ? `${item.durability.remaining}/${item.durability.maximum} durability` : ''].filter(Boolean).join(' · ')
-    button.append(name, meta)
+    button.className = 'minecraft-slot server-window-slot'
+    button.setAttribute('aria-label', `${itemTooltipName(item)}, server slot ${item.slot}`)
+    button.append(createSlotContents(item))
+    bindItemTooltip(button, item)
     button.addEventListener('click', () => run(() => api.clickWindowSlot(state.selectedId, item.slot)))
     return button
   }))
@@ -823,7 +981,7 @@ function applyUiScale(value) {
 
 function applyPanelLayout(settings = state.settings) {
   const sidePanelWidth = Math.max(240, Math.min(Number(settings.sidePanelWidth) || 300, 520))
-  const inventoryHeight = Math.max(minimumInventoryHeight(), Math.min(Number(settings.inventoryHeight) || 112, 360))
+  const inventoryHeight = Math.max(minimumInventoryHeight(), Math.min(Number(settings.inventoryHeight) || 400, 480))
   state.settings.sidePanelWidth = sidePanelWidth
   state.settings.inventoryHeight = inventoryHeight
   document.documentElement.style.setProperty('--side-panel-width', `${sidePanelWidth}px`)
@@ -841,7 +999,7 @@ function bindPanelResizers() {
   const resizeInventory = (inventoryHeight) => {
     const dashboardHeight = el.dashboard?.clientHeight || 700
     const minimum = minimumInventoryHeight()
-    const maximum = Math.max(minimum, Math.min(360, dashboardHeight - 260))
+    const maximum = Math.max(minimum, Math.min(480, dashboardHeight - 260))
     state.settings.inventoryHeight = Math.max(minimum, Math.min(inventoryHeight, maximum))
     applyPanelLayout(state.settings)
   }
@@ -851,7 +1009,7 @@ function bindPanelResizers() {
     keys: { ArrowLeft: 1, ArrowRight: -1 }
   })
   bindSplitter(el['inventory-resizer'], {
-    axis: 'y', value: () => state.settings.inventoryHeight || 112,
+    axis: 'y', value: () => state.settings.inventoryHeight || 400,
     resize: (start, delta) => resizeInventory(start - delta),
     keys: { ArrowUp: 1, ArrowDown: -1 }
   })
@@ -859,7 +1017,7 @@ function bindPanelResizers() {
 
 function minimumInventoryHeight() {
   const headerHeight = document.querySelector('.inventory-header')?.scrollHeight || 36
-  return Math.max(84, Math.min(220, Math.ceil(headerHeight) + 48))
+  return Math.max(240, Math.min(420, Math.ceil(headerHeight) + 240))
 }
 
 function observePanelFit() {
@@ -868,7 +1026,7 @@ function observePanelFit() {
   const observer = new ResizeObserver(() => {
     if (el.dashboard.hidden) return
     const minimum = minimumInventoryHeight()
-    if ((state.settings.inventoryHeight || 112) >= minimum) return
+    if ((state.settings.inventoryHeight || 400) >= minimum) return
     state.settings.inventoryHeight = minimum
     applyPanelLayout(state.settings)
   })

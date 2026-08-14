@@ -94,6 +94,22 @@ function registerIpc() {
     bots.setItemLocks(id, updated.lockedInventorySlots)
     return publicAccount(updated)
   })
+  ipcMain.handle('bot:inventory-move', async (_event, { id, sourceSlot, destinationSlot }) => {
+    const account = store.list().find((item) => item.id === id)
+    if (!account) throw new Error('Account not found.')
+    const result = await bots.moveInventorySlot(id, sourceSlot, destinationSlot)
+    const updated = store.save(relocateLockedSlots(account, result.sourceSlot, result.targetSlot))
+    bots.setItemLocks(id, updated.lockedInventorySlots)
+    return { account: publicAccount(updated), ...result }
+  })
+  ipcMain.handle('bot:equip-item', async (_event, { id, slot, destination }) => {
+    const account = store.list().find((item) => item.id === id)
+    if (!account) throw new Error('Account not found.')
+    const result = await bots.equipInventoryItem(id, slot, destination)
+    const updated = store.save(relocateLockedSlots(account, result.sourceSlot, result.targetSlot))
+    bots.setItemLocks(id, updated.lockedInventorySlots)
+    return { account: publicAccount(updated), ...result }
+  })
   ipcMain.handle('bot:window-click', (_event, { id, slot }) => bots.clickWindowSlot(id, slot))
   ipcMain.handle('bot:window-close', (_event, id) => bots.closeWindow(id))
   ipcMain.handle('bot:auto-deposit', async (_event, { id, enabled }) => {
@@ -287,6 +303,17 @@ function validateAccount(input, existing) {
 
 function normalizeLockedSlots(slots) {
   return [...new Set((Array.isArray(slots) ? slots : []).map(Number).filter((slot) => Number.isInteger(slot) && slot >= 0 && slot <= 255))].sort((a, b) => a - b).slice(0, 46)
+}
+
+function relocateLockedSlots(account, sourceSlot, targetSlot) {
+  const slots = new Set(normalizeLockedSlots(account?.lockedInventorySlots))
+  const sourceLocked = slots.has(sourceSlot)
+  const targetLocked = slots.has(targetSlot)
+  slots.delete(sourceSlot)
+  slots.delete(targetSlot)
+  if (sourceLocked) slots.add(targetSlot)
+  if (targetLocked) slots.add(sourceSlot)
+  return { ...account, lockedInventorySlots: normalizeLockedSlots([...slots]) }
 }
 
 function bounded(value, minimum, maximum, fallback) {
