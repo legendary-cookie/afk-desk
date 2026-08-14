@@ -17,7 +17,7 @@
   --radius-sm: 6px;
   --radius-md: 10px;
   --side-panel-width: 300px;
-  --inventory-height: 260px;
+  --inventory-height: 220px;
   --shadow: 0 18px 60px rgb(0 0 0 / 45%);
   font-family: Inter, "Segoe UI", system-ui, sans-serif;
 }

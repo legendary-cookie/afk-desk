@@ -68,7 +68,7 @@ const state = {
   telemetry: new Map(),
   serverWindows: new Map(),
   chatHistory: new Map(),
-  settings: { uiScale: 100, sidePanelWidth: 300, inventoryHeight: 260, macros: [] },
+  settings: { uiScale: 100, sidePanelWidth: 300, inventoryHeight: 220, macros: [] },
   inventoryCollapsed: false,
   resolvedVersions: new Map(),
   login: { code: '', url: 'https://microsoft.com/link' }
@@ -1108,8 +1108,8 @@ function applyPanelLayout(settings = state.settings) {
   const dashboardHeight = el.dashboard?.clientHeight || document.querySelector('.main-content')?.clientHeight || innerHeight
   const reservedWorkspace = innerHeight <= 680 ? 190 : 285
   const chromeHeight = (document.querySelector('.topbar')?.offsetHeight || 46) + (el['status-banner']?.offsetHeight || 52) + 40
-  const maximum = Math.max(minimum, Math.min(420, dashboardHeight - chromeHeight - reservedWorkspace))
-  const inventoryHeight = Math.max(minimum, Math.min(Number(settings.inventoryHeight) || 260, maximum))
+  const maximum = Math.max(minimum, Math.min(360, Math.floor(dashboardHeight * 0.34), dashboardHeight - chromeHeight - reservedWorkspace))
+  const inventoryHeight = Math.max(minimum, Math.min(Number(settings.inventoryHeight) || 220, maximum))
   state.settings.sidePanelWidth = sidePanelWidth
   state.settings.inventoryHeight = inventoryHeight
   document.documentElement.style.setProperty('--side-panel-width', `${sidePanelWidth}px`)
@@ -1129,7 +1129,7 @@ function bindPanelResizers() {
     const minimum = minimumInventoryHeight()
     const reservedWorkspace = innerHeight <= 680 ? 190 : 285
     const chromeHeight = (document.querySelector('.topbar')?.offsetHeight || 46) + (el['status-banner']?.offsetHeight || 52) + 40
-    const maximum = Math.max(minimum, Math.min(420, dashboardHeight - chromeHeight - reservedWorkspace))
+    const maximum = Math.max(minimum, Math.min(360, Math.floor(dashboardHeight * 0.34), dashboardHeight - chromeHeight - reservedWorkspace))
     state.settings.inventoryHeight = Math.max(minimum, Math.min(inventoryHeight, maximum))
     applyPanelLayout(state.settings)
   }
@@ -1139,7 +1139,7 @@ function bindPanelResizers() {
     keys: { ArrowLeft: 1, ArrowRight: -1 }
   })
   bindSplitter(el['inventory-resizer'], {
-    axis: 'y', value: () => state.settings.inventoryHeight || 260,
+    axis: 'y', value: () => state.settings.inventoryHeight || 220,
     resize: (start, delta) => resizeInventory(start - delta),
     keys: { ArrowUp: 1, ArrowDown: -1 }
   })

@@ -12,7 +12,7 @@ window.__windowClicks = [];
 window.__inventoryMoves = [];
 window.__equips = [];
 window.__scale = 100;
-window.__settings = { startWithWindows: false, staggerStartupConnections: true, startupConnectionDelay: 3, uiScale: 100, sidePanelWidth: 300, inventoryHeight: 260, macros: [{ label: 'Town', message: '/server towny' }] };
+window.__settings = { startWithWindows: false, staggerStartupConnections: true, startupConnectionDelay: 3, uiScale: 100, sidePanelWidth: 300, inventoryHeight: 220, macros: [{ label: 'Town', message: '/server towny' }] };
 window.afkDesk = {
   listAccounts: async () => [{ id: 'one', label: 'TestPlayer', username: 'test@example.com', host: 'play.example.com', port: 25565, antiAfk: true, environmentalMovement: true }],
   getSettings: async () => ({ ...window.__settings }),
@@ -78,7 +78,7 @@ def run() -> None:
         page.mouse.down()
         page.mouse.move(box["x"], box["y"] - 30)
         page.mouse.up()
-        assert page.evaluate("window.__settings.inventoryHeight > 260")
+        assert page.evaluate("window.__settings.inventoryHeight > 220")
         assert page.locator("#app-version").inner_text() == "v0.7.0-test"
         column = page.locator("#column-resizer").bounding_box()
         page.mouse.move(column["x"] + column["width"] / 2, column["y"] + column["height"] / 2)
