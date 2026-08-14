@@ -110,7 +110,11 @@ h1, h2, p { margin-top: 0; }
 #macro-menu { position-anchor: --macro-menu-anchor; top: anchor(bottom); right: anchor(right); }
 .display-popover label strong, .display-popover label span { display: block; }
 .display-popover label span { margin-top: 3px; color: var(--muted); font-size: 10px; }
-.display-popover input { width: 100%; accent-color: var(--accent); }
+.display-scale-controls { display: grid; grid-template-columns: minmax(0, 1fr) 72px; gap: 10px; align-items: center; }
+.display-scale-controls > input { width: 100%; accent-color: var(--accent); }
+.scale-number-field { display: flex; align-items: center; min-height: 34px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: #090d12; }
+.scale-number-field input { width: 44px; padding: 0; border: 0; background: transparent; color: var(--text); font: inherit; text-align: right; outline: none; }
+.scale-number-field span { margin: 0 0 0 2px !important; }
 .menu-action { width: 100%; min-height: 34px; padding: 0 10px; border: 0; border-radius: 4px; background: transparent; color: var(--text); text-align: left; cursor: pointer; }
 .menu-action:hover { background: rgb(255 255 255 / 7%); }
 .button { min-height: 38px; padding: 0 15px; border: 1px solid transparent; border-radius: var(--radius-sm); font-weight: 700; cursor: pointer; }

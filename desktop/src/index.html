@@ -53,7 +53,10 @@
               <button id="display-menu-trigger" class="button secondary menu-trigger display-menu-trigger" type="button" popovertarget="display-menu">Display <span id="quick-scale-value">100%</span></button>
               <div id="display-menu" class="action-popover display-popover" popover>
                 <label for="quick-scale"><strong>Interface scale</strong><span>Fit more or make everything larger.</span></label>
-                <input id="quick-scale" type="range" min="75" max="125" step="5" value="100" />
+                <div class="display-scale-controls">
+                  <input id="quick-scale" type="range" min="75" max="125" step="5" value="100" />
+                  <label class="scale-number-field"><input id="quick-scale-number" type="number" min="75" max="125" step="1" value="100" aria-label="Interface scale percentage" /><span>%</span></label>
+                </div>
                 <button id="reset-scale" class="menu-action" type="button">Reset to 100%</button>
               </div>
               <button id="edit-account" class="button secondary" type="button">Edit</button>

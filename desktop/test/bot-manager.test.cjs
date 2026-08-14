@@ -346,6 +346,40 @@ test('reads modern component enchantments, lore, and names when item getters are
   assert.deepEqual(snapshot.enchants, [{ name: 'sharpness', level: 5 }, { name: 'mending', level: 1 }])
 })
 
+test('reads numeric modern enchantment components and wrapped levels without defaulting to level one', () => {
+  const bot = new FakeBot()
+  bot.registry = {
+    enchantmentsArray: [
+      { id: 10, name: 'efficiency' },
+      { id: 11, name: 'sharpness' },
+      { id: 12, name: 'unbreaking' }
+    ]
+  }
+  const item = {
+    slot: 36, name: 'diamond_sword', displayName: 'Diamond Sword', count: 1,
+    get enchants () { return { enchantments: [{ id: 11, level: 5 }, { id: { value: 12 }, level: { type: 'varint', value: 3 } }] } }
+  }
+  bot.inventory.slots[36] = item
+  bot.inventory.items = () => [item]
+
+  const [snapshot] = buildTelemetry(bot).inventory
+  assert.deepEqual(snapshot.enchants, [{ name: 'sharpness', level: 5 }, { name: 'unbreaking', level: 3 }])
+})
+
+test('reads stored enchantments when the generic item getter returns an empty list', () => {
+  const bot = new FakeBot()
+  const item = {
+    slot: 36, name: 'enchanted_book', displayName: 'Enchanted Book', count: 1,
+    enchants: [],
+    componentMap: new Map([['stored_enchantments', { data: { levels: new Map([['minecraft:fortune', { value: 3 }]]) } }]])
+  }
+  bot.inventory.slots[36] = item
+  bot.inventory.items = () => [item]
+
+  const [snapshot] = buildTelemetry(bot).inventory
+  assert.deepEqual(snapshot.enchants, [{ name: 'fortune', level: 3 }])
+})
+
 test('drops only the inventory stack selected by slot', async () => {
   const events = []
   const bot = new FakeBot()

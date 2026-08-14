@@ -92,6 +92,16 @@ def run() -> None:
         page.locator("#display-menu-trigger").click()
         page.locator("#reset-scale").click()
         assert page.evaluate("window.__scale") == 100
+        page.locator("#display-menu-trigger").click()
+        number_scale = page.locator("#quick-scale-number")
+        number_scale.fill("")
+        number_scale.type("9")
+        assert number_scale.input_value() == "9"
+        assert page.evaluate("window.__scale") == 100
+        number_scale.type("3")
+        number_scale.press("Enter")
+        assert page.evaluate("window.__scale") == 93
+        assert page.locator("#quick-scale-value").inner_text() == "93%"
         sidebar_width = page.locator(".sidebar").bounding_box()["width"]
         page.locator("#toggle-sidebar").click()
         page.wait_for_timeout(220)
@@ -164,8 +174,11 @@ def run() -> None:
         assert page.evaluate("window.__windowClicks") == [0]
         page.locator("#close-server-window").click()
         page.locator("#server-window-dialog").wait_for(state="hidden")
+        page.locator("#display-menu-trigger").click()
+        assert page.locator("#quick-scale-number").is_visible()
         desktop = str(Path(gettempdir()) / "afkdesk-ui-desktop.png")
         page.screenshot(path=desktop)
+        page.locator("#display-menu-trigger").click()
 
         compact = browser.new_page(viewport={"width": 860, "height": 600})
         compact.add_init_script(STUB)

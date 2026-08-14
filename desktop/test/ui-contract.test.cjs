@@ -119,6 +119,7 @@ test('dashboard exposes quick scaling, whole-page scrolling, and collapsible reg
   const script = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer.js'), 'utf8')
   assert.match(html, /id="display-menu-trigger"[^>]*popovertarget="display-menu"/)
   assert.match(html, /id="quick-scale"[^>]*type="range"/)
+  assert.match(html, /id="quick-scale-number"[^>]*type="number"/)
   assert.match(html, /id="reset-scale"/)
   assert.match(html, /id="console-menu-trigger"[^>]*popovertarget="console-menu"/)
   assert.match(html, /id="clear-console"/)

@@ -75,7 +75,7 @@ const state = {
 }
 
 const el = Object.fromEntries([
-  'account-list', 'account-count', 'add-account', 'open-settings', 'toggle-sidebar', 'quick-scale', 'reset-scale', 'quick-scale-value', 'display-menu', 'console-menu', 'macro-menu', 'settings-dialog', 'close-settings', 'start-with-windows', 'stagger-startup-connections', 'startup-connection-delay', 'save-settings', 'empty-state', 'dashboard', 'account-title', 'app-version', 'settings-app-version',
+  'account-list', 'account-count', 'add-account', 'open-settings', 'toggle-sidebar', 'quick-scale', 'quick-scale-number', 'reset-scale', 'quick-scale-value', 'display-menu', 'console-menu', 'macro-menu', 'settings-dialog', 'close-settings', 'start-with-windows', 'stagger-startup-connections', 'startup-connection-delay', 'save-settings', 'empty-state', 'dashboard', 'account-title', 'app-version', 'settings-app-version',
   'edit-account', 'connection-button', 'status-banner', 'status-name', 'status-detail', 'server-address',
   'detail-username', 'detail-server', 'detail-version', 'detail-antiafk', 'detail-environment', 'detail-water', 'detail-health', 'detail-hunger', 'detail-coordinates', 'detail-chest', 'detail-dimension', 'inventory-count', 'inventory-grid', 'auto-deposit-toggle', 'hold-selected', 'equip-destination', 'equip-selected', 'lock-selected', 'drop-selected', 'toggle-inventory', 'console-log', 'clear-console',
   'chat-form', 'chat-message', 'macro-pad', 'manage-macros', 'macro-dialog', 'close-macro-dialog', 'macro-editor', 'macro-rows', 'add-macro', 'cancel-macros', 'save-macros', 'account-dialog', 'account-form', 'dialog-title', 'account-id', 'label',
@@ -146,6 +146,11 @@ function bindEvents() {
   el['toggle-sidebar'].addEventListener('click', toggleSidebar)
   el['quick-scale'].addEventListener('input', () => previewQuickScale(el['quick-scale'].value))
   el['quick-scale'].addEventListener('change', () => saveQuickScale(el['quick-scale'].value))
+  el['quick-scale-number'].addEventListener('input', () => previewTypedScale(el['quick-scale-number'].value))
+  el['quick-scale-number'].addEventListener('change', () => saveQuickScale(el['quick-scale-number'].value))
+  el['quick-scale-number'].addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') { event.preventDefault(); void saveQuickScale(el['quick-scale-number'].value) }
+  })
   el['reset-scale'].addEventListener('click', () => saveQuickScale(100))
   document.querySelectorAll('[data-collapse-target]').forEach((button) => button.addEventListener('click', () => toggleSection(button)))
   bindManualMovement()
@@ -1098,6 +1103,7 @@ function applyUiScale(value) {
   const scale = Math.max(75, Math.min(Number(value) || 100, 125))
   if (el['quick-scale-value']) el['quick-scale-value'].textContent = `${scale}%`
   if (el['quick-scale']) el['quick-scale'].value = scale
+  if (el['quick-scale-number']) el['quick-scale-number'].value = scale
   api.setUiScale(scale)
   requestAnimationFrame(() => applyPanelLayout(state.settings))
 }
@@ -1108,6 +1114,12 @@ function previewQuickScale(value) {
   el['ui-scale'].value = scale
   el['ui-scale-value'].textContent = `${scale}%`
   applyUiScale(scale)
+}
+
+function previewTypedScale(value) {
+  const scale = Number(value)
+  if (!Number.isFinite(scale) || scale < 75 || scale > 125) return
+  previewQuickScale(scale)
 }
 
 async function saveQuickScale(value) {

@@ -241,7 +241,7 @@ class BotManager {
     bot.inventory?.on?.('updateSlot', emitTelemetry)
     bot.on('windowOpen', (window) => {
       if (session.depositing) return
-      const emitWindow = () => this.emit('window', account.id, buildWindowSnapshot(window))
+      const emitWindow = () => this.emit('window', account.id, buildWindowSnapshot(window, bot.registry))
       emitWindow()
       window?.on?.('updateSlot', emitWindow)
     })
@@ -1169,7 +1169,7 @@ function buildTelemetry(bot, nearestChest = null, environmentalMovement, fluidMo
     displayName: String(item.displayName || item.name || 'Unknown item').slice(0, 100),
     count: Math.max(1, Math.min(Number(item.count) || 1, 127)),
     ...itemDurability(item),
-    ...itemTooltipDetails(item)
+    ...itemTooltipDetails(item, bot?.registry)
   }))
   const environment = environmentalMovement === undefined ? undefined : {
     enabled: environmentalMovement !== false,
@@ -1215,7 +1215,7 @@ function itemDurability(item) {
   return { durability: { remaining, maximum: Math.round(maximum), percent: Math.round((remaining / maximum) * 100) } }
 }
 
-function itemTooltipDetails(item) {
+function itemTooltipDetails(item, registry) {
   let customName = ''
   let lore = []
   let loreSegments = []
@@ -1233,16 +1233,53 @@ function itemTooltipDetails(item) {
     loreSegments = details.map((line) => line.segments)
   } catch {}
   try {
-    const rawEnchants = safeItemProperty(item, 'enchants') ?? item?.componentMap?.get?.('enchantments')?.data ?? item?.components?.find?.((component) => component?.type === 'enchantments')?.data ?? []
-    const enchantList = Array.isArray(rawEnchants)
-      ? rawEnchants
-      : Object.entries(rawEnchants?.levels || rawEnchants || {}).map(([name, level]) => ({ name, level }))
-    enchants = enchantList.map((enchant) => ({
-      name: String(enchant?.name || enchant?.id || '').replace(/^minecraft:/, '').slice(0, 80),
-      level: Math.max(1, Math.min(Number(enchant?.lvl ?? enchant?.level) || 1, 255))
-    })).filter((enchant) => enchant.name).slice(0, 20)
+    const candidates = [
+      safeItemProperty(item, 'enchants'),
+      item?.componentMap?.get?.('enchantments')?.data,
+      item?.componentMap?.get?.('stored_enchantments')?.data,
+      item?.components?.find?.((component) => component?.type === 'enchantments')?.data,
+      item?.components?.find?.((component) => component?.type === 'stored_enchantments')?.data
+    ]
+    for (const candidate of candidates) {
+      enchants = normalizeEnchantments(candidate, registry)
+      if (enchants.length) break
+    }
   } catch {}
   return { ...(customName ? { customName } : {}), ...(lore.length ? { lore, loreSegments } : {}), ...(enchants.length ? { enchants } : {}) }
+}
+
+function normalizeEnchantments(raw, registry) {
+  if (raw == null) return []
+  const container = Array.isArray(raw) || raw instanceof Map
+    ? raw
+    : raw?.enchantments ?? raw?.levels ?? (Array.isArray(raw?.entries) ? raw.entries : raw)
+  let list
+  if (container instanceof Map) list = [...container.entries()].map(([name, level]) => ({ name, level }))
+  else if (Array.isArray(container)) {
+    list = container.map((entry) => Array.isArray(entry) && entry.length >= 2 ? { name: entry[0], level: entry[1] } : entry)
+  } else if (container && typeof container === 'object') {
+    list = Object.entries(container).map(([name, level]) => ({ name, level }))
+  } else return []
+
+  return list.map((enchant) => {
+    const rawId = unwrapComponentValue(enchant?.name ?? enchant?.id ?? enchant?.key ?? enchant?.enchantment)
+    const numericId = typeof rawId === 'number' || /^\d+$/.test(String(rawId || '')) ? Number(rawId) : null
+    const registryEntry = numericId == null ? null : registry?.enchantmentsArray?.find?.((entry) => Number(entry?.id) === numericId)
+    const name = String(registryEntry?.name ?? rawId ?? '').replace(/^minecraft:/, '').slice(0, 80)
+    const rawLevel = unwrapComponentValue(enchant?.lvl ?? enchant?.level ?? enchant?.value)
+    const numericLevel = Number(rawLevel)
+    return { name, level: Math.max(1, Math.min(Number.isFinite(numericLevel) ? numericLevel : 1, 255)) }
+  }).filter((enchant) => enchant.name).slice(0, 20)
+}
+
+function unwrapComponentValue(value, depth = 0) {
+  if (depth > 6 || value == null) return value
+  if (typeof value === 'bigint') return Number(value)
+  if (typeof value !== 'object') return value
+  for (const key of ['value', 'data', 'level', 'lvl', 'id', 'name']) {
+    if (value[key] !== undefined && value[key] !== value) return unwrapComponentValue(value[key], depth + 1)
+  }
+  return value
 }
 
 function safeItemProperty(item, key) {
@@ -1321,7 +1358,7 @@ function containerLabel(block) {
   return 'chest'
 }
 
-function buildWindowSnapshot(window) {
+function buildWindowSnapshot(window, registry) {
   const limit = Math.max(0, Math.min(Number(window?.inventoryStart) || window?.slots?.length || 0, 256))
   const slots = (window?.slots || []).slice(0, limit).map((item, slot) => item ? {
     slot,
@@ -1329,7 +1366,7 @@ function buildWindowSnapshot(window) {
     displayName: String(item.displayName || item.name || 'Unknown item').slice(0, 100),
     count: Math.max(1, Math.min(Number(item.count) || 1, 127)),
     ...itemDurability(item),
-    ...itemTooltipDetails(item)
+    ...itemTooltipDetails(item, registry)
   } : null).filter(Boolean)
   return { open: true, title: String(extractText(window?.title) || 'Server menu').slice(0, 100), size: limit, slots }
 }
