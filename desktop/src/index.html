@@ -12,10 +12,11 @@
       <aside class="sidebar" aria-label="Accounts">
         <header class="brand">
           <img class="brand-mark" src="../assets/afk-desk-icon.png" alt="" />
-          <div>
+          <div class="brand-copy">
             <strong>AFK Desk</strong>
             <span>Local Minecraft client</span>
           </div>
+          <button id="toggle-sidebar" class="icon-button sidebar-toggle" type="button" aria-expanded="true" title="Collapse accounts sidebar">‹</button>
         </header>
 
         <div class="sidebar-heading">
@@ -49,6 +50,11 @@
               <h1 id="account-title">Account</h1>
             </div>
             <div class="topbar-actions">
+              <div class="quick-scale" role="group" aria-label="Interface scale">
+                <button id="zoom-out" type="button" title="Make interface smaller" aria-label="Decrease interface scale">−</button>
+                <button id="zoom-reset" type="button" title="Reset interface scale"><span id="quick-scale-value">100%</span></button>
+                <button id="zoom-in" type="button" title="Make interface larger" aria-label="Increase interface scale">＋</button>
+              </div>
               <button id="edit-account" class="button secondary" type="button">Edit</button>
               <button id="connection-button" class="button primary" type="button">Connect</button>
             </div>
@@ -60,7 +66,7 @@
           </div>
 
           <div class="workspace-grid">
-            <section class="panel console-panel" aria-labelledby="console-title">
+            <section id="console-panel" class="panel console-panel collapsible" aria-labelledby="console-title">
               <header class="panel-header">
                 <div>
                   <h2 id="console-title">Console</h2>
@@ -69,6 +75,7 @@
                 <div class="panel-header-actions">
                   <button id="focus-chat" class="text-button" type="button" aria-pressed="false" title="Temporarily collapse inventory and maximize chat">Focus chat</button>
                   <button id="clear-console" class="text-button" type="button">Clear</button>
+                  <button class="section-toggle" type="button" data-collapse-target="console-panel" aria-expanded="true" title="Collapse console" aria-label="Collapse console">⌃</button>
                 </div>
               </header>
               <div id="console-log" class="console-log" role="log" aria-live="polite" aria-label="Server messages">
@@ -79,10 +86,10 @@
                 <input id="chat-message" autocomplete="off" placeholder="Message or /command" disabled />
                 <button class="send-button" type="submit" disabled aria-label="Send message">Send</button>
               </form>
-              <section class="macro-section" aria-labelledby="macro-title">
+              <section id="macro-section" class="macro-section collapsible" aria-labelledby="macro-title">
                 <header class="macro-header">
                   <div><h3 id="macro-title">Macro pad</h3><span>Click to send saved text or commands</span></div>
-                  <button id="manage-macros" class="text-button" type="button" aria-expanded="false" aria-controls="macro-editor">Edit</button>
+                  <div class="panel-header-actions"><button id="manage-macros" class="text-button" type="button" aria-expanded="false" aria-controls="macro-editor">Edit</button><button class="section-toggle" type="button" data-collapse-target="macro-section" aria-expanded="true" title="Collapse macro pad" aria-label="Collapse macro pad">⌃</button></div>
                 </header>
                 <div id="macro-pad" class="macro-pad" role="group" aria-label="Saved chat macros"></div>
                 <div id="macro-editor" class="macro-editor" hidden>
@@ -98,8 +105,8 @@
             </section>
             <div id="column-resizer" class="layout-resizer column-resizer" role="separator" aria-orientation="vertical" tabindex="0" aria-label="Resize console and controls" aria-valuetext="Controls 300 pixels wide"></div>
             <aside class="controls-column">
-              <section class="panel details-panel" aria-labelledby="details-title">
-                <header class="panel-header"><h2 id="details-title">Connection</h2></header>
+              <section id="details-panel" class="panel details-panel collapsible" aria-labelledby="details-title">
+                <header class="panel-header"><h2 id="details-title">Connection</h2><button class="section-toggle" type="button" data-collapse-target="details-panel" aria-expanded="true" title="Collapse connection details" aria-label="Collapse connection details">⌃</button></header>
                 <dl class="details-list">
                   <div><dt>Account</dt><dd id="detail-username">—</dd></div>
                   <div><dt>Server</dt><dd id="detail-server">—</dd></div>
@@ -115,9 +122,10 @@
                 </dl>
               </section>
 
-              <section class="panel movement-panel" aria-labelledby="movement-title">
+              <section id="movement-panel" class="panel movement-panel collapsible" aria-labelledby="movement-title">
                 <header class="panel-header">
                   <div><h2 id="movement-title">Movement</h2><p>Quick taps while online</p></div>
+                  <button class="section-toggle" type="button" data-collapse-target="movement-panel" aria-expanded="true" title="Collapse movement controls" aria-label="Collapse movement controls">⌃</button>
                 </header>
                 <div class="movement-grid" aria-label="Movement controls">
                   <button data-control="forward" class="move-button forward" disabled aria-label="Move forward">W</button>

@@ -75,7 +75,7 @@ const state = {
 }
 
 const el = Object.fromEntries([
-  'account-list', 'account-count', 'add-account', 'open-settings', 'settings-dialog', 'close-settings', 'start-with-windows', 'stagger-startup-connections', 'startup-connection-delay', 'save-settings', 'empty-state', 'dashboard', 'account-title', 'app-version', 'settings-app-version',
+  'account-list', 'account-count', 'add-account', 'open-settings', 'toggle-sidebar', 'zoom-out', 'zoom-reset', 'zoom-in', 'quick-scale-value', 'settings-dialog', 'close-settings', 'start-with-windows', 'stagger-startup-connections', 'startup-connection-delay', 'save-settings', 'empty-state', 'dashboard', 'account-title', 'app-version', 'settings-app-version',
   'edit-account', 'connection-button', 'status-banner', 'status-name', 'status-detail', 'server-address',
   'detail-username', 'detail-server', 'detail-version', 'detail-antiafk', 'detail-environment', 'detail-water', 'detail-health', 'detail-hunger', 'detail-coordinates', 'detail-chest', 'detail-dimension', 'inventory-count', 'inventory-grid', 'auto-deposit-toggle', 'move-selected', 'hold-selected', 'equip-destination', 'equip-selected', 'lock-selected', 'drop-selected', 'toggle-inventory', 'focus-chat', 'console-log', 'clear-console',
   'chat-form', 'chat-message', 'macro-pad', 'manage-macros', 'macro-editor', 'macro-rows', 'add-macro', 'cancel-macros', 'save-macros', 'account-dialog', 'account-form', 'dialog-title', 'account-id', 'label',
@@ -142,6 +142,11 @@ function bindEvents() {
   })
   el['toggle-inventory'].addEventListener('click', toggleInventory)
   el['focus-chat'].addEventListener('click', toggleInventory)
+  el['toggle-sidebar'].addEventListener('click', toggleSidebar)
+  el['zoom-out'].addEventListener('click', () => changeUiScale(-5))
+  el['zoom-reset'].addEventListener('click', () => changeUiScale(0, true))
+  el['zoom-in'].addEventListener('click', () => changeUiScale(5))
+  document.querySelectorAll('[data-collapse-target]').forEach((button) => button.addEventListener('click', () => toggleSection(button)))
   bindManualMovement()
   bindPanelResizers()
   document.querySelectorAll('[data-look]').forEach((button) => button.addEventListener('click', () => run(() => api.look(state.selectedId, button.dataset.look))))
@@ -1099,7 +1104,35 @@ async function saveSettings() {
 
 function applyUiScale(value) {
   const scale = Math.max(75, Math.min(Number(value) || 100, 125))
+  if (el['quick-scale-value']) el['quick-scale-value'].textContent = `${scale}%`
   api.setUiScale(scale)
+  requestAnimationFrame(() => applyPanelLayout(state.settings))
+}
+
+async function changeUiScale(delta, reset = false) {
+  const scale = reset ? 100 : Math.max(75, Math.min((Number(state.settings.uiScale) || 100) + delta, 125))
+  state.settings.uiScale = scale
+  el['ui-scale'].value = scale
+  el['ui-scale-value'].textContent = `${scale}%`
+  applyUiScale(scale)
+  try { state.settings = await api.saveSettings({ ...state.settings }) } catch (error) { toast(`Scale was not saved: ${cleanError(error)}`, 'error') }
+}
+
+function toggleSidebar() {
+  const collapsed = document.querySelector('.app-shell').classList.toggle('sidebar-collapsed')
+  el['toggle-sidebar'].textContent = collapsed ? '›' : '‹'
+  el['toggle-sidebar'].setAttribute('aria-expanded', String(!collapsed))
+  el['toggle-sidebar'].title = collapsed ? 'Expand accounts sidebar' : 'Collapse accounts sidebar'
+  requestAnimationFrame(() => applyPanelLayout(state.settings))
+}
+
+function toggleSection(button) {
+  const target = document.getElementById(button.dataset.collapseTarget)
+  if (!target) return
+  const collapsed = target.classList.toggle('collapsed')
+  button.textContent = collapsed ? '⌄' : '⌃'
+  button.setAttribute('aria-expanded', String(!collapsed))
+  button.title = `${collapsed ? 'Expand' : 'Collapse'} ${target.getAttribute('aria-labelledby')?.replace('-title', '') || 'section'}`
 }
 
 function applyPanelLayout(settings = state.settings) {

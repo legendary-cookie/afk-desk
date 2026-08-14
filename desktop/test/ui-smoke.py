@@ -80,6 +80,23 @@ def run() -> None:
         page.mouse.up()
         assert page.evaluate("window.__settings.inventoryHeight > 220")
         assert page.locator("#app-version").inner_text() == "v0.7.0-test"
+        page.locator("#zoom-in").click()
+        assert page.evaluate("window.__scale") == 105
+        assert page.locator("#quick-scale-value").inner_text() == "105%"
+        page.locator("#zoom-reset").click()
+        assert page.evaluate("window.__scale") == 100
+        sidebar_width = page.locator(".sidebar").bounding_box()["width"]
+        page.locator("#toggle-sidebar").click()
+        page.wait_for_timeout(220)
+        assert page.locator(".sidebar").bounding_box()["width"] < sidebar_width
+        page.locator("#toggle-sidebar").click()
+        page.wait_for_timeout(220)
+        page.locator('[data-collapse-target="details-panel"]').click()
+        assert not page.locator(".details-list").is_visible()
+        page.locator('[data-collapse-target="details-panel"]').click()
+        page.locator('[data-collapse-target="macro-section"]').click()
+        assert not page.locator("#macro-pad").is_visible()
+        page.locator('[data-collapse-target="macro-section"]').click()
         column = page.locator("#column-resizer").bounding_box()
         page.mouse.move(column["x"] + column["width"] / 2, column["y"] + column["height"] / 2)
         page.mouse.down()
@@ -157,6 +174,11 @@ def run() -> None:
         assert after_height < before_height, (before_height, after_height)
         assert compact.locator(".console-panel").bounding_box()["height"] >= 120
         assert compact.evaluate("document.body.scrollHeight <= innerHeight")
+        assert compact.evaluate("document.querySelector('.main-content').scrollHeight > document.querySelector('.main-content').clientHeight")
+        compact.locator(".topbar").hover()
+        compact.mouse.wheel(0, 400)
+        compact.wait_for_timeout(200)
+        assert compact.evaluate("document.querySelector('.main-content').scrollTop > 0")
         compact_path = str(Path(gettempdir()) / "afkdesk-ui-compact.png")
         compact.screenshot(path=compact_path)
 

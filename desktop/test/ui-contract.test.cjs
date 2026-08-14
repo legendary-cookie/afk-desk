@@ -21,10 +21,11 @@ test('desktop UI exposes cancellable account setup, settings, proxy, startup, an
   assert.match(html, /minecraft-items\.js/)
 })
 
-test('desktop dashboard stays viewport-bound and scrolls only bounded regions', () => {
+test('desktop body stays bound while the dashboard and dense regions scroll independently', () => {
   const css = fs.readFileSync(path.join(__dirname, '..', 'src', 'styles.css'), 'utf8')
   assert.match(css, /body\s*\{[^}]*height:\s*100vh;[^}]*overflow:\s*hidden;/s)
-  assert.match(css, /\.dashboard\s*\{[^}]*grid-template-rows:[^;}]*minmax\(0,\s*1fr\)[^;}]*;[^}]*height:\s*100%;/s)
+  assert.match(css, /\.dashboard\s*\{[^}]*grid-template-rows:[^;}]*minmax\(0,\s*1fr\)[^;}]*;[^}]*min-height:\s*680px;[^}]*height:\s*max\(100%,\s*680px\);/s)
+  assert.match(css, /\.main-content\s*\{[^}]*height:\s*100vh;[^}]*overflow:\s*auto;/s)
   assert.match(css, /\.console-panel\s*\{[^}]*height:\s*100%;[^}]*min-height:\s*0;/s)
   assert.match(css, /\.console-log\s*\{[^}]*min-height:\s*0;[^}]*overflow-y:\s*auto;/s)
 })
@@ -110,6 +111,25 @@ test('chat exposes history navigation, editable macros, and interface scaling', 
   assert.match(script, /function renderMacroPad/)
   assert.match(script, /function saveMacros/)
   assert.match(preload, /setUiScale:.*setZoomFactor/)
+})
+
+test('dashboard exposes quick scaling, whole-page scrolling, and collapsible regions', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'src', 'index.html'), 'utf8')
+  const css = fs.readFileSync(path.join(__dirname, '..', 'src', 'styles.css'), 'utf8')
+  const script = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer.js'), 'utf8')
+  assert.match(html, /id="zoom-out"/)
+  assert.match(html, /id="zoom-reset"/)
+  assert.match(html, /id="zoom-in"/)
+  assert.match(html, /id="toggle-sidebar"/)
+  assert.match(html, /data-collapse-target="console-panel"/)
+  assert.match(html, /data-collapse-target="details-panel"/)
+  assert.match(html, /data-collapse-target="movement-panel"/)
+  assert.match(html, /data-collapse-target="macro-section"/)
+  assert.match(css, /\.main-content\s*\{[^}]*overflow:\s*auto/s)
+  assert.match(css, /\.collapsible\.collapsed/)
+  assert.match(script, /function changeUiScale/)
+  assert.match(script, /function toggleSection/)
+  assert.match(script, /function toggleSidebar/)
 })
 
 test('account editor has explicit cancel controls and only its fields scroll', () => {
