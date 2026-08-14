@@ -84,6 +84,18 @@ function registerIpc() {
   ipcMain.handle('bot:control-state', (_event, { id, control, active }) => bots.setControlState(id, control, active))
   ipcMain.handle('bot:look', (_event, { id, direction }) => bots.look(id, direction))
   ipcMain.handle('bot:drop-stack', (_event, { id, slot }) => bots.dropStack(id, slot))
+  ipcMain.handle('bot:item-lock', (_event, { id, slot, locked }) => {
+    const account = store.list().find((item) => item.id === id)
+    if (!account) throw new Error('Account not found.')
+    const slots = new Set(account.lockedInventorySlots || [])
+    if (locked === true) slots.add(Number(slot))
+    else slots.delete(Number(slot))
+    const updated = store.save({ ...account, lockedInventorySlots: normalizeLockedSlots([...slots]) })
+    bots.setItemLocks(id, updated.lockedInventorySlots)
+    return publicAccount(updated)
+  })
+  ipcMain.handle('bot:window-click', (_event, { id, slot }) => bots.clickWindowSlot(id, slot))
+  ipcMain.handle('bot:window-close', (_event, id) => bots.closeWindow(id))
   ipcMain.handle('bot:auto-deposit', async (_event, { id, enabled }) => {
     const account = store.list().find((item) => item.id === id)
     if (!account) throw new Error('Account not found.')
@@ -265,11 +277,16 @@ function validateAccount(input, existing) {
     autoReconnectMaxAttempts: Math.max(0, Math.min(Number(input?.autoReconnectMaxAttempts) || 0, 1000)),
     connectOnStartup: input?.connectOnStartup === true,
     autoDepositToChest: input?.autoDepositToChest === true,
+    lockedInventorySlots: normalizeLockedSlots(input?.lockedInventorySlots ?? existing?.lockedInventorySlots),
     proxy: validateProxy(input?.proxy, existing?.proxy),
     joinMessage: String(input?.joinMessage || '').trim().slice(0, 256),
     serverChangeMessage: String(input?.serverChangeMessage || '').trim().slice(0, 256),
     messageDelay: Math.max(0, Math.min(input?.messageDelay === '' || input?.messageDelay == null ? 6 : Number(input.messageDelay) || 0, 30))
   }
+}
+
+function normalizeLockedSlots(slots) {
+  return [...new Set((Array.isArray(slots) ? slots : []).map(Number).filter((slot) => Number.isInteger(slot) && slot >= 0 && slot <= 255))].sort((a, b) => a - b).slice(0, 46)
 }
 
 function bounded(value, minimum, maximum, fallback) {

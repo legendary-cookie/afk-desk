@@ -14,9 +14,10 @@ AFK Desk is a local-first desktop client for keeping Minecraft Java accounts con
 - Persistent account ordering with drag-and-drop and keyboard-accessible controls
 - Per-account SOCKS5 and HTTP CONNECT proxies with Windows-encrypted passwords
 - Optional Windows sign-in startup and per-account automatic connection with configurable staggering
-- Live HP, hunger, coordinates, dimension, and inventory views
-- Select and safely drop a specific inventory stack
-- Optional per-account auto-deposit into the closest chest, with traceable chest coordinates
+- Live HP, hunger, coordinates, dimension, armor, inventory, and remaining item durability
+- Select, lock/unlock, and safely drop a specific inventory stack; locked stacks are protected from drops and auto-deposit
+- Optional per-account auto-deposit into the closest chest, trapped chest, or barrel, with traceable coordinates
+- Interactive popup for chest-style menus opened by server commands
 - Change-only player-state updates and reduced chunk distance for lower resource use
 - Quick movement controls
 - Configurable anti-AFK actions, randomized timing, duration, look angle, and bounded walking distance

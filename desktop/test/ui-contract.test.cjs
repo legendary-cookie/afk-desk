@@ -9,7 +9,8 @@ test('desktop UI exposes cancellable account setup, settings, proxy, startup, an
   for (const id of [
     'open-settings', 'start-with-windows', 'connect-on-startup', 'proxy-enabled', 'proxy-type',
     'proxy-host', 'proxy-port', 'proxy-username', 'proxy-password', 'detail-health', 'detail-environment', 'detail-water',
-    'detail-coordinates', 'detail-chest', 'inventory-grid', 'drop-selected', 'auto-deposit-toggle', 'auto-deposit-setting',
+    'detail-coordinates', 'detail-chest', 'inventory-grid', 'lock-selected', 'drop-selected', 'auto-deposit-toggle', 'auto-deposit-setting',
+    'server-window-dialog', 'server-window-title', 'server-window-grid', 'close-server-window',
     'anti-afk-min-delay', 'anti-afk-max-delay', 'anti-afk-duration', 'anti-afk-look-degrees',
     'anti-afk-walk-distance', 'anti-afk-jump', 'anti-afk-look', 'anti-afk-sneak', 'anti-afk-swing',
     'anti-afk-walk', 'environmental-movement', 'stagger-startup-connections', 'startup-connection-delay'
@@ -121,6 +122,10 @@ test('desktop bridge exposes inventory actions and accounts default automatic de
   const main = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
   assert.match(preload, /dropStack:.*bot:drop-stack/)
   assert.match(preload, /setAutoDeposit:.*bot:auto-deposit/)
+  assert.match(preload, /setItemLock:.*bot:item-lock/)
+  assert.match(preload, /clickWindowSlot:.*bot:window-click/)
+  assert.match(preload, /closeServerWindow:.*bot:window-close/)
+  assert.match(main, /lockedInventorySlots:/)
   assert.match(main, /autoDepositToChest:\s*input\?\.autoDepositToChest === true/)
   assert.match(main, /messageDelay:.*\? 6 :/)
   assert.match(main, /environmentalMovement:\s*input\?\.environmentalMovement !== false/)

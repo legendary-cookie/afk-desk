@@ -107,7 +107,7 @@
                   <div><dt>HP</dt><dd id="detail-health">—</dd></div>
                   <div><dt>Hunger</dt><dd id="detail-hunger">—</dd></div>
                   <div><dt>Coordinates</dt><dd id="detail-coordinates">—</dd></div>
-                  <div><dt>Closest chest</dt><dd id="detail-chest">Not found</dd></div>
+                  <div><dt>Closest container</dt><dd id="detail-chest">Not found</dd></div>
                   <div><dt>Dimension</dt><dd id="detail-dimension">—</dd></div>
                 </dl>
               </section>
@@ -135,7 +135,8 @@
             <header class="panel-header inventory-header">
               <div><h2 id="inventory-title">Inventory</h2><p id="inventory-count">Connect to view items</p></div>
               <div class="inventory-toolbar">
-                <label class="compact-toggle"><input id="auto-deposit-toggle" type="checkbox" /><span>Auto-deposit to closest chest</span></label>
+                <label class="compact-toggle"><input id="auto-deposit-toggle" type="checkbox" /><span>Auto-deposit to closest chest or barrel</span></label>
+                <button id="lock-selected" class="button secondary" type="button" disabled>Lock selected stack</button>
                 <button id="drop-selected" class="button danger" type="button" disabled>Drop selected stack</button>
               </div>
             </header>
@@ -212,7 +213,7 @@
           <label class="toggle-row full">
             <input id="auto-deposit-setting" type="checkbox" />
             <span class="toggle" aria-hidden="true"></span>
-            <span><strong>Auto-deposit inventory</strong><small>Off by default. While connected, moves all inventory stacks into the closest chest within five blocks and records its coordinates.</small></span>
+            <span><strong>Auto-deposit inventory</strong><small>Off by default. Moves unlocked inventory stacks into the closest chest, trapped chest, or barrel within five blocks and records its coordinates.</small></span>
           </label>
           <div class="form-section full">
             <h3>Automatic messages</h3>
@@ -270,6 +271,17 @@
           <span class="footer-spacer"></span>
           <button id="save-settings" class="button primary" type="button">Save settings</button>
         </footer>
+      </div>
+    </dialog>
+
+    <dialog id="server-window-dialog" aria-labelledby="server-window-title">
+      <div class="server-window-content">
+        <header class="dialog-header">
+          <div><div class="eyebrow">Server menu</div><h2 id="server-window-title">Server menu</h2></div>
+          <button id="close-server-window" class="icon-button" type="button" aria-label="Close server menu">×</button>
+        </header>
+        <div id="server-window-grid" class="server-window-grid"></div>
+        <p class="server-window-help">Select an item to left-click that slot. The server controls what each item does.</p>
       </div>
     </dialog>
 

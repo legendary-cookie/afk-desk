@@ -8,6 +8,7 @@ URL = (ROOT / "src" / "index.html").as_uri()
 STUB = r"""
 window.__sent = [];
 window.__controls = [];
+window.__windowClicks = [];
 window.__scale = 100;
 window.__settings = { startWithWindows: false, staggerStartupConnections: true, startupConnectionDelay: 3, uiScale: 100, sidePanelWidth: 300, inventoryHeight: 112, macros: [{ label: 'Town', message: '/server towny' }] };
 window.afkDesk = {
@@ -16,10 +17,11 @@ window.afkDesk = {
   getAppVersion: async () => '0.7.0-test',
   saveSettings: async (input) => (window.__settings = { ...window.__settings, ...input }),
   setUiScale: (value) => { window.__scale = value; },
-  onBotEvent: (callback) => { setTimeout(() => callback({ type: 'status', id: 'one', payload: { status: 'online', detail: 'Ready', at: Date.now() } }), 0); return () => {}; },
+  onBotEvent: (callback) => { window.__botEvent = callback; setTimeout(() => callback({ type: 'status', id: 'one', payload: { status: 'online', detail: 'Ready', at: Date.now() } }), 0); return () => {}; },
   sendChat: async (_id, message) => { window.__sent.push(message); },
   reorderAccounts: async () => [], control: async () => {}, setControlState: async (_id, control, active) => { window.__controls.push([control, active]); }, look: async () => {},
-  connect: async () => {}, disconnect: async () => {}, dropStack: async () => {}, setAutoDeposit: async () => {},
+  connect: async () => {}, disconnect: async () => {}, dropStack: async () => {}, setItemLock: async (_id, slot, locked) => ({ lockedInventorySlots: locked ? [slot] : [] }), setAutoDeposit: async () => {},
+  clickWindowSlot: async (_id, slot) => { window.__windowClicks.push(slot); }, closeServerWindow: async () => { window.__botEvent({ type: 'window', id: 'one', payload: { open: false } }); },
   saveAccount: async (value) => value, deleteAccount: async () => {},
   openExternal: async () => {}, openIsolatedLogin: async () => {}
 };
@@ -91,6 +93,19 @@ def run() -> None:
         assert page.evaluate("document.body.scrollHeight <= innerHeight")
         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
         assert page.locator("#macro-pad").is_visible()
+        page.evaluate("window.__botEvent({ type: 'telemetry', id: 'one', payload: { health: 20, food: 20, position: {x: 1, y: 64, z: 2}, dimension: 'overworld', nearestChest: { type: 'barrel', x: 2, y: 64, z: 2, distance: 1 }, inventory: [{ slot: 5, slotType: 'helmet', name: 'diamond_helmet', displayName: 'Diamond Helmet', count: 1, durability: { remaining: 350, maximum: 363, percent: 96 } }, { slot: 36, slotType: 'inventory', name: 'diamond_sword', displayName: 'Diamond Sword', count: 1, durability: { remaining: 1500, maximum: 1561, percent: 96 } }] } })")
+        assert "350/363 durability" in page.locator(".inventory-slot", has_text="Diamond Helmet").inner_text()
+        sword = page.locator(".inventory-slot", has_text="Diamond Sword")
+        sword.click()
+        page.locator("#lock-selected").click()
+        assert "Locked" in sword.inner_text()
+        assert page.locator("#drop-selected").is_disabled()
+        page.evaluate("window.__botEvent({ type: 'window', id: 'one', payload: { open: true, title: 'Town Menu', size: 9, slots: [{ slot: 0, name: 'emerald', displayName: 'Join Town', count: 1 }] } })")
+        page.locator("#server-window-dialog").wait_for(state="visible")
+        page.get_by_role("button", name="Join Town").click()
+        assert page.evaluate("window.__windowClicks") == [0]
+        page.locator("#close-server-window").click()
+        page.locator("#server-window-dialog").wait_for(state="hidden")
         desktop = str(Path(gettempdir()) / "afkdesk-ui-desktop.png")
         page.screenshot(path=desktop)
 

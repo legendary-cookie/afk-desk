@@ -18,6 +18,7 @@ const state = {
   statuses: new Map(),
   logs: new Map(),
   telemetry: new Map(),
+  serverWindows: new Map(),
   chatHistory: new Map(),
   settings: { uiScale: 100, sidePanelWidth: 300, inventoryHeight: 112, macros: [] },
   resolvedVersions: new Map(),
@@ -27,11 +28,11 @@ const state = {
 const el = Object.fromEntries([
   'account-list', 'account-count', 'add-account', 'open-settings', 'settings-dialog', 'close-settings', 'start-with-windows', 'stagger-startup-connections', 'startup-connection-delay', 'save-settings', 'empty-state', 'dashboard', 'account-title', 'app-version', 'settings-app-version',
   'edit-account', 'connection-button', 'status-banner', 'status-name', 'status-detail', 'server-address',
-  'detail-username', 'detail-server', 'detail-version', 'detail-antiafk', 'detail-environment', 'detail-water', 'detail-health', 'detail-hunger', 'detail-coordinates', 'detail-chest', 'detail-dimension', 'inventory-count', 'inventory-grid', 'auto-deposit-toggle', 'drop-selected', 'console-log', 'clear-console',
+  'detail-username', 'detail-server', 'detail-version', 'detail-antiafk', 'detail-environment', 'detail-water', 'detail-health', 'detail-hunger', 'detail-coordinates', 'detail-chest', 'detail-dimension', 'inventory-count', 'inventory-grid', 'auto-deposit-toggle', 'lock-selected', 'drop-selected', 'console-log', 'clear-console',
   'chat-form', 'chat-message', 'macro-pad', 'manage-macros', 'macro-editor', 'macro-rows', 'add-macro', 'cancel-macros', 'save-macros', 'account-dialog', 'account-form', 'dialog-title', 'account-id', 'label',
   'username', 'host', 'port', 'version', 'connect-on-startup', 'proxy-enabled', 'proxy-fields', 'proxy-type', 'proxy-host', 'proxy-port', 'proxy-username', 'proxy-password', 'proxy-password-help', 'proxy-clear-password', 'anti-afk', 'anti-afk-min-delay', 'anti-afk-max-delay', 'anti-afk-duration', 'anti-afk-look-degrees', 'anti-afk-walk-distance', 'anti-afk-jump', 'anti-afk-look', 'anti-afk-sneak', 'anti-afk-swing', 'anti-afk-walk', 'environmental-movement', 'auto-reconnect', 'auto-reconnect-delay', 'auto-reconnect-max', 'auto-deposit-setting', 'join-message', 'server-change-message',
   'message-delay', 'form-error', 'delete-account', 'login-dialog', 'login-code', 'open-login-private', 'open-login',
-  'close-login', 'ui-scale', 'ui-scale-value', 'column-resizer', 'inventory-resizer', 'toast-region'
+  'close-login', 'ui-scale', 'ui-scale-value', 'column-resizer', 'inventory-resizer', 'server-window-dialog', 'server-window-title', 'server-window-grid', 'close-server-window', 'toast-region'
 ].map((id) => [id, document.getElementById(id)]))
 
 async function init() {
@@ -65,7 +66,10 @@ function bindEvents() {
   el['delete-account'].addEventListener('click', deleteAccount)
   el['connection-button'].addEventListener('click', toggleConnection)
   el['drop-selected'].addEventListener('click', dropSelectedStack)
+  el['lock-selected'].addEventListener('click', toggleSelectedItemLock)
   el['auto-deposit-toggle'].addEventListener('change', toggleAutoDeposit)
+  el['close-server-window'].addEventListener('click', closeServerWindow)
+  el['server-window-dialog'].addEventListener('cancel', (event) => { event.preventDefault(); closeServerWindow() })
   el['proxy-enabled'].addEventListener('change', syncProxyFields)
   el['proxy-type'].addEventListener('change', () => {
     el['proxy-port'].value = el['proxy-type'].value === 'http' ? 8080 : 1080
@@ -101,7 +105,7 @@ function render() {
   const account = selectedAccount()
   el['empty-state'].hidden = Boolean(account)
   el.dashboard.hidden = !account
-  if (!account) return
+  if (!account) { renderServerWindow(); return }
 
   const status = getStatus(account.id)
   el['account-title'].textContent = account.label
@@ -119,6 +123,7 @@ function render() {
   renderConsole()
   renderMacroPad()
   renderTelemetry()
+  renderServerWindow()
 }
 
 function renderAccountList() {
@@ -279,7 +284,7 @@ function renderTelemetry() {
   el['detail-health'].textContent = telemetry ? `${formatNumber(telemetry.health)} / 20` : '—'
   el['detail-hunger'].textContent = telemetry ? `${formatNumber(telemetry.food)} / 20` : '—'
   el['detail-coordinates'].textContent = telemetry?.position ? `${telemetry.position.x}, ${telemetry.position.y}, ${telemetry.position.z}` : '—'
-  el['detail-chest'].textContent = telemetry?.nearestChest ? `${telemetry.nearestChest.x}, ${telemetry.nearestChest.y}, ${telemetry.nearestChest.z} (${formatNumber(telemetry.nearestChest.distance)} blocks)` : telemetry ? 'Not found within 5 blocks' : '—'
+  el['detail-chest'].textContent = telemetry?.nearestChest ? `${formatContainerType(telemetry.nearestChest.type)} at ${telemetry.nearestChest.x}, ${telemetry.nearestChest.y}, ${telemetry.nearestChest.z} (${formatNumber(telemetry.nearestChest.distance)} blocks)` : telemetry ? 'Not found within 5 blocks' : '—'
   el['detail-dimension'].textContent = telemetry ? String(telemetry.dimension || 'unknown').replace(/^minecraft:/, '') : '—'
   const items = telemetry?.inventory || []
   if (!items.some((item) => item.slot === state.selectedInventorySlot)) state.selectedInventorySlot = null
@@ -295,7 +300,8 @@ function renderTelemetry() {
   el['inventory-grid'].replaceChildren(...items.map((item) => {
     const slot = document.createElement('button')
     slot.type = 'button'
-    slot.className = `inventory-slot${item.slot === state.selectedInventorySlot ? ' selected' : ''}`
+    const locked = isSelectedAccountSlotLocked(item.slot)
+    slot.className = `inventory-slot${item.slot === state.selectedInventorySlot ? ' selected' : ''}${locked ? ' locked' : ''}`
     slot.setAttribute('aria-pressed', item.slot === state.selectedInventorySlot ? 'true' : 'false')
     slot.addEventListener('click', () => {
       state.selectedInventorySlot = state.selectedInventorySlot === item.slot ? null : item.slot
@@ -304,7 +310,8 @@ function renderTelemetry() {
     const name = document.createElement('strong')
     name.textContent = item.displayName
     const meta = document.createElement('span')
-    meta.textContent = `×${item.count} · slot ${item.slot}`
+    const details = [`×${item.count}`, formatSlotType(item), item.durability ? `${item.durability.remaining}/${item.durability.maximum} durability (${item.durability.percent}%)` : '', locked ? 'Locked' : ''].filter(Boolean)
+    meta.textContent = details.join(' · ')
     slot.append(name, meta)
     return slot
   }))
@@ -314,8 +321,37 @@ function renderTelemetry() {
 function updateInventoryActions(canInteract = ['online', 'connected'].includes(getStatus(state.selectedId).status)) {
   const telemetry = state.telemetry.get(state.selectedId)
   const item = telemetry?.inventory?.find((entry) => entry.slot === state.selectedInventorySlot)
-  el['drop-selected'].disabled = !canInteract || !item
-  el['drop-selected'].textContent = item ? `Drop ${item.count} × ${item.displayName}` : 'Drop selected stack'
+  const locked = item && isSelectedAccountSlotLocked(item.slot)
+  el['drop-selected'].disabled = !canInteract || !item || locked
+  el['drop-selected'].textContent = item ? locked ? `${item.displayName} is locked` : `Drop ${item.count} × ${item.displayName}` : 'Drop selected stack'
+  el['lock-selected'].disabled = !item
+  el['lock-selected'].textContent = item ? `${locked ? 'Unlock' : 'Lock'} ${item.displayName}` : 'Lock selected stack'
+}
+
+async function toggleSelectedItemLock() {
+  const account = selectedAccount()
+  const slot = state.selectedInventorySlot
+  if (!account || slot == null) return
+  const locked = !isSelectedAccountSlotLocked(slot)
+  el['lock-selected'].disabled = true
+  try {
+    const saved = await api.setItemLock(account.id, slot, locked)
+    Object.assign(account, saved)
+    toast(locked ? 'Item stack locked.' : 'Item stack unlocked.')
+  } catch (error) { toast(cleanError(error), 'error') }
+  renderTelemetry()
+}
+
+function isSelectedAccountSlotLocked(slot) {
+  return (selectedAccount()?.lockedInventorySlots || []).includes(Number(slot))
+}
+
+function formatSlotType(item) {
+  return item.slotType && item.slotType !== 'inventory' ? item.slotType : `slot ${item.slot}`
+}
+
+function formatContainerType(type) {
+  return String(type || 'chest').replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
 }
 
 async function dropSelectedStack() {
@@ -658,7 +694,10 @@ async function saveMacros() {
 function handleBotEvent({ type, id, payload }) {
   if (type === 'status') {
     state.statuses.set(id, payload)
-    if (!['online', 'connected'].includes(payload.status)) releaseAllManualInputs(id)
+    if (!['online', 'connected'].includes(payload.status)) {
+      releaseAllManualInputs(id)
+      state.serverWindows.delete(id)
+    }
     renderAccountList()
     if (id === state.selectedId) renderStatus(payload)
   }
@@ -670,6 +709,11 @@ function handleBotEvent({ type, id, payload }) {
   if (type === 'telemetry') {
     state.telemetry.set(id, payload)
     if (id === state.selectedId) renderTelemetry()
+  }
+  if (type === 'window') {
+    if (payload.open) state.serverWindows.set(id, payload)
+    else state.serverWindows.delete(id)
+    if (id === state.selectedId) renderServerWindow()
   }
   if (type === 'version') {
     state.resolvedVersions.set(id, payload.version)
@@ -702,6 +746,45 @@ function handleBotEvent({ type, id, payload }) {
     el['login-code'].textContent = payload.code || 'See console'
     if (!el['login-dialog'].open) el['login-dialog'].showModal()
   }
+}
+
+function renderServerWindow() {
+  const menu = state.serverWindows.get(state.selectedId)
+  if (!menu) {
+    if (el['server-window-dialog'].open) el['server-window-dialog'].close()
+    return
+  }
+  el['server-window-title'].textContent = menu.title || 'Server menu'
+  const slots = new Map((menu.slots || []).map((item) => [item.slot, item]))
+  const highestSlot = Math.max(-1, ...slots.keys()) + 1
+  const size = Math.max(highestSlot, Math.min(Number(menu.size) || 0, 256))
+  el['server-window-grid'].replaceChildren(...Array.from({ length: size }, (_, slotNumber) => {
+    const item = slots.get(slotNumber)
+    if (!item) {
+      const empty = document.createElement('span')
+      empty.className = 'server-window-empty'
+      empty.setAttribute('aria-hidden', 'true')
+      return empty
+    }
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.className = 'server-window-slot'
+    const name = document.createElement('strong')
+    name.textContent = item.displayName
+    const meta = document.createElement('span')
+    meta.textContent = [`×${item.count}`, `slot ${item.slot}`, item.durability ? `${item.durability.remaining}/${item.durability.maximum} durability` : ''].filter(Boolean).join(' · ')
+    button.append(name, meta)
+    button.addEventListener('click', () => run(() => api.clickWindowSlot(state.selectedId, item.slot)))
+    return button
+  }))
+  if (!el['server-window-dialog'].open) el['server-window-dialog'].showModal()
+}
+
+async function closeServerWindow() {
+  const id = state.selectedId
+  if (!id) return
+  try { await api.closeServerWindow(id) }
+  catch (error) { toast(cleanError(error), 'error') }
 }
 
 async function openSettingsDialog() {

@@ -15,7 +15,8 @@ const {
 applyProtocolFixes()
 const mineflayer = require('mineflayer')
 
-const CHEST_NAMES = new Set(['chest', 'trapped_chest'])
+const CHEST_NAMES = new Set(['chest', 'trapped_chest', 'barrel'])
+const ARMOR_SLOT_TYPES = new Map([[5, 'helmet'], [6, 'chestplate'], [7, 'leggings'], [8, 'boots']])
 const WATER_NAMES = new Set(['water', 'flowing_water'])
 const WATERLIKE_NAMES = new Set(['bubble_column', 'seagrass', 'tall_seagrass', 'kelp', 'kelp_plant'])
 const FLOW_DIRECTIONS = [[0, 1], [-1, 0], [0, -1], [1, 0]]
@@ -236,6 +237,15 @@ class BotManager {
       if (session.account.environmentalMovement !== false) inspectFluidCurrent(bot, session.fluidMotion)
     })
     bot.inventory?.on?.('updateSlot', emitTelemetry)
+    bot.on('windowOpen', (window) => {
+      if (session.depositing) return
+      const emitWindow = () => this.emit('window', account.id, buildWindowSnapshot(window))
+      emitWindow()
+      window?.on?.('updateSlot', emitWindow)
+    })
+    bot.on('windowClose', () => {
+      if (!session.depositing) this.emit('window', account.id, { open: false })
+    })
     bot.on('spawn', markReady)
     bot.on('forcedMove', () => {
       const wasReady = session.ready
@@ -402,13 +412,39 @@ class BotManager {
   }
 
   async dropStack(id, slot) {
+    const session = this.sessions.get(id)
     const bot = this.requireOnline(id)
     const safeSlot = Math.max(0, Math.min(Number(slot) || 0, 255))
+    if (lockedSlotSet(session.account).has(safeSlot)) throw new Error('That inventory stack is locked. Unlock it before dropping it.')
     const item = bot.inventory?.slots?.[safeSlot] || bot.inventory?.items?.().find((entry) => entry.slot === safeSlot)
     if (!item) throw new Error('That inventory stack is no longer available.')
     await bot.tossStack(item)
     this.emit('log', id, { kind: 'sent', message: `Dropped ${item.count} × ${item.displayName || item.name}`, at: Date.now() })
     this.emitTelemetry(id)
+  }
+
+  setItemLocks(id, slots) {
+    const session = this.sessions.get(id)
+    if (!session) return
+    session.account.lockedInventorySlots = normalizeLockedSlots(slots)
+    this.emitTelemetry(id)
+  }
+
+  async clickWindowSlot(id, slot) {
+    const bot = this.requireOnline(id)
+    const window = bot.currentWindow
+    if (!window) throw new Error('The server menu is no longer open.')
+    const requestedSlot = Number(slot)
+    if (!Number.isInteger(requestedSlot) || requestedSlot < 0 || requestedSlot > 255) throw new Error('Invalid server-menu slot.')
+    const safeSlot = requestedSlot
+    const inventoryStart = Math.max(0, Number(window.inventoryStart) || window.slots?.length || 0)
+    if (safeSlot >= inventoryStart) throw new Error('Only server-menu slots can be clicked here.')
+    await bot.clickWindow(safeSlot, 0, 0)
+  }
+
+  closeWindow(id) {
+    const bot = this.requireOnline(id)
+    if (bot.currentWindow) bot.closeWindow(bot.currentWindow)
   }
 
   async setAutoDeposit(id, enabled) {
@@ -426,19 +462,20 @@ class BotManager {
     session.nearestChest = block ? chestLocation(session.bot, block) : null
     this.emitTelemetry(id)
     if (!session.account.autoDepositToChest || !block) return
-    const items = session.bot.inventory?.items?.() || []
+    const lockedSlots = lockedSlotSet(session.account)
+    const items = (session.bot.inventory?.items?.() || []).filter((item) => !lockedSlots.has(Number(item.slot)))
     if (!items.length) return
     session.depositing = true
     let chest
     try {
-      chest = await session.bot.openChest(block)
+      chest = await (session.bot.openContainer || session.bot.openChest).call(session.bot, block)
       let deposited = 0
       for (const item of items) {
         await chest.deposit(item.type, item.metadata ?? null, item.count, item.nbt)
         deposited += item.count
       }
       const { x, y, z } = session.nearestChest
-      this.emit('log', id, { kind: 'sent', message: `Deposited ${deposited} items into chest at ${x}, ${y}, ${z}.`, at: Date.now() })
+      this.emit('log', id, { kind: 'sent', message: `Deposited ${deposited} items into ${containerLabel(block)} at ${x}, ${y}, ${z}.`, at: Date.now() })
     } catch (error) {
       this.emit('log', id, { kind: 'error', message: `Auto-deposit failed: ${String(error?.message || error).slice(0, 160)}`, at: Date.now() })
     } finally {
@@ -856,6 +893,7 @@ function chestLocation(bot, block) {
   const deltaY = Number(position.y) - Number(player.y)
   const deltaZ = Number(position.z) - Number(player.z)
   return {
+    type: String(block?.name || 'chest'),
     x: Math.round(Number(position.x)),
     y: Math.round(Number(position.y)),
     z: Math.round(Number(position.z)),
@@ -1079,11 +1117,18 @@ function waterDepth(block) {
 function buildTelemetry(bot, nearestChest = null, environmentalMovement, fluidMotion = null) {
   const position = bot?.entity?.position
   const finite = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback
-  const inventory = (bot?.inventory?.items?.() || []).slice(0, 46).map((item) => ({
+  const bySlot = new Map((bot?.inventory?.items?.() || []).map((item) => [Number(item.slot), item]))
+  for (const slot of ARMOR_SLOT_TYPES.keys()) {
+    const item = bot?.inventory?.slots?.[slot]
+    if (item) bySlot.set(slot, item)
+  }
+  const inventory = [...bySlot.values()].sort((a, b) => Number(a.slot) - Number(b.slot)).slice(0, 46).map((item) => ({
     slot: Math.max(0, Math.min(Number(item.slot) || 0, 255)),
+    slotType: ARMOR_SLOT_TYPES.get(Number(item.slot)) || 'inventory',
     name: String(item.name || '').slice(0, 80),
     displayName: String(item.displayName || item.name || 'Unknown item').slice(0, 100),
-    count: Math.max(1, Math.min(Number(item.count) || 1, 127))
+    count: Math.max(1, Math.min(Number(item.count) || 1, 127)),
+    ...itemDurability(item)
   }))
   const environment = environmentalMovement === undefined ? undefined : {
     enabled: environmentalMovement !== false,
@@ -1114,4 +1159,38 @@ function buildTelemetry(bot, nearestChest = null, environmentalMovement, fluidMo
   }
 }
 
-module.exports = { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, normalizeSkinUrl, findNearestChest, buildTelemetry, describeNetworkError, reconnectDelaySeconds, normalizeAntiAfkSettings, inspectFluidCurrent, recordFluidCorrection, installMovementPacketCompatibility, installModernPlayerInputCompatibility }
+function itemDurability(item) {
+  const maximum = Number(item?.maxDurability)
+  if (!Number.isFinite(maximum) || maximum <= 0) return {}
+  const used = Math.max(0, Math.min(Number(item?.durabilityUsed) || 0, maximum))
+  const remaining = Math.round(maximum - used)
+  return { durability: { remaining, maximum: Math.round(maximum), percent: Math.round((remaining / maximum) * 100) } }
+}
+
+function normalizeLockedSlots(slots) {
+  return [...new Set((Array.isArray(slots) ? slots : []).map(Number).filter((slot) => Number.isInteger(slot) && slot >= 0 && slot <= 255))].sort((a, b) => a - b).slice(0, 46)
+}
+
+function lockedSlotSet(account) {
+  return new Set(normalizeLockedSlots(account?.lockedInventorySlots))
+}
+
+function containerLabel(block) {
+  if (block?.name === 'barrel') return 'barrel'
+  if (block?.name === 'trapped_chest') return 'trapped chest'
+  return 'chest'
+}
+
+function buildWindowSnapshot(window) {
+  const limit = Math.max(0, Math.min(Number(window?.inventoryStart) || window?.slots?.length || 0, 256))
+  const slots = (window?.slots || []).slice(0, limit).map((item, slot) => item ? {
+    slot,
+    name: String(item.name || '').slice(0, 80),
+    displayName: String(item.displayName || item.name || 'Unknown item').slice(0, 100),
+    count: Math.max(1, Math.min(Number(item.count) || 1, 127)),
+    ...itemDurability(item)
+  } : null).filter(Boolean)
+  return { open: true, title: String(extractText(window?.title) || 'Server menu').slice(0, 100), size: limit, slots }
+}
+
+module.exports = { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, normalizeSkinUrl, findNearestChest, buildTelemetry, buildWindowSnapshot, normalizeLockedSlots, describeNetworkError, reconnectDelaySeconds, normalizeAntiAfkSettings, inspectFluidCurrent, recordFluidCorrection, installMovementPacketCompatibility, installModernPlayerInputCompatibility }
