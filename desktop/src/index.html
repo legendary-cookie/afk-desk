@@ -50,10 +50,11 @@
               <h1 id="account-title">Account</h1>
             </div>
             <div class="topbar-actions">
-              <div class="quick-scale" role="group" aria-label="Interface scale">
-                <button id="zoom-out" type="button" title="Make interface smaller" aria-label="Decrease interface scale">−</button>
-                <button id="zoom-reset" type="button" title="Reset interface scale"><span id="quick-scale-value">100%</span></button>
-                <button id="zoom-in" type="button" title="Make interface larger" aria-label="Increase interface scale">＋</button>
+              <button id="display-menu-trigger" class="button secondary menu-trigger display-menu-trigger" type="button" popovertarget="display-menu">Display <span id="quick-scale-value">100%</span></button>
+              <div id="display-menu" class="action-popover display-popover" popover>
+                <label for="quick-scale"><strong>Interface scale</strong><span>Fit more or make everything larger.</span></label>
+                <input id="quick-scale" type="range" min="75" max="125" step="5" value="100" />
+                <button id="reset-scale" class="menu-action" type="button">Reset to 100%</button>
               </div>
               <button id="edit-account" class="button secondary" type="button">Edit</button>
               <button id="connection-button" class="button primary" type="button">Connect</button>
@@ -73,8 +74,7 @@
                   <p id="server-address">server.example.com</p>
                 </div>
                 <div class="panel-header-actions">
-                  <button id="focus-chat" class="text-button" type="button" aria-pressed="false" title="Temporarily collapse inventory and maximize chat">Focus chat</button>
-                  <button id="clear-console" class="text-button" type="button">Clear</button>
+                  <button id="console-menu-trigger" class="menu-trigger icon-menu-trigger" type="button" popovertarget="console-menu" aria-label="Console actions">⋯</button>
                   <button class="section-toggle" type="button" data-collapse-target="console-panel" aria-expanded="true" title="Collapse console" aria-label="Collapse console">⌃</button>
                 </div>
               </header>
@@ -89,18 +89,9 @@
               <section id="macro-section" class="macro-section collapsible" aria-labelledby="macro-title">
                 <header class="macro-header">
                   <div><h3 id="macro-title">Macro pad</h3><span>Click to send saved text or commands</span></div>
-                  <div class="panel-header-actions"><button id="manage-macros" class="text-button" type="button" aria-expanded="false" aria-controls="macro-editor">Edit</button><button class="section-toggle" type="button" data-collapse-target="macro-section" aria-expanded="true" title="Collapse macro pad" aria-label="Collapse macro pad">⌃</button></div>
+                  <div class="panel-header-actions"><button id="macro-menu-trigger" class="menu-trigger icon-menu-trigger" type="button" popovertarget="macro-menu" aria-label="Macro actions">⋯</button><button class="section-toggle" type="button" data-collapse-target="macro-section" aria-expanded="true" title="Collapse macro pad" aria-label="Collapse macro pad">⌃</button></div>
                 </header>
                 <div id="macro-pad" class="macro-pad" role="group" aria-label="Saved chat macros"></div>
-                <div id="macro-editor" class="macro-editor" hidden>
-                  <div id="macro-rows" class="macro-rows"></div>
-                  <div class="macro-editor-actions">
-                    <button id="add-macro" class="button secondary" type="button">Add macro</button>
-                    <span class="footer-spacer"></span>
-                    <button id="cancel-macros" class="button secondary" type="button">Cancel</button>
-                    <button id="save-macros" class="button primary" type="button">Save macros</button>
-                  </div>
-                </div>
               </section>
             </section>
             <div id="column-resizer" class="layout-resizer column-resizer" role="separator" aria-orientation="vertical" tabindex="0" aria-label="Resize console and controls" aria-valuetext="Controls 300 pixels wide"></div>
@@ -122,10 +113,10 @@
                 </dl>
               </section>
 
-              <section id="movement-panel" class="panel movement-panel collapsible" aria-labelledby="movement-title">
+              <section id="movement-panel" class="panel movement-panel collapsible collapsed" aria-labelledby="movement-title">
                 <header class="panel-header">
                   <div><h2 id="movement-title">Movement</h2><p>Quick taps while online</p></div>
-                  <button class="section-toggle" type="button" data-collapse-target="movement-panel" aria-expanded="true" title="Collapse movement controls" aria-label="Collapse movement controls">⌃</button>
+                  <button class="section-toggle" type="button" data-collapse-target="movement-panel" aria-expanded="false" title="Expand movement controls" aria-label="Expand movement controls">⌄</button>
                 </header>
                 <div class="movement-grid" aria-label="Movement controls">
                   <button data-control="forward" class="move-button forward" disabled aria-label="Move forward">W</button>
@@ -148,7 +139,6 @@
               <div class="inventory-toolbar">
                 <button id="toggle-inventory" class="button secondary" type="button" aria-expanded="true" title="Collapse inventory and give chat more room">Collapse</button>
                 <label class="compact-toggle" title="Deposit unlocked items into the closest chest or barrel"><input id="auto-deposit-toggle" type="checkbox" /><span>Auto-deposit</span></label>
-                <button id="move-selected" class="button secondary" type="button" disabled>Move</button>
                 <button id="hold-selected" class="button secondary" type="button" disabled>Hold</button>
                 <select id="equip-destination" class="compact-select" aria-label="Equipment destination">
                   <option value="auto">Auto gear slot</option><option value="head">Head</option><option value="torso">Chest</option><option value="legs">Legs</option><option value="feet">Feet</option><option value="off-hand">Off-hand</option>
@@ -162,6 +152,14 @@
           </section>
         </section>
       </main>
+    </div>
+
+    <div id="console-menu" class="action-popover compact-popover" popover>
+      <button id="clear-console" class="menu-action" type="button">Clear chat</button>
+    </div>
+
+    <div id="macro-menu" class="action-popover compact-popover" popover>
+      <button id="manage-macros" class="menu-action" type="button">Edit macros</button>
     </div>
 
     <dialog id="account-dialog" aria-labelledby="dialog-title">
@@ -288,6 +286,24 @@
         <footer class="dialog-footer">
           <span class="footer-spacer"></span>
           <button id="save-settings" class="button primary" type="button">Save settings</button>
+        </footer>
+      </div>
+    </dialog>
+
+    <dialog id="macro-dialog" class="wide-dialog" aria-labelledby="macro-dialog-title">
+      <div class="macro-dialog-content">
+        <header class="dialog-header">
+          <div><div class="eyebrow">Chat shortcuts</div><h2 id="macro-dialog-title">Edit macros</h2></div>
+          <button id="close-macro-dialog" class="icon-button" type="button" aria-label="Close macro editor">×</button>
+        </header>
+        <div id="macro-editor" class="macro-editor">
+          <div id="macro-rows" class="macro-rows"></div>
+        </div>
+        <footer class="dialog-footer">
+          <button id="add-macro" class="button secondary" type="button">Add macro</button>
+          <span class="footer-spacer"></span>
+          <button id="cancel-macros" class="button secondary" type="button">Cancel</button>
+          <button id="save-macros" class="button primary" type="button">Save macros</button>
         </footer>
       </div>
     </dialog>

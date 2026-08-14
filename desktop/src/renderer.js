@@ -75,10 +75,10 @@ const state = {
 }
 
 const el = Object.fromEntries([
-  'account-list', 'account-count', 'add-account', 'open-settings', 'toggle-sidebar', 'zoom-out', 'zoom-reset', 'zoom-in', 'quick-scale-value', 'settings-dialog', 'close-settings', 'start-with-windows', 'stagger-startup-connections', 'startup-connection-delay', 'save-settings', 'empty-state', 'dashboard', 'account-title', 'app-version', 'settings-app-version',
+  'account-list', 'account-count', 'add-account', 'open-settings', 'toggle-sidebar', 'quick-scale', 'reset-scale', 'quick-scale-value', 'display-menu', 'console-menu', 'macro-menu', 'settings-dialog', 'close-settings', 'start-with-windows', 'stagger-startup-connections', 'startup-connection-delay', 'save-settings', 'empty-state', 'dashboard', 'account-title', 'app-version', 'settings-app-version',
   'edit-account', 'connection-button', 'status-banner', 'status-name', 'status-detail', 'server-address',
-  'detail-username', 'detail-server', 'detail-version', 'detail-antiafk', 'detail-environment', 'detail-water', 'detail-health', 'detail-hunger', 'detail-coordinates', 'detail-chest', 'detail-dimension', 'inventory-count', 'inventory-grid', 'auto-deposit-toggle', 'move-selected', 'hold-selected', 'equip-destination', 'equip-selected', 'lock-selected', 'drop-selected', 'toggle-inventory', 'focus-chat', 'console-log', 'clear-console',
-  'chat-form', 'chat-message', 'macro-pad', 'manage-macros', 'macro-editor', 'macro-rows', 'add-macro', 'cancel-macros', 'save-macros', 'account-dialog', 'account-form', 'dialog-title', 'account-id', 'label',
+  'detail-username', 'detail-server', 'detail-version', 'detail-antiafk', 'detail-environment', 'detail-water', 'detail-health', 'detail-hunger', 'detail-coordinates', 'detail-chest', 'detail-dimension', 'inventory-count', 'inventory-grid', 'auto-deposit-toggle', 'hold-selected', 'equip-destination', 'equip-selected', 'lock-selected', 'drop-selected', 'toggle-inventory', 'console-log', 'clear-console',
+  'chat-form', 'chat-message', 'macro-pad', 'manage-macros', 'macro-dialog', 'close-macro-dialog', 'macro-editor', 'macro-rows', 'add-macro', 'cancel-macros', 'save-macros', 'account-dialog', 'account-form', 'dialog-title', 'account-id', 'label',
   'username', 'host', 'port', 'version', 'connect-on-startup', 'proxy-enabled', 'proxy-fields', 'proxy-type', 'proxy-host', 'proxy-port', 'proxy-username', 'proxy-password', 'proxy-password-help', 'proxy-clear-password', 'anti-afk', 'anti-afk-min-delay', 'anti-afk-max-delay', 'anti-afk-duration', 'anti-afk-look-degrees', 'anti-afk-walk-distance', 'anti-afk-jump', 'anti-afk-look', 'anti-afk-sneak', 'anti-afk-swing', 'anti-afk-walk', 'environmental-movement', 'auto-reconnect', 'auto-reconnect-delay', 'auto-reconnect-max', 'auto-deposit-setting', 'join-message', 'server-change-message',
   'message-delay', 'form-error', 'delete-account', 'login-dialog', 'login-code', 'open-login-private', 'open-login',
   'close-login', 'ui-scale', 'ui-scale-value', 'column-resizer', 'inventory-resizer', 'server-window-dialog', 'server-window-title', 'server-window-grid', 'close-server-window', 'item-tooltip', 'toast-region'
@@ -115,7 +115,6 @@ function bindEvents() {
   el['delete-account'].addEventListener('click', deleteAccount)
   el['connection-button'].addEventListener('click', toggleConnection)
   el['drop-selected'].addEventListener('click', dropSelectedStack)
-  el['move-selected'].addEventListener('click', toggleMoveSelected)
   el['hold-selected'].addEventListener('click', holdSelectedItem)
   el['equip-selected'].addEventListener('click', equipSelectedItem)
   el['lock-selected'].addEventListener('click', toggleSelectedItemLock)
@@ -128,10 +127,12 @@ function bindEvents() {
   })
   el['chat-form'].addEventListener('submit', sendChat)
   el['chat-message'].addEventListener('keydown', navigateChatHistory)
-  el['manage-macros'].addEventListener('click', () => el['macro-editor'].hidden ? openMacroEditor() : closeMacroEditor())
+  el['manage-macros'].addEventListener('click', openMacroEditor)
   el['add-macro'].addEventListener('click', () => addMacroRow())
   el['cancel-macros'].addEventListener('click', closeMacroEditor)
   el['save-macros'].addEventListener('click', saveMacros)
+  el['close-macro-dialog'].addEventListener('click', closeMacroEditor)
+  el['macro-dialog'].addEventListener('cancel', (event) => { event.preventDefault(); closeMacroEditor() })
   el['ui-scale'].addEventListener('input', () => {
     el['ui-scale-value'].textContent = `${el['ui-scale'].value}%`
     applyUiScale(el['ui-scale'].value)
@@ -139,13 +140,13 @@ function bindEvents() {
   el['clear-console'].addEventListener('click', () => {
     state.logs.set(state.selectedId, [])
     renderConsole()
+    el['console-menu'].hidePopover?.()
   })
   el['toggle-inventory'].addEventListener('click', toggleInventory)
-  el['focus-chat'].addEventListener('click', toggleInventory)
   el['toggle-sidebar'].addEventListener('click', toggleSidebar)
-  el['zoom-out'].addEventListener('click', () => changeUiScale(-5))
-  el['zoom-reset'].addEventListener('click', () => changeUiScale(0, true))
-  el['zoom-in'].addEventListener('click', () => changeUiScale(5))
+  el['quick-scale'].addEventListener('input', () => previewQuickScale(el['quick-scale'].value))
+  el['quick-scale'].addEventListener('change', () => saveQuickScale(el['quick-scale'].value))
+  el['reset-scale'].addEventListener('click', () => saveQuickScale(100))
   document.querySelectorAll('[data-collapse-target]').forEach((button) => button.addEventListener('click', () => toggleSection(button)))
   bindManualMovement()
   bindPanelResizers()
@@ -571,16 +572,8 @@ function updateInventoryActions(canInteract = ['online', 'connected'].includes(g
   el['lock-selected'].disabled = !item
   el['lock-selected'].textContent = locked ? 'Unlock' : 'Lock'
   el['lock-selected'].title = item ? `${locked ? 'Unlock' : 'Lock'} ${item.displayName}` : 'Select a stack to lock'
-  el['move-selected'].disabled = !canInteract || !item
-  el['move-selected'].textContent = state.movingInventorySlot == null ? 'Move' : 'Cancel'
   el['hold-selected'].disabled = !canInteract || !item
   el['equip-selected'].disabled = !canInteract || !item
-}
-
-function toggleMoveSelected() {
-  state.movingInventorySlot = state.movingInventorySlot == null ? state.selectedInventorySlot : null
-  if (state.movingInventorySlot != null) toast('Choose an empty or occupied destination slot, or drag the item.')
-  renderTelemetry()
 }
 
 async function moveInventoryItem(sourceSlot, destinationSlot) {
@@ -929,15 +922,14 @@ function renderMacroPad(canInteract = ['online', 'connected'].includes(getStatus
 function openMacroEditor() {
   el['macro-rows'].replaceChildren()
   for (const macro of state.settings.macros || []) addMacroRow(macro)
-  el['macro-editor'].hidden = false
-  el['manage-macros'].setAttribute('aria-expanded', 'true')
+  el['macro-menu'].hidePopover?.()
   if (!state.settings.macros?.length) addMacroRow()
+  if (!el['macro-dialog'].open) el['macro-dialog'].showModal()
   el['macro-rows'].querySelector('input')?.focus()
 }
 
 function closeMacroEditor() {
-  el['macro-editor'].hidden = true
-  el['manage-macros'].setAttribute('aria-expanded', 'false')
+  if (el['macro-dialog'].open) el['macro-dialog'].close()
 }
 
 function addMacroRow(macro = {}) {
@@ -1105,16 +1097,26 @@ async function saveSettings() {
 function applyUiScale(value) {
   const scale = Math.max(75, Math.min(Number(value) || 100, 125))
   if (el['quick-scale-value']) el['quick-scale-value'].textContent = `${scale}%`
+  if (el['quick-scale']) el['quick-scale'].value = scale
   api.setUiScale(scale)
   requestAnimationFrame(() => applyPanelLayout(state.settings))
 }
 
-async function changeUiScale(delta, reset = false) {
-  const scale = reset ? 100 : Math.max(75, Math.min((Number(state.settings.uiScale) || 100) + delta, 125))
+function previewQuickScale(value) {
+  const scale = Math.max(75, Math.min(Number(value) || 100, 125))
   state.settings.uiScale = scale
   el['ui-scale'].value = scale
   el['ui-scale-value'].textContent = `${scale}%`
   applyUiScale(scale)
+}
+
+async function saveQuickScale(value) {
+  const scale = Math.max(75, Math.min(Number(value) || 100, 125))
+  state.settings.uiScale = scale
+  el['ui-scale'].value = scale
+  el['ui-scale-value'].textContent = `${scale}%`
+  applyUiScale(scale)
+  el['display-menu'].hidePopover?.()
   try { state.settings = await api.saveSettings({ ...state.settings }) } catch (error) { toast(`Scale was not saved: ${cleanError(error)}`, 'error') }
 }
 
@@ -1187,8 +1189,6 @@ function toggleInventory() {
   el.dashboard.classList.toggle('inventory-collapsed', state.inventoryCollapsed)
   el['toggle-inventory'].textContent = state.inventoryCollapsed ? 'Expand' : 'Collapse'
   el['toggle-inventory'].setAttribute('aria-expanded', String(!state.inventoryCollapsed))
-  el['focus-chat'].textContent = state.inventoryCollapsed ? 'Show inventory' : 'Focus chat'
-  el['focus-chat'].setAttribute('aria-pressed', String(state.inventoryCollapsed))
   el['inventory-resizer'].hidden = state.inventoryCollapsed
   applyPanelLayout(state.settings)
 }

@@ -42,6 +42,8 @@ def run() -> None:
         page.locator("body").click(position={"x": 500, "y": 100})
         page.keyboard.down("w")
         page.keyboard.up("w")
+        assert not page.locator('[data-control="jump"]').is_visible()
+        page.locator('[data-collapse-target="movement-panel"]').click()
         jump = page.locator('[data-control="jump"]')
         jump.hover()
         page.mouse.down()
@@ -53,12 +55,15 @@ def run() -> None:
         assert page.locator("#chat-message").input_value() == "hello history"
         page.get_by_role("button", name="Town").click()
         assert page.evaluate("window.__sent") == ["hello history", "/server towny"]
+        page.locator("#macro-menu-trigger").click()
         page.locator("#manage-macros").click()
+        page.locator("#macro-dialog").wait_for(state="visible")
         page.locator("#add-macro").click()
         rows = page.locator(".macro-row")
         rows.nth(1).locator(".macro-label-input").fill("Home")
         rows.nth(1).locator(".macro-message-input").fill("/home")
         page.locator("#save-macros").click()
+        page.locator("#macro-dialog").wait_for(state="hidden")
         page.get_by_role("button", name="Home").wait_for()
         page.locator("#open-settings").click()
         page.locator("#ui-scale").fill("90")
@@ -80,10 +85,12 @@ def run() -> None:
         page.mouse.up()
         assert page.evaluate("window.__settings.inventoryHeight > 220")
         assert page.locator("#app-version").inner_text() == "v0.7.0-test"
-        page.locator("#zoom-in").click()
+        page.locator("#display-menu-trigger").click()
+        page.locator("#quick-scale").fill("105")
         assert page.evaluate("window.__scale") == 105
         assert page.locator("#quick-scale-value").inner_text() == "105%"
-        page.locator("#zoom-reset").click()
+        page.locator("#display-menu-trigger").click()
+        page.locator("#reset-scale").click()
         assert page.evaluate("window.__scale") == 100
         sidebar_width = page.locator(".sidebar").bounding_box()["width"]
         page.locator("#toggle-sidebar").click()
@@ -114,10 +121,12 @@ def run() -> None:
         assert inventory_fit["header"] <= 72, inventory_fit
         assert page.locator(".console-panel").bounding_box()["height"] >= 260
         normal_chat_height = page.locator(".console-panel").bounding_box()["height"]
-        page.locator("#focus-chat").click()
+        assert page.locator("#focus-chat").count() == 0
+        assert page.locator("#move-selected").count() == 0
+        page.locator("#toggle-inventory").click()
         assert page.locator(".inventory-panel").bounding_box()["height"] <= 60
         assert page.locator(".console-panel").bounding_box()["height"] > normal_chat_height
-        page.locator("#focus-chat").click()
+        page.locator("#toggle-inventory").click()
         assert page.evaluate("document.body.scrollHeight <= innerHeight")
         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
         assert page.locator("#macro-pad").is_visible()
@@ -139,8 +148,7 @@ def run() -> None:
         sword.click()
         page.locator("#hold-selected").click()
         assert page.evaluate("window.__equips") == [[36, "hand"]]
-        page.locator("#move-selected").click()
-        page.locator('.minecraft-slot[data-slot="37"]').click()
+        sword.drag_to(page.locator('.minecraft-slot[data-slot="37"]'))
         assert page.evaluate("window.__inventoryMoves") == [[36, 37]]
         sword.click()
         page.locator("#lock-selected").click()
