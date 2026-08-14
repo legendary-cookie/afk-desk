@@ -112,6 +112,12 @@ class BotManager {
       versionReported: false,
       versionConfirmed: false
     }
+    bot.__afkDeskEnchantmentsById = new Map()
+    bot._client?.on?.('registry_data', (packet) => {
+      if (String(packet?.id || '').replace(/^minecraft:/, '') !== 'enchantment' || !Array.isArray(packet?.entries)) return
+      bot.__afkDeskEnchantmentsById = new Map(packet.entries.map((entry, id) => [id, String(entry?.key || '').replace(/^minecraft:/, '')]).filter(([, name]) => name))
+      this.diagnose({ event: 'enchantment_registry', accountId: account.id, version: bot.version || account.version || 'auto', entries: [...bot.__afkDeskEnchantmentsById.entries()] })
+    })
     bot.__afkDeskPacketDiagnostic = (entry) => this.diagnose({ ...entry, accountId: account.id, version: bot.version || account.version || 'auto' })
     bot._client?.on?.('packet', (_data, meta) => {
       if (CONFIGURATION_PACKET_NAMES.has(meta?.name)) {
@@ -241,7 +247,7 @@ class BotManager {
     bot.inventory?.on?.('updateSlot', emitTelemetry)
     bot.on('windowOpen', (window) => {
       if (session.depositing) return
-      const emitWindow = () => this.emit('window', account.id, buildWindowSnapshot(window, bot.registry))
+      const emitWindow = () => this.emit('window', account.id, buildWindowSnapshot(window, bot.registry, bot.__afkDeskEnchantmentsById))
       emitWindow()
       window?.on?.('updateSlot', emitWindow)
     })
@@ -1169,7 +1175,7 @@ function buildTelemetry(bot, nearestChest = null, environmentalMovement, fluidMo
     displayName: String(item.displayName || item.name || 'Unknown item').slice(0, 100),
     count: Math.max(1, Math.min(Number(item.count) || 1, 127)),
     ...itemDurability(item),
-    ...itemTooltipDetails(item, bot?.registry)
+    ...itemTooltipDetails(item, bot?.registry, bot?.__afkDeskEnchantmentsById)
   }))
   const environment = environmentalMovement === undefined ? undefined : {
     enabled: environmentalMovement !== false,
@@ -1215,7 +1221,7 @@ function itemDurability(item) {
   return { durability: { remaining, maximum: Math.round(maximum), percent: Math.round((remaining / maximum) * 100) } }
 }
 
-function itemTooltipDetails(item, registry) {
+function itemTooltipDetails(item, registry, enchantmentsById) {
   let customName = ''
   let lore = []
   let loreSegments = []
@@ -1241,14 +1247,14 @@ function itemTooltipDetails(item, registry) {
       item?.components?.find?.((component) => component?.type === 'stored_enchantments')?.data
     ]
     for (const candidate of candidates) {
-      enchants = normalizeEnchantments(candidate, registry)
+      enchants = normalizeEnchantments(candidate, registry, enchantmentsById)
       if (enchants.length) break
     }
   } catch {}
   return { ...(customName ? { customName } : {}), ...(lore.length ? { lore, loreSegments } : {}), ...(enchants.length ? { enchants } : {}) }
 }
 
-function normalizeEnchantments(raw, registry) {
+function normalizeEnchantments(raw, registry, enchantmentsById) {
   if (raw == null) return []
   const container = Array.isArray(raw) || raw instanceof Map
     ? raw
@@ -1264,8 +1270,9 @@ function normalizeEnchantments(raw, registry) {
   return list.map((enchant) => {
     const rawId = unwrapComponentValue(enchant?.name ?? enchant?.id ?? enchant?.key ?? enchant?.enchantment)
     const numericId = typeof rawId === 'number' || /^\d+$/.test(String(rawId || '')) ? Number(rawId) : null
-    const registryEntry = numericId == null ? null : registry?.enchantmentsArray?.find?.((entry) => Number(entry?.id) === numericId)
-    const name = String(registryEntry?.name ?? rawId ?? '').replace(/^minecraft:/, '').slice(0, 80)
+    const dynamicName = numericId == null ? null : enchantmentsById?.get?.(numericId)
+    const staticEntry = numericId == null || enchantmentsById?.size ? null : registry?.enchantmentsArray?.find?.((entry) => Number(entry?.id) === numericId)
+    const name = String(dynamicName ?? staticEntry?.name ?? (numericId == null ? rawId : `enchantment_${numericId}`) ?? '').replace(/^minecraft:/, '').slice(0, 80)
     const rawLevel = unwrapComponentValue(enchant?.lvl ?? enchant?.level ?? enchant?.value)
     const numericLevel = Number(rawLevel)
     return { name, level: Math.max(1, Math.min(Number.isFinite(numericLevel) ? numericLevel : 1, 255)) }
@@ -1358,7 +1365,7 @@ function containerLabel(block) {
   return 'chest'
 }
 
-function buildWindowSnapshot(window, registry) {
+function buildWindowSnapshot(window, registry, enchantmentsById) {
   const limit = Math.max(0, Math.min(Number(window?.inventoryStart) || window?.slots?.length || 0, 256))
   const slots = (window?.slots || []).slice(0, limit).map((item, slot) => item ? {
     slot,
@@ -1366,7 +1373,7 @@ function buildWindowSnapshot(window, registry) {
     displayName: String(item.displayName || item.name || 'Unknown item').slice(0, 100),
     count: Math.max(1, Math.min(Number(item.count) || 1, 127)),
     ...itemDurability(item),
-    ...itemTooltipDetails(item, registry)
+    ...itemTooltipDetails(item, registry, enchantmentsById)
   } : null).filter(Boolean)
   return { open: true, title: String(extractText(window?.title) || 'Server menu').slice(0, 100), size: limit, slots }
 }

@@ -348,13 +348,7 @@ test('reads modern component enchantments, lore, and names when item getters are
 
 test('reads numeric modern enchantment components and wrapped levels without defaulting to level one', () => {
   const bot = new FakeBot()
-  bot.registry = {
-    enchantmentsArray: [
-      { id: 10, name: 'efficiency' },
-      { id: 11, name: 'sharpness' },
-      { id: 12, name: 'unbreaking' }
-    ]
-  }
+  bot.__afkDeskEnchantmentsById = new Map([[10, 'efficiency'], [11, 'sharpness'], [12, 'unbreaking']])
   const item = {
     slot: 36, name: 'diamond_sword', displayName: 'Diamond Sword', count: 1,
     get enchants () { return { enchantments: [{ id: 11, level: 5 }, { id: { value: 12 }, level: { type: 'varint', value: 3 } }] } }
@@ -364,6 +358,32 @@ test('reads numeric modern enchantment components and wrapped levels without def
 
   const [snapshot] = buildTelemetry(bot).inventory
   assert.deepEqual(snapshot.enchants, [{ name: 'sharpness', level: 5 }, { name: 'unbreaking', level: 3 }])
+})
+
+test('uses the server enchantment registry order instead of alphabetic static ids', () => {
+  const events = []
+  const diagnostics = []
+  const bot = new FakeBot()
+  bot.registry = { enchantmentsArray: [{ id: 0, name: 'aqua_affinity' }, { id: 1, name: 'bane_of_arthropods' }] }
+  const manager = new BotManager({ profilesPath: 'profiles', emit: (...event) => events.push(event), diagnose: (entry) => diagnostics.push(entry), createBot: () => bot })
+  manager.connect({ id: 'dynamic-enchants', username: 'user@example.com', host: 'localhost', antiAfk: false, autoReconnect: false })
+  bot._client.emit('registry_data', {
+    id: 'minecraft:enchantment',
+    entries: [{ key: 'minecraft:protection' }, { key: 'minecraft:fire_protection' }, { key: 'minecraft:feather_falling' }]
+  })
+  const item = {
+    slot: 36, name: 'diamond_boots', displayName: 'Diamond Boots', count: 1,
+    enchants: { enchantments: [{ id: 2, level: 4 }] }
+  }
+  bot.inventory.slots[36] = item
+  bot.inventory.items = () => [item]
+  bot.entity = { position: { x: 0, y: 64, z: 0 } }
+  bot.emit('health')
+
+  const telemetry = events.findLast(([type]) => type === 'telemetry')?.[2]
+  assert.deepEqual(telemetry.inventory[0].enchants, [{ name: 'feather_falling', level: 4 }])
+  assert.deepEqual(diagnostics.find((entry) => entry.event === 'enchantment_registry')?.entries, [[0, 'protection'], [1, 'fire_protection'], [2, 'feather_falling']])
+  manager.disconnect('dynamic-enchants')
 })
 
 test('reads stored enchantments when the generic item getter returns an empty list', () => {
