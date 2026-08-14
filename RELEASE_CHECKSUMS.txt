@@ -36,3 +36,7 @@ a890a395a96db88e4cb2cc50a73c60a84ca4a23d54250a9426d878f55f38587f  AFK-Desk-Mobil
 # Desktop 0.7.0
 
 9d7042eab9d441bcc3cbc08424c485ac56459ff69a5c2c7006fa7ed25dd1a76b  AFK-Desk-Setup-0.7.0.exe
+
+# Desktop 0.8.0
+
+d496c9347856ce5261de551033d670c401f2011dc350d24bba64224b9236a030  AFK-Desk-Setup-0.8.0.exe

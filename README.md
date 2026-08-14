@@ -15,22 +15,22 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/legendary-cookie/afk-desk/releases/download/v0.7.0/AFK-Desk-Setup-0.7.0.exe"><strong>Download AFK Desk 0.7.0 for Windows</strong></a>
-  · <a href="https://github.com/legendary-cookie/afk-desk/releases/tag/v0.7.0">Release notes</a>
+  <a href="https://github.com/legendary-cookie/afk-desk/releases/download/v0.8.0/AFK-Desk-Setup-0.8.0.exe"><strong>Download AFK Desk 0.8.0 for Windows</strong></a>
+  · <a href="https://github.com/legendary-cookie/afk-desk/releases/tag/v0.8.0">Release notes</a>
   · <a href="HISTORY.md">Version history</a>
 </p>
 
 AFK Desk supports multiple Microsoft-authenticated accounts, chat and commands, customizable anti-AFK behavior, live player state, inventory actions, proxies, startup connections, and automatic reconnect. It has no subscriptions, analytics, or account-count limits.
 
-## What is new in 0.7.0
+## What is new in 0.8.0
 
-- New AFK Desk branding, Windows icon, and visible installed-version labels.
-- Independently resizable console, controls, and inventory panels with persistent sizes.
-- Responsive panel contents that wrap and compact instead of hiding details or buttons.
-- Safer automatic Minecraft version selection across proxy lobby and backend switches.
-- Browser sharing, Tailscale integration, and the local remote-control server are removed for now.
+- Minecraft-style gear, inventory, hotbar, and server-menu grids with item icons and hover tooltips.
+- Drag-and-drop inventory organization, held-item selection, armor/off-hand equipping, item locks, and protected chest/barrel deposits.
+- Item durability, lore, and correctly resolved enchantment names and levels from the connected server registry.
+- A cleaner scalable dashboard with collapsible panels, persistent resizers, compact menus, and a popup macro editor.
+- Better compact-window behavior so chat and inventory remain usable at reduced sizes.
 
-See the [complete 0.7.0 release notes](https://github.com/legendary-cookie/afk-desk/releases/tag/v0.7.0) for verification details and the installer checksum.
+See the [complete 0.8.0 release notes](https://github.com/legendary-cookie/afk-desk/releases/tag/v0.8.0) for verification details and the installer checksum.
 
 ## Features
 
@@ -47,7 +47,10 @@ See the [complete 0.7.0 release notes](https://github.com/legendary-cookie/afk-d
 - Optional Windows startup and per-account automatic connections with configurable staggering
 - Live health, hunger, coordinates, dimension, water-current, chest, and inventory views
 - Selection and explicit dropping of individual inventory stacks
+- Minecraft-style gear, inventory, and hotbar grids with vanilla item icons, stack counts, durability bars, enchantment glint, and hover tooltips
+- Drag or move stacks between slots, choose the held hotbar item, and equip armor or off-hand gear
 - Optional nearby-chest auto-deposit with traceable chest coordinates
+- Interactive Minecraft-style chest-menu popups for server commands
 - Modern Velocity server-switch compatibility
 - Interface scaling and persistent responsive panel layouts
 
@@ -55,7 +58,7 @@ See the [complete 0.7.0 release notes](https://github.com/legendary-cookie/afk-d
 
 | Platform | Version | Download | Notes |
 | --- | --- | --- | --- |
-| Windows desktop | 0.7.0 | [Installer](https://github.com/legendary-cookie/afk-desk/releases/download/v0.7.0/AFK-Desk-Setup-0.7.0.exe) | Primary Electron + Mineflayer client |
+| Windows desktop | 0.8.0 | [Installer](https://github.com/legendary-cookie/afk-desk/releases/download/v0.8.0/AFK-Desk-Setup-0.8.0.exe) | Primary Electron + Mineflayer client |
 | Android | 0.1.0 | [APK](https://github.com/legendary-cookie/afk-desk/releases/download/v0.4.1/AFK-Desk-Mobile-0.1.0.apk) | Earlier standalone mobile preview |
 | iOS | 0.1.0 source | [Build instructions](mobile/BUILDING.md) | Requires macOS, Xcode, and personal signing |
 
@@ -65,7 +68,7 @@ GitHub provides ZIP and TAR source archives on every [release page](https://gith
 
 | Project | Stack | Current version | Notes |
 | --- | --- | --- | --- |
-| [`desktop/`](desktop/) | Electron + Mineflayer | 0.7.0 | Primary Windows desktop client |
+| [`desktop/`](desktop/) | Electron + Mineflayer | 0.8.0 | Primary Windows desktop client |
 | [`mobile/`](mobile/) | React Native + embedded Node.js | 0.1.0 | Standalone Android preview and iOS Xcode source |
 | [`fabric-movement-diagnostics/`](fabric-movement-diagnostics/) | Fabric | Reference utility | Compares vanilla movement diagnostics without account secrets |
 

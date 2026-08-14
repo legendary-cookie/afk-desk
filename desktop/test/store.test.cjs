@@ -35,24 +35,24 @@ test('SettingsStore persists safe startup connection staggering', (t) => {
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
   const store = new SettingsStore(directory)
 
-  assert.deepEqual(store.get(), { staggerStartupConnections: true, startupConnectionDelay: 3, uiScale: 100, sidePanelWidth: 300, inventoryHeight: 112, macros: [] })
+  assert.deepEqual(store.get(), { staggerStartupConnections: true, startupConnectionDelay: 3, uiScale: 100, sidePanelWidth: 300, inventoryHeight: 220, macros: [] })
   assert.deepEqual(store.save({ staggerStartupConnections: false, startupConnectionDelay: 12 }), {
     staggerStartupConnections: false,
     startupConnectionDelay: 12,
     uiScale: 100,
     sidePanelWidth: 300,
-    inventoryHeight: 112,
+    inventoryHeight: 220,
     macros: []
   })
-  assert.deepEqual(store.get(), { staggerStartupConnections: false, startupConnectionDelay: 12, uiScale: 100, sidePanelWidth: 300, inventoryHeight: 112, macros: [] })
-  assert.deepEqual(normalizeSettings({ startupConnectionDelay: 9999 }), { staggerStartupConnections: true, startupConnectionDelay: 300, uiScale: 100, sidePanelWidth: 300, inventoryHeight: 112, macros: [] })
+  assert.deepEqual(store.get(), { staggerStartupConnections: false, startupConnectionDelay: 12, uiScale: 100, sidePanelWidth: 300, inventoryHeight: 220, macros: [] })
+  assert.deepEqual(normalizeSettings({ startupConnectionDelay: 9999 }), { staggerStartupConnections: true, startupConnectionDelay: 300, uiScale: 100, sidePanelWidth: 300, inventoryHeight: 220, macros: [] })
   assert.equal(startupConnectionDelay({ staggerStartupConnections: true, startupConnectionDelay: 5 }, 2), 10_700)
   assert.equal(startupConnectionDelay({ staggerStartupConnections: false, startupConnectionDelay: 5 }, 2), 700)
 })
 
 test('SettingsStore bounds persistent internal panel sizes', () => {
   const largeSide = normalizeSettings({ sidePanelWidth: 9999, inventoryHeight: 10 })
-  assert.deepEqual({ sidePanelWidth: largeSide.sidePanelWidth, inventoryHeight: largeSide.inventoryHeight }, { sidePanelWidth: 520, inventoryHeight: 84 })
+  assert.deepEqual({ sidePanelWidth: largeSide.sidePanelWidth, inventoryHeight: largeSide.inventoryHeight }, { sidePanelWidth: 520, inventoryHeight: 120 })
   const largeInventory = normalizeSettings({ sidePanelWidth: 120, inventoryHeight: 9999 })
   assert.deepEqual({ sidePanelWidth: largeInventory.sidePanelWidth, inventoryHeight: largeInventory.inventoryHeight }, { sidePanelWidth: 240, inventoryHeight: 360 })
 })

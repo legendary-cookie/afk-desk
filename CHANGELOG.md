@@ -2,6 +2,27 @@
 
 For the complete desktop history from 0.1.0 onward, including source tags, installers, and comparisons, see [HISTORY.md](HISTORY.md).
 
+## Desktop 0.8.0 — 2026-08-15
+
+### Added
+
+- Minecraft-style gear, inventory, hotbar, and interactive server-menu grids with vanilla item icons, stack counts, durability bars, enchantment glint, and detailed hover tooltips.
+- Inventory controls for moving stacks, selecting the held hotbar slot, equipping armor and off-hand gear, and locking items against dropping or automatic deposit.
+- Automatic deposit support for nearby chests, trapped chests, and barrels while preserving locked items.
+- Item lore and enchantment details in both account inventory and server-menu tooltips.
+- Collapsible dashboard sections, overall page scrolling, persistent panel sizing, numeric display scaling, and a popup macro editor.
+
+### Changed
+
+- Simplified the dashboard by consolidating display, console, macro, and movement actions into compact menus and collapsed sections.
+- Prioritized usable chat space and made panel contents adapt more reliably to compact and minimized window layouts.
+
+### Fixed
+
+- Resolved modern numeric enchantment IDs through the connected server registry so enchantment names and levels match the actual item data.
+- Preserved non-level-one enchantment values instead of flattening every tooltip entry to level I.
+- Kept item tooltips above popup menus and kept compact dashboard panels resizable.
+
 ## Desktop 0.7.0 — 2026-08-09
 
 ### Added

@@ -15,7 +15,9 @@ const {
 applyProtocolFixes()
 const mineflayer = require('mineflayer')
 
-const CHEST_NAMES = new Set(['chest', 'trapped_chest'])
+const CHEST_NAMES = new Set(['chest', 'trapped_chest', 'barrel'])
+const ARMOR_SLOT_TYPES = new Map([[5, 'helmet'], [6, 'chestplate'], [7, 'leggings'], [8, 'boots'], [45, 'off-hand']])
+const EQUIPMENT_DESTINATION_SLOTS = new Map([['head', 5], ['torso', 6], ['legs', 7], ['feet', 8], ['off-hand', 45]])
 const WATER_NAMES = new Set(['water', 'flowing_water'])
 const WATERLIKE_NAMES = new Set(['bubble_column', 'seagrass', 'tall_seagrass', 'kelp', 'kelp_plant'])
 const FLOW_DIRECTIONS = [[0, 1], [-1, 0], [0, -1], [1, 0]]
@@ -94,6 +96,7 @@ class BotManager {
       ready: false,
       switching: false,
       depositing: false,
+      inventoryAction: false,
       joinMessageSent: false,
       worldReadyAt: 0,
       nearestChest: null,
@@ -109,6 +112,12 @@ class BotManager {
       versionReported: false,
       versionConfirmed: false
     }
+    bot.__afkDeskEnchantmentsById = new Map()
+    bot._client?.on?.('registry_data', (packet) => {
+      if (String(packet?.id || '').replace(/^minecraft:/, '') !== 'enchantment' || !Array.isArray(packet?.entries)) return
+      bot.__afkDeskEnchantmentsById = new Map(packet.entries.map((entry, id) => [id, String(entry?.key || '').replace(/^minecraft:/, '')]).filter(([, name]) => name))
+      this.diagnose({ event: 'enchantment_registry', accountId: account.id, version: bot.version || account.version || 'auto', entries: [...bot.__afkDeskEnchantmentsById.entries()] })
+    })
     bot.__afkDeskPacketDiagnostic = (entry) => this.diagnose({ ...entry, accountId: account.id, version: bot.version || account.version || 'auto' })
     bot._client?.on?.('packet', (_data, meta) => {
       if (CONFIGURATION_PACKET_NAMES.has(meta?.name)) {
@@ -236,6 +245,15 @@ class BotManager {
       if (session.account.environmentalMovement !== false) inspectFluidCurrent(bot, session.fluidMotion)
     })
     bot.inventory?.on?.('updateSlot', emitTelemetry)
+    bot.on('windowOpen', (window) => {
+      if (session.depositing) return
+      const emitWindow = () => this.emit('window', account.id, buildWindowSnapshot(window, bot.registry, bot.__afkDeskEnchantmentsById))
+      emitWindow()
+      window?.on?.('updateSlot', emitWindow)
+    })
+    bot.on('windowClose', () => {
+      if (!session.depositing) this.emit('window', account.id, { open: false })
+    })
     bot.on('spawn', markReady)
     bot.on('forcedMove', () => {
       const wasReady = session.ready
@@ -402,13 +420,77 @@ class BotManager {
   }
 
   async dropStack(id, slot) {
+    return this.withInventoryAction(id, async (bot, session) => {
+      const safeSlot = playerInventorySlot(slot)
+      if (lockedSlotSet(session.account).has(safeSlot)) throw new Error('That inventory stack is locked. Unlock it before dropping it.')
+      const item = bot.inventory?.slots?.[safeSlot] || bot.inventory?.items?.().find((entry) => entry.slot === safeSlot)
+      if (!item) throw new Error('That inventory stack is no longer available.')
+      await bot.tossStack(item)
+      this.emit('log', id, { kind: 'sent', message: `Dropped ${item.count} × ${item.displayName || item.name}`, at: Date.now() })
+    })
+  }
+
+  async moveInventorySlot(id, sourceSlot, destinationSlot) {
+    return this.withInventoryAction(id, async (bot) => {
+      const source = playerInventorySlot(sourceSlot)
+      const destination = playerInventorySlot(destinationSlot)
+      if (source === destination) throw new Error('Choose a different destination slot.')
+      if (!bot.inventory?.slots?.[source]) throw new Error('The source inventory slot is empty.')
+      await bot.moveSlotItem(source, destination)
+      return { sourceSlot: source, targetSlot: destination }
+    })
+  }
+
+  async equipInventoryItem(id, slot, requestedDestination) {
+    return this.withInventoryAction(id, async (bot) => {
+      const sourceSlot = playerInventorySlot(slot)
+      const item = bot.inventory?.slots?.[sourceSlot]
+      if (!item) throw new Error('That inventory stack is no longer available.')
+      const destination = resolveEquipmentDestination(item, requestedDestination)
+      if (destination === 'hand' && sourceSlot >= 36 && sourceSlot <= 44) bot.setQuickBarSlot(sourceSlot - 36)
+      else await bot.equip(item, destination)
+      const targetSlot = destination === 'hand'
+        ? 36 + Math.max(0, Math.min(Number(bot.quickBarSlot) || 0, 8))
+        : EQUIPMENT_DESTINATION_SLOTS.get(destination)
+      return { sourceSlot, targetSlot, destination }
+    })
+  }
+
+  async withInventoryAction(id, action) {
+    const session = this.sessions.get(id)
     const bot = this.requireOnline(id)
-    const safeSlot = Math.max(0, Math.min(Number(slot) || 0, 255))
-    const item = bot.inventory?.slots?.[safeSlot] || bot.inventory?.items?.().find((entry) => entry.slot === safeSlot)
-    if (!item) throw new Error('That inventory stack is no longer available.')
-    await bot.tossStack(item)
-    this.emit('log', id, { kind: 'sent', message: `Dropped ${item.count} × ${item.displayName || item.name}`, at: Date.now() })
+    if (bot.currentWindow) throw new Error('Close the server menu before managing player inventory.')
+    if (session.depositing || session.inventoryAction) throw new Error('Another inventory action is still running.')
+    session.inventoryAction = true
+    try { return await action(bot, session) }
+    finally {
+      session.inventoryAction = false
+      this.emitTelemetry(id)
+    }
+  }
+
+  setItemLocks(id, slots) {
+    const session = this.sessions.get(id)
+    if (!session) return
+    session.account.lockedInventorySlots = normalizeLockedSlots(slots)
     this.emitTelemetry(id)
+  }
+
+  async clickWindowSlot(id, slot) {
+    const bot = this.requireOnline(id)
+    const window = bot.currentWindow
+    if (!window) throw new Error('The server menu is no longer open.')
+    const requestedSlot = Number(slot)
+    if (!Number.isInteger(requestedSlot) || requestedSlot < 0 || requestedSlot > 255) throw new Error('Invalid server-menu slot.')
+    const safeSlot = requestedSlot
+    const inventoryStart = Math.max(0, Number(window.inventoryStart) || window.slots?.length || 0)
+    if (safeSlot >= inventoryStart) throw new Error('Only server-menu slots can be clicked here.')
+    await bot.clickWindow(safeSlot, 0, 0)
+  }
+
+  closeWindow(id) {
+    const bot = this.requireOnline(id)
+    if (bot.currentWindow) bot.closeWindow(bot.currentWindow)
   }
 
   async setAutoDeposit(id, enabled) {
@@ -421,24 +503,25 @@ class BotManager {
 
   async refreshChest(id) {
     const session = this.sessions.get(id)
-    if (!session?.bot?.entity || session.depositing) return
+    if (!session?.bot?.entity || session.depositing || session.inventoryAction || session.bot.currentWindow) return
     const block = findNearestChest(session.bot)
     session.nearestChest = block ? chestLocation(session.bot, block) : null
     this.emitTelemetry(id)
     if (!session.account.autoDepositToChest || !block) return
-    const items = session.bot.inventory?.items?.() || []
+    const lockedSlots = lockedSlotSet(session.account)
+    const items = (session.bot.inventory?.items?.() || []).filter((item) => !lockedSlots.has(Number(item.slot)))
     if (!items.length) return
     session.depositing = true
     let chest
     try {
-      chest = await session.bot.openChest(block)
+      chest = await (session.bot.openContainer || session.bot.openChest).call(session.bot, block)
       let deposited = 0
       for (const item of items) {
         await chest.deposit(item.type, item.metadata ?? null, item.count, item.nbt)
         deposited += item.count
       }
       const { x, y, z } = session.nearestChest
-      this.emit('log', id, { kind: 'sent', message: `Deposited ${deposited} items into chest at ${x}, ${y}, ${z}.`, at: Date.now() })
+      this.emit('log', id, { kind: 'sent', message: `Deposited ${deposited} items into ${containerLabel(block)} at ${x}, ${y}, ${z}.`, at: Date.now() })
     } catch (error) {
       this.emit('log', id, { kind: 'error', message: `Auto-deposit failed: ${String(error?.message || error).slice(0, 160)}`, at: Date.now() })
     } finally {
@@ -856,6 +939,7 @@ function chestLocation(bot, block) {
   const deltaY = Number(position.y) - Number(player.y)
   const deltaZ = Number(position.z) - Number(player.z)
   return {
+    type: String(block?.name || 'chest'),
     x: Math.round(Number(position.x)),
     y: Math.round(Number(position.y)),
     z: Math.round(Number(position.z)),
@@ -1079,11 +1163,19 @@ function waterDepth(block) {
 function buildTelemetry(bot, nearestChest = null, environmentalMovement, fluidMotion = null) {
   const position = bot?.entity?.position
   const finite = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback
-  const inventory = (bot?.inventory?.items?.() || []).slice(0, 46).map((item) => ({
+  const bySlot = new Map((bot?.inventory?.items?.() || []).map((item) => [Number(item.slot), item]))
+  for (const slot of ARMOR_SLOT_TYPES.keys()) {
+    const item = bot?.inventory?.slots?.[slot]
+    if (item) bySlot.set(slot, item)
+  }
+  const inventory = [...bySlot.values()].sort((a, b) => Number(a.slot) - Number(b.slot)).slice(0, 46).map((item) => ({
     slot: Math.max(0, Math.min(Number(item.slot) || 0, 255)),
+    slotType: ARMOR_SLOT_TYPES.get(Number(item.slot)) || 'inventory',
     name: String(item.name || '').slice(0, 80),
     displayName: String(item.displayName || item.name || 'Unknown item').slice(0, 100),
-    count: Math.max(1, Math.min(Number(item.count) || 1, 127))
+    count: Math.max(1, Math.min(Number(item.count) || 1, 127)),
+    ...itemDurability(item),
+    ...itemTooltipDetails(item, bot?.registry, bot?.__afkDeskEnchantmentsById)
   }))
   const environment = environmentalMovement === undefined ? undefined : {
     enabled: environmentalMovement !== false,
@@ -1109,9 +1201,181 @@ function buildTelemetry(bot, nearestChest = null, environmentalMovement, fluidMo
     dimension: String(bot?.game?.dimension || 'unknown').slice(0, 80),
     nearestChest,
     inventory,
+    selectedHotbarSlot: Math.max(0, Math.min(Number(bot?.quickBarSlot) || 0, 8)),
     ...(environment ? { environment } : {}),
     at: Date.now()
   }
 }
 
-module.exports = { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, normalizeSkinUrl, findNearestChest, buildTelemetry, describeNetworkError, reconnectDelaySeconds, normalizeAntiAfkSettings, inspectFluidCurrent, recordFluidCorrection, installMovementPacketCompatibility, installModernPlayerInputCompatibility }
+const NAMED_CHAT_COLORS = {
+  black: '#000000', dark_blue: '#0000aa', dark_green: '#00aa00', dark_aqua: '#00aaaa', dark_red: '#aa0000',
+  dark_purple: '#aa00aa', gold: '#ffaa00', gray: '#aaaaaa', dark_gray: '#555555', blue: '#5555ff',
+  green: '#55ff55', aqua: '#55ffff', red: '#ff5555', light_purple: '#ff55ff', yellow: '#ffff55', white: '#ffffff'
+}
+
+function itemDurability(item) {
+  const maximum = Number(item?.maxDurability)
+  if (!Number.isFinite(maximum) || maximum <= 0) return {}
+  const used = Math.max(0, Math.min(Number(item?.durabilityUsed) || 0, maximum))
+  const remaining = Math.round(maximum - used)
+  return { durability: { remaining, maximum: Math.round(maximum), percent: Math.round((remaining / maximum) * 100) } }
+}
+
+function itemTooltipDetails(item, registry, enchantmentsById) {
+  let customName = ''
+  let lore = []
+  let loreSegments = []
+  let enchants = []
+  try {
+    const rawName = safeItemProperty(item, 'customName') ?? item?.componentMap?.get?.('custom_name')?.data ?? item?.components?.find?.((component) => component?.type === 'custom_name')?.data
+    customName = String(extractText(rawName) || '').slice(0, 160)
+  } catch {}
+  try {
+    const rawLore = safeItemProperty(item, 'customLore') ?? item?.componentMap?.get?.('lore')?.data ?? item?.components?.find?.((component) => component?.type === 'lore')?.data
+    const loreValue = rawLore?.lines ?? rawLore
+    const source = Array.isArray(loreValue) ? loreValue : loreValue ? [loreValue] : []
+    const details = source.map(loreLineDetails).filter((line) => line.text).slice(0, 20)
+    lore = details.map((line) => line.text)
+    loreSegments = details.map((line) => line.segments)
+  } catch {}
+  try {
+    const candidates = [
+      safeItemProperty(item, 'enchants'),
+      item?.componentMap?.get?.('enchantments')?.data,
+      item?.componentMap?.get?.('stored_enchantments')?.data,
+      item?.components?.find?.((component) => component?.type === 'enchantments')?.data,
+      item?.components?.find?.((component) => component?.type === 'stored_enchantments')?.data
+    ]
+    for (const candidate of candidates) {
+      enchants = normalizeEnchantments(candidate, registry, enchantmentsById)
+      if (enchants.length) break
+    }
+  } catch {}
+  return { ...(customName ? { customName } : {}), ...(lore.length ? { lore, loreSegments } : {}), ...(enchants.length ? { enchants } : {}) }
+}
+
+function normalizeEnchantments(raw, registry, enchantmentsById) {
+  if (raw == null) return []
+  const container = Array.isArray(raw) || raw instanceof Map
+    ? raw
+    : raw?.enchantments ?? raw?.levels ?? (Array.isArray(raw?.entries) ? raw.entries : raw)
+  let list
+  if (container instanceof Map) list = [...container.entries()].map(([name, level]) => ({ name, level }))
+  else if (Array.isArray(container)) {
+    list = container.map((entry) => Array.isArray(entry) && entry.length >= 2 ? { name: entry[0], level: entry[1] } : entry)
+  } else if (container && typeof container === 'object') {
+    list = Object.entries(container).map(([name, level]) => ({ name, level }))
+  } else return []
+
+  return list.map((enchant) => {
+    const rawId = unwrapComponentValue(enchant?.name ?? enchant?.id ?? enchant?.key ?? enchant?.enchantment)
+    const numericId = typeof rawId === 'number' || /^\d+$/.test(String(rawId || '')) ? Number(rawId) : null
+    const dynamicName = numericId == null ? null : enchantmentsById?.get?.(numericId)
+    const staticEntry = numericId == null || enchantmentsById?.size ? null : registry?.enchantmentsArray?.find?.((entry) => Number(entry?.id) === numericId)
+    const name = String(dynamicName ?? staticEntry?.name ?? (numericId == null ? rawId : `enchantment_${numericId}`) ?? '').replace(/^minecraft:/, '').slice(0, 80)
+    const rawLevel = unwrapComponentValue(enchant?.lvl ?? enchant?.level ?? enchant?.value)
+    const numericLevel = Number(rawLevel)
+    return { name, level: Math.max(1, Math.min(Number.isFinite(numericLevel) ? numericLevel : 1, 255)) }
+  }).filter((enchant) => enchant.name).slice(0, 20)
+}
+
+function unwrapComponentValue(value, depth = 0) {
+  if (depth > 6 || value == null) return value
+  if (typeof value === 'bigint') return Number(value)
+  if (typeof value !== 'object') return value
+  for (const key of ['value', 'data', 'level', 'lvl', 'id', 'name']) {
+    if (value[key] !== undefined && value[key] !== value) return unwrapComponentValue(value[key], depth + 1)
+  }
+  return value
+}
+
+function safeItemProperty(item, key) {
+  try { return item?.[key] } catch { return undefined }
+}
+
+function loreLineDetails(value) {
+  const parsed = parseComponentValue(value)
+  const text = String(extractText(parsed) || extractText(value) || '').replaceAll('\r', '').slice(0, 400)
+  const segments = componentTextSegments(parsed).filter((segment) => segment.text).slice(0, 64)
+  return { text, segments: segments.length ? segments : [{ text }] }
+}
+
+function parseComponentValue(value) {
+  if (typeof value !== 'string') return value
+  try { return JSON.parse(value) } catch { return value }
+}
+
+function componentTextSegments(value, inherited = {}) {
+  if (typeof value === 'string') return parseMinecraftFormatting(value).map((segment) => ({ ...inherited, ...segment }))
+  if (Array.isArray(value)) return value.flatMap((part) => componentTextSegments(part, inherited))
+  if (!value || typeof value !== 'object') return []
+  if (value.type === 'string') return componentTextSegments(value.value, inherited)
+  const source = value.type === 'compound' && value.value ? value.value : value
+  const style = { ...inherited }
+  const color = componentScalar(source.color)
+  if (/^#[0-9a-f]{6}$/i.test(color)) style.color = color.toLowerCase()
+  else if (NAMED_CHAT_COLORS[color]) style.color = NAMED_CHAT_COLORS[color]
+  for (const key of ['bold', 'italic', 'underlined', 'strikethrough']) {
+    const setting = componentScalar(source[key])
+    if (typeof setting === 'boolean') style[key] = setting
+  }
+  const segments = []
+  const text = componentScalar(source.text)
+  if (typeof text === 'string' && text) segments.push(...componentTextSegments(text, style))
+  const extra = source.extra?.value?.value || source.extra?.value || source.extra
+  if (Array.isArray(extra)) segments.push(...extra.flatMap((part) => componentTextSegments(part, style)))
+  return segments
+}
+
+function componentScalar(value) {
+  if (value && typeof value === 'object' && 'value' in value) return value.value
+  return value
+}
+
+function playerInventorySlot(value) {
+  const slot = Number(value)
+  if (!Number.isInteger(slot) || slot < 5 || slot > 45) throw new Error('Invalid player inventory slot.')
+  return slot
+}
+
+function resolveEquipmentDestination(item, requested) {
+  const allowed = new Set(['auto', 'hand', ...EQUIPMENT_DESTINATION_SLOTS.keys()])
+  const destination = String(requested || 'auto')
+  if (!allowed.has(destination)) throw new Error('Invalid equipment destination.')
+  if (destination !== 'auto') return destination
+  const name = String(item?.name || '')
+  if (name.endsWith('_helmet') || name.endsWith('_skull') || ['player_head', 'carved_pumpkin'].includes(name)) return 'head'
+  if (name.endsWith('_chestplate') || name === 'elytra') return 'torso'
+  if (name.endsWith('_leggings')) return 'legs'
+  if (name.endsWith('_boots')) return 'feet'
+  throw new Error('Choose an equipment destination for this item.')
+}
+
+function normalizeLockedSlots(slots) {
+  return [...new Set((Array.isArray(slots) ? slots : []).map(Number).filter((slot) => Number.isInteger(slot) && slot >= 0 && slot <= 255))].sort((a, b) => a - b).slice(0, 46)
+}
+
+function lockedSlotSet(account) {
+  return new Set(normalizeLockedSlots(account?.lockedInventorySlots))
+}
+
+function containerLabel(block) {
+  if (block?.name === 'barrel') return 'barrel'
+  if (block?.name === 'trapped_chest') return 'trapped chest'
+  return 'chest'
+}
+
+function buildWindowSnapshot(window, registry, enchantmentsById) {
+  const limit = Math.max(0, Math.min(Number(window?.inventoryStart) || window?.slots?.length || 0, 256))
+  const slots = (window?.slots || []).slice(0, limit).map((item, slot) => item ? {
+    slot,
+    name: String(item.name || '').slice(0, 80),
+    displayName: String(item.displayName || item.name || 'Unknown item').slice(0, 100),
+    count: Math.max(1, Math.min(Number(item.count) || 1, 127)),
+    ...itemDurability(item),
+    ...itemTooltipDetails(item, registry, enchantmentsById)
+  } : null).filter(Boolean)
+  return { open: true, title: String(extractText(window?.title) || 'Server menu').slice(0, 100), size: limit, slots }
+}
+
+module.exports = { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, normalizeSkinUrl, findNearestChest, buildTelemetry, buildWindowSnapshot, normalizeLockedSlots, describeNetworkError, reconnectDelaySeconds, normalizeAntiAfkSettings, inspectFluidCurrent, recordFluidCorrection, installMovementPacketCompatibility, installModernPlayerInputCompatibility }

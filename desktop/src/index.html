@@ -12,10 +12,11 @@
       <aside class="sidebar" aria-label="Accounts">
         <header class="brand">
           <img class="brand-mark" src="../assets/afk-desk-icon.png" alt="" />
-          <div>
+          <div class="brand-copy">
             <strong>AFK Desk</strong>
             <span>Local Minecraft client</span>
           </div>
+          <button id="toggle-sidebar" class="icon-button sidebar-toggle" type="button" aria-expanded="true" title="Collapse accounts sidebar">‹</button>
         </header>
 
         <div class="sidebar-heading">
@@ -49,6 +50,15 @@
               <h1 id="account-title">Account</h1>
             </div>
             <div class="topbar-actions">
+              <button id="display-menu-trigger" class="button secondary menu-trigger display-menu-trigger" type="button" popovertarget="display-menu">Display <span id="quick-scale-value">100%</span></button>
+              <div id="display-menu" class="action-popover display-popover" popover>
+                <label for="quick-scale"><strong>Interface scale</strong><span>Fit more or make everything larger.</span></label>
+                <div class="display-scale-controls">
+                  <input id="quick-scale" type="range" min="75" max="125" step="5" value="100" />
+                  <label class="scale-number-field"><input id="quick-scale-number" type="number" min="75" max="125" step="1" value="100" aria-label="Interface scale percentage" /><span>%</span></label>
+                </div>
+                <button id="reset-scale" class="menu-action" type="button">Reset to 100%</button>
+              </div>
               <button id="edit-account" class="button secondary" type="button">Edit</button>
               <button id="connection-button" class="button primary" type="button">Connect</button>
             </div>
@@ -60,13 +70,16 @@
           </div>
 
           <div class="workspace-grid">
-            <section class="panel console-panel" aria-labelledby="console-title">
+            <section id="console-panel" class="panel console-panel collapsible" aria-labelledby="console-title">
               <header class="panel-header">
                 <div>
                   <h2 id="console-title">Console</h2>
                   <p id="server-address">server.example.com</p>
                 </div>
-                <button id="clear-console" class="text-button" type="button">Clear</button>
+                <div class="panel-header-actions">
+                  <button id="console-menu-trigger" class="menu-trigger icon-menu-trigger" type="button" popovertarget="console-menu" aria-label="Console actions">⋯</button>
+                  <button class="section-toggle" type="button" data-collapse-target="console-panel" aria-expanded="true" title="Collapse console" aria-label="Collapse console">⌃</button>
+                </div>
               </header>
               <div id="console-log" class="console-log" role="log" aria-live="polite" aria-label="Server messages">
                 <div class="console-placeholder">Server messages will appear here after you connect.</div>
@@ -76,27 +89,18 @@
                 <input id="chat-message" autocomplete="off" placeholder="Message or /command" disabled />
                 <button class="send-button" type="submit" disabled aria-label="Send message">Send</button>
               </form>
-              <section class="macro-section" aria-labelledby="macro-title">
+              <section id="macro-section" class="macro-section collapsible" aria-labelledby="macro-title">
                 <header class="macro-header">
                   <div><h3 id="macro-title">Macro pad</h3><span>Click to send saved text or commands</span></div>
-                  <button id="manage-macros" class="text-button" type="button" aria-expanded="false" aria-controls="macro-editor">Edit</button>
+                  <div class="panel-header-actions"><button id="macro-menu-trigger" class="menu-trigger icon-menu-trigger" type="button" popovertarget="macro-menu" aria-label="Macro actions">⋯</button><button class="section-toggle" type="button" data-collapse-target="macro-section" aria-expanded="true" title="Collapse macro pad" aria-label="Collapse macro pad">⌃</button></div>
                 </header>
                 <div id="macro-pad" class="macro-pad" role="group" aria-label="Saved chat macros"></div>
-                <div id="macro-editor" class="macro-editor" hidden>
-                  <div id="macro-rows" class="macro-rows"></div>
-                  <div class="macro-editor-actions">
-                    <button id="add-macro" class="button secondary" type="button">Add macro</button>
-                    <span class="footer-spacer"></span>
-                    <button id="cancel-macros" class="button secondary" type="button">Cancel</button>
-                    <button id="save-macros" class="button primary" type="button">Save macros</button>
-                  </div>
-                </div>
               </section>
             </section>
             <div id="column-resizer" class="layout-resizer column-resizer" role="separator" aria-orientation="vertical" tabindex="0" aria-label="Resize console and controls" aria-valuetext="Controls 300 pixels wide"></div>
             <aside class="controls-column">
-              <section class="panel details-panel" aria-labelledby="details-title">
-                <header class="panel-header"><h2 id="details-title">Connection</h2></header>
+              <section id="details-panel" class="panel details-panel collapsible" aria-labelledby="details-title">
+                <header class="panel-header"><h2 id="details-title">Connection</h2><button class="section-toggle" type="button" data-collapse-target="details-panel" aria-expanded="true" title="Collapse connection details" aria-label="Collapse connection details">⌃</button></header>
                 <dl class="details-list">
                   <div><dt>Account</dt><dd id="detail-username">—</dd></div>
                   <div><dt>Server</dt><dd id="detail-server">—</dd></div>
@@ -107,14 +111,15 @@
                   <div><dt>HP</dt><dd id="detail-health">—</dd></div>
                   <div><dt>Hunger</dt><dd id="detail-hunger">—</dd></div>
                   <div><dt>Coordinates</dt><dd id="detail-coordinates">—</dd></div>
-                  <div><dt>Closest chest</dt><dd id="detail-chest">Not found</dd></div>
+                  <div><dt>Closest container</dt><dd id="detail-chest">Not found</dd></div>
                   <div><dt>Dimension</dt><dd id="detail-dimension">—</dd></div>
                 </dl>
               </section>
 
-              <section class="panel movement-panel" aria-labelledby="movement-title">
+              <section id="movement-panel" class="panel movement-panel collapsible collapsed" aria-labelledby="movement-title">
                 <header class="panel-header">
                   <div><h2 id="movement-title">Movement</h2><p>Quick taps while online</p></div>
+                  <button class="section-toggle" type="button" data-collapse-target="movement-panel" aria-expanded="false" title="Expand movement controls" aria-label="Expand movement controls">⌄</button>
                 </header>
                 <div class="movement-grid" aria-label="Movement controls">
                   <button data-control="forward" class="move-button forward" disabled aria-label="Move forward">W</button>
@@ -133,16 +138,31 @@
           <div id="inventory-resizer" class="layout-resizer inventory-resizer" role="separator" aria-orientation="horizontal" tabindex="0" aria-label="Resize inventory" aria-valuetext="Inventory 112 pixels high"></div>
           <section class="panel inventory-panel" aria-labelledby="inventory-title">
             <header class="panel-header inventory-header">
-              <div><h2 id="inventory-title">Inventory</h2><p id="inventory-count">Connect to view items</p></div>
+              <div class="inventory-heading"><h2 id="inventory-title">Inventory</h2><p id="inventory-count">Connect to view items</p></div>
               <div class="inventory-toolbar">
-                <label class="compact-toggle"><input id="auto-deposit-toggle" type="checkbox" /><span>Auto-deposit to closest chest</span></label>
-                <button id="drop-selected" class="button danger" type="button" disabled>Drop selected stack</button>
+                <button id="toggle-inventory" class="button secondary" type="button" aria-expanded="true" title="Collapse inventory and give chat more room">Collapse</button>
+                <label class="compact-toggle" title="Deposit unlocked items into the closest chest or barrel"><input id="auto-deposit-toggle" type="checkbox" /><span>Auto-deposit</span></label>
+                <button id="hold-selected" class="button secondary" type="button" disabled>Hold</button>
+                <select id="equip-destination" class="compact-select" aria-label="Equipment destination">
+                  <option value="auto">Auto gear slot</option><option value="head">Head</option><option value="torso">Chest</option><option value="legs">Legs</option><option value="feet">Feet</option><option value="off-hand">Off-hand</option>
+                </select>
+                <button id="equip-selected" class="button secondary" type="button" disabled>Equip</button>
+                <button id="lock-selected" class="button secondary" type="button" disabled>Lock</button>
+                <button id="drop-selected" class="button danger" type="button" disabled>Drop</button>
               </div>
             </header>
             <div id="inventory-grid" class="inventory-grid"><div class="inventory-empty">Inventory will appear while this account is online.</div></div>
           </section>
         </section>
       </main>
+    </div>
+
+    <div id="console-menu" class="action-popover compact-popover" popover>
+      <button id="clear-console" class="menu-action" type="button">Clear chat</button>
+    </div>
+
+    <div id="macro-menu" class="action-popover compact-popover" popover>
+      <button id="manage-macros" class="menu-action" type="button">Edit macros</button>
     </div>
 
     <dialog id="account-dialog" aria-labelledby="dialog-title">
@@ -212,7 +232,7 @@
           <label class="toggle-row full">
             <input id="auto-deposit-setting" type="checkbox" />
             <span class="toggle" aria-hidden="true"></span>
-            <span><strong>Auto-deposit inventory</strong><small>Off by default. While connected, moves all inventory stacks into the closest chest within five blocks and records its coordinates.</small></span>
+            <span><strong>Auto-deposit inventory</strong><small>Off by default. Moves unlocked inventory stacks into the closest chest, trapped chest, or barrel within five blocks and records its coordinates.</small></span>
           </label>
           <div class="form-section full">
             <h3>Automatic messages</h3>
@@ -273,7 +293,38 @@
       </div>
     </dialog>
 
+    <dialog id="macro-dialog" class="wide-dialog" aria-labelledby="macro-dialog-title">
+      <div class="macro-dialog-content">
+        <header class="dialog-header">
+          <div><div class="eyebrow">Chat shortcuts</div><h2 id="macro-dialog-title">Edit macros</h2></div>
+          <button id="close-macro-dialog" class="icon-button" type="button" aria-label="Close macro editor">×</button>
+        </header>
+        <div id="macro-editor" class="macro-editor">
+          <div id="macro-rows" class="macro-rows"></div>
+        </div>
+        <footer class="dialog-footer">
+          <button id="add-macro" class="button secondary" type="button">Add macro</button>
+          <span class="footer-spacer"></span>
+          <button id="cancel-macros" class="button secondary" type="button">Cancel</button>
+          <button id="save-macros" class="button primary" type="button">Save macros</button>
+        </footer>
+      </div>
+    </dialog>
+
+    <dialog id="server-window-dialog" aria-labelledby="server-window-title">
+      <div class="server-window-content">
+        <header class="dialog-header">
+          <div><div class="eyebrow">Server menu</div><h2 id="server-window-title">Server menu</h2></div>
+          <button id="close-server-window" class="icon-button" type="button" aria-label="Close server menu">×</button>
+        </header>
+        <div id="server-window-grid" class="server-window-grid"></div>
+        <p class="server-window-help">Select an item to left-click that slot. The server controls what each item does.</p>
+      </div>
+    </dialog>
+
+    <div id="item-tooltip" class="minecraft-tooltip" role="tooltip" hidden></div>
     <div id="toast-region" class="toast-region" aria-live="polite"></div>
+    <script src="../assets/minecraft-items.js"></script>
     <script src="renderer.js"></script>
   </body>
 </html>

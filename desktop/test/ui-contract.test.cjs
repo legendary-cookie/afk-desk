@@ -9,7 +9,8 @@ test('desktop UI exposes cancellable account setup, settings, proxy, startup, an
   for (const id of [
     'open-settings', 'start-with-windows', 'connect-on-startup', 'proxy-enabled', 'proxy-type',
     'proxy-host', 'proxy-port', 'proxy-username', 'proxy-password', 'detail-health', 'detail-environment', 'detail-water',
-    'detail-coordinates', 'detail-chest', 'inventory-grid', 'drop-selected', 'auto-deposit-toggle', 'auto-deposit-setting',
+    'detail-coordinates', 'detail-chest', 'inventory-grid', 'hold-selected', 'equip-destination', 'equip-selected', 'lock-selected', 'drop-selected', 'auto-deposit-toggle', 'auto-deposit-setting',
+    'server-window-dialog', 'server-window-title', 'server-window-grid', 'close-server-window',
     'anti-afk-min-delay', 'anti-afk-max-delay', 'anti-afk-duration', 'anti-afk-look-degrees',
     'anti-afk-walk-distance', 'anti-afk-jump', 'anti-afk-look', 'anti-afk-sneak', 'anti-afk-swing',
     'anti-afk-walk', 'environmental-movement', 'stagger-startup-connections', 'startup-connection-delay'
@@ -17,14 +18,28 @@ test('desktop UI exposes cancellable account setup, settings, proxy, startup, an
   assert.match(html, /id="proxy-password" type="password"/)
   assert.match(html, /id="message-delay"[^>]*value="6"/)
   assert.match(html, /id="anti-afk-duration"[^>]*step="0\.05"[^>]*value="0\.25"/)
+  assert.match(html, /minecraft-items\.js/)
 })
 
-test('desktop dashboard stays viewport-bound and scrolls only bounded regions', () => {
+test('desktop body stays bound while the dashboard and dense regions scroll independently', () => {
   const css = fs.readFileSync(path.join(__dirname, '..', 'src', 'styles.css'), 'utf8')
   assert.match(css, /body\s*\{[^}]*height:\s*100vh;[^}]*overflow:\s*hidden;/s)
-  assert.match(css, /\.dashboard\s*\{[^}]*grid-template-rows:[^;}]*minmax\(0,\s*1fr\)[^;}]*;[^}]*height:\s*100%;/s)
+  assert.match(css, /\.dashboard\s*\{[^}]*grid-template-rows:[^;}]*minmax\(0,\s*1fr\)[^;}]*;[^}]*min-height:\s*680px;[^}]*height:\s*max\(100%,\s*680px\);/s)
+  assert.match(css, /\.main-content\s*\{[^}]*height:\s*100vh;[^}]*overflow:\s*auto;/s)
   assert.match(css, /\.console-panel\s*\{[^}]*height:\s*100%;[^}]*min-height:\s*0;/s)
   assert.match(css, /\.console-log\s*\{[^}]*min-height:\s*0;[^}]*overflow-y:\s*auto;/s)
+})
+
+test('inventory and server menus use a Minecraft-style icon grid and hover tooltip', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', 'src', 'styles.css'), 'utf8')
+  const script = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer.js'), 'utf8')
+  assert.match(css, /\.minecraft-slot-grid\s*\{[^}]*repeat\(9,\s*40px\)/s)
+  assert.match(css, /\.minecraft-item-icon\s*\{[^}]*minecraft-items\.png/s)
+  assert.match(css, /\.minecraft-tooltip\s*\{[^}]*position:\s*fixed/s)
+  assert.match(script, /createInventorySection\('Inventory'/)
+  assert.match(script, /createInventorySection\('Hotbar'/)
+  assert.match(script, /item\.enchants/)
+  assert.match(script, /item\.lore/)
 })
 
 test('chat, controls, and inventory expose independent persistent splitters', () => {
@@ -34,7 +49,10 @@ test('chat, controls, and inventory expose independent persistent splitters', ()
   assert.match(html, /id="column-resizer"[^>]*role="separator"[^>]*aria-orientation="vertical"[^>]*tabindex="0"/)
   assert.match(html, /id="inventory-resizer"[^>]*role="separator"[^>]*aria-orientation="horizontal"[^>]*tabindex="0"/)
   assert.match(css, /--side-panel-width:\s*300px/)
-  assert.match(css, /--inventory-height:\s*112px/)
+  assert.match(css, /--inventory-height:\s*220px/)
+  assert.match(html, /id="toggle-inventory"/)
+  assert.doesNotMatch(html, /id="focus-chat"/)
+  assert.match(script, /function toggleInventory/)
   assert.match(css, /\.column-resizer\s*\{[^}]*cursor:\s*col-resize;/s)
   assert.match(css, /\.inventory-resizer\s*\{[^}]*cursor:\s*row-resize;/s)
   assert.match(script, /function bindPanelResizers/)
@@ -86,13 +104,39 @@ test('chat exposes history navigation, editable macros, and interface scaling', 
   const html = fs.readFileSync(path.join(__dirname, '..', 'src', 'index.html'), 'utf8')
   const script = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer.js'), 'utf8')
   const preload = fs.readFileSync(path.join(__dirname, '..', 'electron', 'preload.cjs'), 'utf8')
-  for (const id of ['macro-pad', 'manage-macros', 'macro-editor', 'macro-rows', 'add-macro', 'save-macros', 'ui-scale']) {
+  for (const id of ['macro-pad', 'macro-menu-trigger', 'manage-macros', 'macro-dialog', 'macro-editor', 'macro-rows', 'add-macro', 'save-macros', 'ui-scale']) {
     assert.match(html, new RegExp(`id="${id}"`))
   }
   assert.match(script, /ArrowUp.*ArrowDown/)
   assert.match(script, /function renderMacroPad/)
   assert.match(script, /function saveMacros/)
   assert.match(preload, /setUiScale:.*setZoomFactor/)
+})
+
+test('dashboard exposes quick scaling, whole-page scrolling, and collapsible regions', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'src', 'index.html'), 'utf8')
+  const css = fs.readFileSync(path.join(__dirname, '..', 'src', 'styles.css'), 'utf8')
+  const script = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer.js'), 'utf8')
+  assert.match(html, /id="display-menu-trigger"[^>]*popovertarget="display-menu"/)
+  assert.match(html, /id="quick-scale"[^>]*type="range"/)
+  assert.match(html, /id="quick-scale-number"[^>]*type="number"/)
+  assert.match(html, /id="reset-scale"/)
+  assert.match(html, /id="console-menu-trigger"[^>]*popovertarget="console-menu"/)
+  assert.match(html, /id="clear-console"/)
+  assert.match(html, /id="toggle-sidebar"/)
+  assert.match(html, /data-collapse-target="console-panel"/)
+  assert.match(html, /data-collapse-target="details-panel"/)
+  assert.match(html, /id="movement-panel"[^>]*class="[^"]*collapsed[^"]*"/)
+  assert.match(html, /data-collapse-target="movement-panel"[^>]*aria-expanded="false"/)
+  assert.match(html, /data-collapse-target="macro-section"/)
+  assert.match(css, /\.main-content\s*\{[^}]*overflow:\s*auto/s)
+  assert.match(css, /\.collapsible\.collapsed/)
+  assert.match(script, /function previewQuickScale/)
+  assert.match(script, /function saveQuickScale/)
+  assert.match(script, /function toggleSection/)
+  assert.match(script, /function toggleSidebar/)
+  assert.doesNotMatch(html, /id="focus-chat"/)
+  assert.doesNotMatch(html, /id="move-selected"/)
 })
 
 test('account editor has explicit cancel controls and only its fields scroll', () => {
@@ -121,6 +165,12 @@ test('desktop bridge exposes inventory actions and accounts default automatic de
   const main = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
   assert.match(preload, /dropStack:.*bot:drop-stack/)
   assert.match(preload, /setAutoDeposit:.*bot:auto-deposit/)
+  assert.match(preload, /setItemLock:.*bot:item-lock/)
+  assert.match(preload, /moveInventorySlot:.*bot:inventory-move/)
+  assert.match(preload, /equipInventoryItem:.*bot:equip-item/)
+  assert.match(preload, /clickWindowSlot:.*bot:window-click/)
+  assert.match(preload, /closeServerWindow:.*bot:window-close/)
+  assert.match(main, /lockedInventorySlots:/)
   assert.match(main, /autoDepositToChest:\s*input\?\.autoDepositToChest === true/)
   assert.match(main, /messageDelay:.*\? 6 :/)
   assert.match(main, /environmentalMovement:\s*input\?\.environmentalMovement !== false/)

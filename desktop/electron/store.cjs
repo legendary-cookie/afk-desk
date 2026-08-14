@@ -83,7 +83,7 @@ function normalizeSettings(input = {}) {
     startupConnectionDelay: Math.max(1, Math.min(Number(input?.startupConnectionDelay) || 3, 300)),
     uiScale: Math.max(75, Math.min(Number(input?.uiScale) || 100, 125)),
     sidePanelWidth: Math.max(240, Math.min(Number(input?.sidePanelWidth) || 300, 520)),
-    inventoryHeight: Math.max(84, Math.min(Number(input?.inventoryHeight) || 112, 360)),
+    inventoryHeight: Math.max(120, Math.min(Number(input?.inventoryHeight) || 220, 360)),
     macros: normalizeMacros(input?.macros)
   }
 }

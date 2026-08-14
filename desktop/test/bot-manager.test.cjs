@@ -25,6 +25,7 @@ class FakeBot extends EventEmitter {
     this.messages = []
     this.writes = []
     this.settings = { locale: 'en_us' }
+    this.quickBarSlot = 0
     this._client = new EventEmitter()
     this._client.write = (name, payload) => this.writes.push([name, payload])
   }
@@ -33,6 +34,11 @@ class FakeBot extends EventEmitter {
   setControlState(control, value) { this.controls.push([control, value]) }
   look() { return Promise.resolve() }
   tossStack(item) { this.tossed = item; return Promise.resolve() }
+  clickWindow(slot, mouseButton, mode) { this.clickedWindow = [slot, mouseButton, mode]; return Promise.resolve() }
+  moveSlotItem(sourceSlot, destinationSlot) { this.movedSlot = [sourceSlot, destinationSlot]; return Promise.resolve() }
+  equip(item, destination) { this.equippedItem = [item, destination]; if (destination === 'hand') this.quickBarSlot = item.slot >= 36 && item.slot <= 44 ? item.slot - 36 : 2; return Promise.resolve() }
+  setQuickBarSlot(slot) { this.quickBarSlot = slot }
+  closeWindow(window) { this.closedWindow = window; this.currentWindow = null; this.emit('windowClose', window) }
   end(reason) { this.emit('end', reason) }
   quit() { this.emit('end', 'quit') }
   supportFeature(name) { return name === 'seperateSignedChatCommandPacket' }
@@ -297,8 +303,101 @@ test('builds a bounded player health, position, and inventory snapshot', () => {
     position: { x: 12.3, y: 64, z: -8.8 },
     dimension: 'overworld',
     nearestChest: null,
-    inventory: [{ slot: 36, name: 'diamond_sword', displayName: 'Diamond Sword', count: 1 }]
+    inventory: [{ slot: 36, slotType: 'inventory', name: 'diamond_sword', displayName: 'Diamond Sword', count: 1 }],
+    selectedHotbarSlot: 0
   })
+})
+
+test('includes armor slots and remaining durability for equipment and inventory tools', () => {
+  const bot = new FakeBot()
+  const helmet = { slot: 5, name: 'diamond_helmet', displayName: 'Diamond Helmet', count: 1, maxDurability: 363, durabilityUsed: 13 }
+  const sword = { slot: 36, name: 'diamond_sword', displayName: 'Diamond Sword', customName: 'Town Blade', customLore: ['{"text":"Bound ","color":"gold","extra":[{"text":"to town","italic":false}]}', '{"text":"Soulbound","color":"dark_purple"}'], enchants: [{ name: 'sharpness', lvl: 5 }], count: 1, maxDurability: 1561, durabilityUsed: 61 }
+  bot.inventory.slots[5] = helmet
+  bot.inventory.slots[36] = sword
+  bot.inventory.items = () => [sword]
+
+  const snapshot = buildTelemetry(bot)
+
+  assert.deepEqual(snapshot.inventory, [
+    { slot: 5, slotType: 'helmet', name: 'diamond_helmet', displayName: 'Diamond Helmet', count: 1, durability: { remaining: 350, maximum: 363, percent: 96 } },
+    { slot: 36, slotType: 'inventory', name: 'diamond_sword', displayName: 'Diamond Sword', count: 1, durability: { remaining: 1500, maximum: 1561, percent: 96 }, customName: 'Town Blade', lore: ['Bound to town', 'Soulbound'], loreSegments: [[{ text: 'Bound ', color: '#ffaa00' }, { text: 'to town', color: '#ffaa00', italic: false }], [{ text: 'Soulbound', color: '#aa00aa' }]], enchants: [{ name: 'sharpness', level: 5 }] }
+  ])
+})
+
+test('reads modern component enchantments, lore, and names when item getters are unavailable', () => {
+  const bot = new FakeBot()
+  const item = {
+    slot: 36, name: 'netherite_sword', displayName: 'Netherite Sword', count: 1,
+    get customName () { throw new Error('unsupported getter') },
+    get customLore () { throw new Error('unsupported getter') },
+    get enchants () { throw new Error('unsupported getter') },
+    componentMap: new Map([
+      ['custom_name', { data: '{"text":"Star Blade","color":"aqua"}' }],
+      ['lore', { data: { lines: ['{"text":"Ancient relic","color":"dark_purple"}'] } }],
+      ['enchantments', { data: { levels: { 'minecraft:sharpness': 5, 'minecraft:mending': 1 } } }]
+    ])
+  }
+  bot.inventory.slots[36] = item
+  bot.inventory.items = () => [item]
+
+  const [snapshot] = buildTelemetry(bot).inventory
+  assert.equal(snapshot.customName, 'Star Blade')
+  assert.deepEqual(snapshot.lore, ['Ancient relic'])
+  assert.deepEqual(snapshot.enchants, [{ name: 'sharpness', level: 5 }, { name: 'mending', level: 1 }])
+})
+
+test('reads numeric modern enchantment components and wrapped levels without defaulting to level one', () => {
+  const bot = new FakeBot()
+  bot.__afkDeskEnchantmentsById = new Map([[10, 'efficiency'], [11, 'sharpness'], [12, 'unbreaking']])
+  const item = {
+    slot: 36, name: 'diamond_sword', displayName: 'Diamond Sword', count: 1,
+    get enchants () { return { enchantments: [{ id: 11, level: 5 }, { id: { value: 12 }, level: { type: 'varint', value: 3 } }] } }
+  }
+  bot.inventory.slots[36] = item
+  bot.inventory.items = () => [item]
+
+  const [snapshot] = buildTelemetry(bot).inventory
+  assert.deepEqual(snapshot.enchants, [{ name: 'sharpness', level: 5 }, { name: 'unbreaking', level: 3 }])
+})
+
+test('uses the server enchantment registry order instead of alphabetic static ids', () => {
+  const events = []
+  const diagnostics = []
+  const bot = new FakeBot()
+  bot.registry = { enchantmentsArray: [{ id: 0, name: 'aqua_affinity' }, { id: 1, name: 'bane_of_arthropods' }] }
+  const manager = new BotManager({ profilesPath: 'profiles', emit: (...event) => events.push(event), diagnose: (entry) => diagnostics.push(entry), createBot: () => bot })
+  manager.connect({ id: 'dynamic-enchants', username: 'user@example.com', host: 'localhost', antiAfk: false, autoReconnect: false })
+  bot._client.emit('registry_data', {
+    id: 'minecraft:enchantment',
+    entries: [{ key: 'minecraft:protection' }, { key: 'minecraft:fire_protection' }, { key: 'minecraft:feather_falling' }]
+  })
+  const item = {
+    slot: 36, name: 'diamond_boots', displayName: 'Diamond Boots', count: 1,
+    enchants: { enchantments: [{ id: 2, level: 4 }] }
+  }
+  bot.inventory.slots[36] = item
+  bot.inventory.items = () => [item]
+  bot.entity = { position: { x: 0, y: 64, z: 0 } }
+  bot.emit('health')
+
+  const telemetry = events.findLast(([type]) => type === 'telemetry')?.[2]
+  assert.deepEqual(telemetry.inventory[0].enchants, [{ name: 'feather_falling', level: 4 }])
+  assert.deepEqual(diagnostics.find((entry) => entry.event === 'enchantment_registry')?.entries, [[0, 'protection'], [1, 'fire_protection'], [2, 'feather_falling']])
+  manager.disconnect('dynamic-enchants')
+})
+
+test('reads stored enchantments when the generic item getter returns an empty list', () => {
+  const bot = new FakeBot()
+  const item = {
+    slot: 36, name: 'enchanted_book', displayName: 'Enchanted Book', count: 1,
+    enchants: [],
+    componentMap: new Map([['stored_enchantments', { data: { levels: new Map([['minecraft:fortune', { value: 3 }]]) } }]])
+  }
+  bot.inventory.slots[36] = item
+  bot.inventory.items = () => [item]
+
+  const [snapshot] = buildTelemetry(bot).inventory
+  assert.deepEqual(snapshot.enchants, [{ name: 'fortune', level: 3 }])
 })
 
 test('drops only the inventory stack selected by slot', async () => {
@@ -317,6 +416,54 @@ test('drops only the inventory stack selected by slot', async () => {
   assert.match(events.find(([type]) => type === 'log')?.[2].message, /Dropped 3 × Diamond/)
   await assert.rejects(manager.dropStack('drop', 38), /no longer available/i)
   manager.disconnect('drop')
+})
+
+test('locked inventory stacks cannot be dropped', async () => {
+  const bot = new FakeBot()
+  const selected = { slot: 37, type: 264, metadata: 0, name: 'diamond', displayName: 'Diamond', count: 3 }
+  bot.inventory.items = () => [selected]
+  bot.inventory.slots[37] = selected
+  const manager = new BotManager({ profilesPath: 'profiles', emit: () => {}, createBot: () => bot })
+  manager.connect({ id: 'locked-drop', username: 'user@example.com', host: 'localhost', antiAfk: false, autoReconnect: false, lockedInventorySlots: [37] })
+  bot.entity = { position: { x: 0, y: 64, z: 0 } }
+
+  await assert.rejects(manager.dropStack('locked-drop', 37), /locked/i)
+  assert.equal(bot.tossed, undefined)
+  manager.disconnect('locked-drop')
+})
+
+test('moves or swaps player inventory slots and blocks changes while a server window is open', async () => {
+  const bot = new FakeBot()
+  const item = { slot: 9, type: 1, name: 'stone', displayName: 'Stone', count: 1 }
+  bot.inventory.slots[9] = item
+  const manager = new BotManager({ profilesPath: 'profiles', emit: () => {}, createBot: () => bot })
+  manager.connect({ id: 'move', username: 'user@example.com', host: 'localhost', antiAfk: false, autoReconnect: false })
+  bot.entity = { position: { x: 0, y: 64, z: 0 } }
+
+  await manager.moveInventorySlot('move', 9, 36)
+  assert.deepEqual(bot.movedSlot, [9, 36])
+  await assert.rejects(manager.moveInventorySlot('move', 9, 9), /different destination/i)
+  bot.currentWindow = { id: 2 }
+  await assert.rejects(manager.moveInventorySlot('move', 9, 37), /close the server menu/i)
+  manager.disconnect('move')
+})
+
+test('equips selected gear and can hold an inventory or hotbar item', async () => {
+  const bot = new FakeBot()
+  const helmet = { slot: 9, type: 310, name: 'diamond_helmet', displayName: 'Diamond Helmet', count: 1 }
+  const sword = { slot: 40, type: 276, name: 'diamond_sword', displayName: 'Diamond Sword', count: 1 }
+  bot.inventory.slots[9] = helmet
+  bot.inventory.slots[40] = sword
+  const manager = new BotManager({ profilesPath: 'profiles', emit: () => {}, createBot: () => bot })
+  manager.connect({ id: 'equip', username: 'user@example.com', host: 'localhost', antiAfk: false, autoReconnect: false })
+  bot.entity = { position: { x: 0, y: 64, z: 0 } }
+
+  assert.deepEqual(await manager.equipInventoryItem('equip', 9, 'auto'), { sourceSlot: 9, targetSlot: 5, destination: 'head' })
+  assert.deepEqual(bot.equippedItem, [helmet, 'head'])
+  assert.deepEqual(await manager.equipInventoryItem('equip', 40, 'hand'), { sourceSlot: 40, targetSlot: 40, destination: 'hand' })
+  assert.equal(bot.quickBarSlot, 4)
+  await assert.rejects(manager.equipInventoryItem('equip', 9, 'invalid'), /equipment destination/i)
+  manager.disconnect('equip')
 })
 
 test('finds the closest chest and deposits all inventory stacks only when enabled', async () => {
@@ -344,13 +491,82 @@ test('finds the closest chest and deposits all inventory stacks only when enable
 
   await manager.refreshChest('chest')
   assert.deepEqual(deposits, [])
-  assert.deepEqual(events.filter(([type]) => type === 'telemetry').at(-1)[2].nearestChest, { x: 11, y: 64, z: 10, distance: 1 })
+  assert.deepEqual(events.filter(([type]) => type === 'telemetry').at(-1)[2].nearestChest, { type: 'chest', x: 11, y: 64, z: 10, distance: 1 })
 
   await manager.setAutoDeposit('chest', true)
   assert.deepEqual(deposits, [[4, 0, 64, null], [264, 0, 2, null]])
   assert.equal(closed, true)
   assert.match(events.filter(([type]) => type === 'log').at(-1)[2].message, /Deposited 66 items into chest at 11, 64, 10/)
   manager.disconnect('chest')
+})
+
+test('auto-deposit supports barrels and leaves locked stacks in inventory', async (t) => {
+  const events = []
+  const bot = new FakeBot()
+  const locked = { slot: 36, type: 276, metadata: 0, nbt: null, name: 'diamond_sword', displayName: 'Diamond Sword', count: 1 }
+  const unlocked = { slot: 37, type: 4, metadata: 0, nbt: null, name: 'cobblestone', displayName: 'Cobblestone', count: 12 }
+  bot.inventory.items = () => [locked, unlocked]
+  bot.entity = { position: { x: 10, y: 64, z: 10 } }
+  bot.findBlock = ({ matching }) => {
+    const block = { name: 'barrel', position: { x: 10, y: 64, z: 11 } }
+    return matching(block) ? block : null
+  }
+  const deposits = []
+  bot.openContainer = async () => {
+    const container = {
+      inventoryStart: 27,
+      slots: [],
+      deposit: async (...args) => deposits.push(args),
+      close: () => bot.emit('windowClose', container)
+    }
+    bot.emit('windowOpen', container)
+    return container
+  }
+  const manager = new BotManager({ profilesPath: 'profiles', emit: (...event) => events.push(event), createBot: () => bot })
+  t.after(() => manager.disconnect('barrel'))
+  manager.connect({
+    id: 'barrel', username: 'user@example.com', host: 'localhost', antiAfk: false,
+    autoReconnect: false, autoDepositToChest: true, lockedInventorySlots: [36]
+  })
+  await manager.refreshChest('barrel')
+
+  assert.deepEqual(deposits, [[4, 0, 12, null]])
+  assert.equal(events.filter(([type]) => type === 'telemetry').at(-1)[2].nearestChest.type, 'barrel')
+  assert.match(events.filter(([type]) => type === 'log').at(-1)[2].message, /Deposited 12 items into barrel/i)
+  assert.equal(events.some(([type]) => type === 'window'), false)
+})
+
+test('emits server container menus and supports safe left-click interaction', async () => {
+  const events = []
+  const bot = new FakeBot()
+  const manager = new BotManager({ profilesPath: 'profiles', emit: (...event) => events.push(event), createBot: () => bot })
+  manager.connect({ id: 'menu', username: 'user@example.com', host: 'localhost', antiAfk: false, autoReconnect: false })
+  bot.entity = { position: { x: 0, y: 64, z: 0 } }
+  bot.emit('spawn')
+  const menu = {
+    id: 4,
+    title: 'Town Menu',
+    inventoryStart: 9,
+    slots: [{ slot: 0, name: 'emerald', displayName: 'Join Town', count: 1 }, null]
+  }
+  bot.currentWindow = menu
+
+  bot.emit('windowOpen', menu)
+  assert.deepEqual(events.filter(([type]) => type === 'window').at(-1)[2], {
+    open: true,
+    title: 'Town Menu',
+    size: 9,
+    slots: [{ slot: 0, name: 'emerald', displayName: 'Join Town', count: 1 }]
+  })
+
+  await manager.clickWindowSlot('menu', 0)
+  assert.deepEqual(bot.clickedWindow, [0, 0, 0])
+  await assert.rejects(manager.clickWindowSlot('menu', 'not-a-slot'), /invalid server-menu slot/i)
+  await assert.rejects(manager.clickWindowSlot('menu', 9), /only server-menu slots/i)
+  manager.closeWindow('menu')
+  assert.equal(bot.closedWindow, menu)
+  assert.deepEqual(events.filter(([type]) => type === 'window').at(-1)[2], { open: false })
+  manager.disconnect('menu')
 })
 
 test('resends client settings after Velocity enters configuration', async () => {

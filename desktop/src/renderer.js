@@ -10,28 +10,78 @@ const KEY_CONTROLS = {
 
 const activeManualInputs = new Map()
 
+const ENCHANTMENT_DETAILS = {
+  aqua_affinity: [1, 'Speeds up underwater mining.'],
+  bane_of_arthropods: [5, (level) => `Adds ${formatEffectNumber(level * 2.5)} damage to arthropods and slows them.`],
+  binding_curse: [1, 'Prevents equipped armor from being removed.'],
+  blast_protection: [4, 'Reduces explosion damage and knockback.'],
+  breach: [4, (level) => `Reduces the target's effective armor by ${level * 15}%.`],
+  channeling: [1, 'Summons lightning when a thrown trident hits during a thunderstorm.'],
+  curse_of_binding: [1, 'Prevents equipped armor from being removed.'],
+  curse_of_vanishing: [1, 'Causes the item to disappear when its holder dies.'],
+  density: [5, (level) => `Adds ${formatEffectNumber(level * 0.5)} damage per block fallen to mace smash attacks.`],
+  depth_strider: [3, 'Increases underwater movement speed.'],
+  efficiency: [5, 'Increases mining speed.'],
+  feather_falling: [4, 'Reduces fall damage.'],
+  fire_aspect: [2, 'Sets melee targets on fire.'],
+  fire_protection: [4, 'Reduces fire damage and burn time.'],
+  flame: [1, 'Sets arrows on fire.'],
+  fortune: [3, 'Increases certain block drops.'],
+  frost_walker: [2, 'Freezes nearby water while walking.'],
+  impaling: [5, 'Increases trident damage against aquatic targets.'],
+  infinity: [1, 'Allows normal arrows to be fired without consuming them.'],
+  knockback: [2, 'Increases melee knockback.'],
+  looting: [3, 'Increases mob drops.'],
+  loyalty: [3, 'Returns a thrown trident to its owner.'],
+  luck_of_the_sea: [3, 'Improves fishing treasure quality.'],
+  lure: [3, 'Reduces the wait for a fish to bite.'],
+  mending: [1, 'Uses collected experience to repair the item.'],
+  multishot: [1, 'Fires three projectiles while consuming one.'],
+  piercing: [4, (level) => `Lets crossbow projectiles pass through up to ${level} target${level === 1 ? '' : 's'}.`],
+  power: [5, 'Increases arrow damage.'],
+  projectile_protection: [4, 'Reduces projectile damage.'],
+  protection: [4, 'Reduces most incoming damage.'],
+  punch: [2, 'Increases arrow knockback.'],
+  quick_charge: [3, 'Reduces crossbow loading time.'],
+  respiration: [3, 'Extends underwater breathing time.'],
+  riptide: [3, 'Launches the user with a wet thrown trident.'],
+  sharpness: [5, (level) => `Increases melee damage by ${formatEffectNumber(0.5 * level + 0.5)}.`],
+  silk_touch: [1, 'Makes certain blocks drop themselves.'],
+  smite: [5, (level) => `Adds ${formatEffectNumber(level * 2.5)} damage to undead targets.`],
+  soul_speed: [3, 'Increases movement speed on soul sand and soul soil.'],
+  sweeping_edge: [3, 'Increases sweeping attack damage.'],
+  swift_sneak: [3, 'Increases movement speed while sneaking.'],
+  thorns: [3, 'May damage attackers when the wearer is hit.'],
+  unbreaking: [3, 'Reduces the chance that durability is consumed.'],
+  vanishing_curse: [1, 'Causes the item to disappear when its holder dies.'],
+  wind_burst: [3, 'Launches the attacker upward after a mace smash attack.']
+}
+
 const state = {
   accounts: [],
   selectedId: null,
   selectedInventorySlot: null,
+  movingInventorySlot: null,
   draggedAccountId: null,
   statuses: new Map(),
   logs: new Map(),
   telemetry: new Map(),
+  serverWindows: new Map(),
   chatHistory: new Map(),
-  settings: { uiScale: 100, sidePanelWidth: 300, inventoryHeight: 112, macros: [] },
+  settings: { uiScale: 100, sidePanelWidth: 300, inventoryHeight: 220, macros: [] },
+  inventoryCollapsed: false,
   resolvedVersions: new Map(),
   login: { code: '', url: 'https://microsoft.com/link' }
 }
 
 const el = Object.fromEntries([
-  'account-list', 'account-count', 'add-account', 'open-settings', 'settings-dialog', 'close-settings', 'start-with-windows', 'stagger-startup-connections', 'startup-connection-delay', 'save-settings', 'empty-state', 'dashboard', 'account-title', 'app-version', 'settings-app-version',
+  'account-list', 'account-count', 'add-account', 'open-settings', 'toggle-sidebar', 'quick-scale', 'quick-scale-number', 'reset-scale', 'quick-scale-value', 'display-menu', 'console-menu', 'macro-menu', 'settings-dialog', 'close-settings', 'start-with-windows', 'stagger-startup-connections', 'startup-connection-delay', 'save-settings', 'empty-state', 'dashboard', 'account-title', 'app-version', 'settings-app-version',
   'edit-account', 'connection-button', 'status-banner', 'status-name', 'status-detail', 'server-address',
-  'detail-username', 'detail-server', 'detail-version', 'detail-antiafk', 'detail-environment', 'detail-water', 'detail-health', 'detail-hunger', 'detail-coordinates', 'detail-chest', 'detail-dimension', 'inventory-count', 'inventory-grid', 'auto-deposit-toggle', 'drop-selected', 'console-log', 'clear-console',
-  'chat-form', 'chat-message', 'macro-pad', 'manage-macros', 'macro-editor', 'macro-rows', 'add-macro', 'cancel-macros', 'save-macros', 'account-dialog', 'account-form', 'dialog-title', 'account-id', 'label',
+  'detail-username', 'detail-server', 'detail-version', 'detail-antiafk', 'detail-environment', 'detail-water', 'detail-health', 'detail-hunger', 'detail-coordinates', 'detail-chest', 'detail-dimension', 'inventory-count', 'inventory-grid', 'auto-deposit-toggle', 'hold-selected', 'equip-destination', 'equip-selected', 'lock-selected', 'drop-selected', 'toggle-inventory', 'console-log', 'clear-console',
+  'chat-form', 'chat-message', 'macro-pad', 'manage-macros', 'macro-dialog', 'close-macro-dialog', 'macro-editor', 'macro-rows', 'add-macro', 'cancel-macros', 'save-macros', 'account-dialog', 'account-form', 'dialog-title', 'account-id', 'label',
   'username', 'host', 'port', 'version', 'connect-on-startup', 'proxy-enabled', 'proxy-fields', 'proxy-type', 'proxy-host', 'proxy-port', 'proxy-username', 'proxy-password', 'proxy-password-help', 'proxy-clear-password', 'anti-afk', 'anti-afk-min-delay', 'anti-afk-max-delay', 'anti-afk-duration', 'anti-afk-look-degrees', 'anti-afk-walk-distance', 'anti-afk-jump', 'anti-afk-look', 'anti-afk-sneak', 'anti-afk-swing', 'anti-afk-walk', 'environmental-movement', 'auto-reconnect', 'auto-reconnect-delay', 'auto-reconnect-max', 'auto-deposit-setting', 'join-message', 'server-change-message',
   'message-delay', 'form-error', 'delete-account', 'login-dialog', 'login-code', 'open-login-private', 'open-login',
-  'close-login', 'ui-scale', 'ui-scale-value', 'column-resizer', 'inventory-resizer', 'toast-region'
+  'close-login', 'ui-scale', 'ui-scale-value', 'column-resizer', 'inventory-resizer', 'server-window-dialog', 'server-window-title', 'server-window-grid', 'close-server-window', 'item-tooltip', 'toast-region'
 ].map((id) => [id, document.getElementById(id)]))
 
 async function init() {
@@ -65,17 +115,24 @@ function bindEvents() {
   el['delete-account'].addEventListener('click', deleteAccount)
   el['connection-button'].addEventListener('click', toggleConnection)
   el['drop-selected'].addEventListener('click', dropSelectedStack)
+  el['hold-selected'].addEventListener('click', holdSelectedItem)
+  el['equip-selected'].addEventListener('click', equipSelectedItem)
+  el['lock-selected'].addEventListener('click', toggleSelectedItemLock)
   el['auto-deposit-toggle'].addEventListener('change', toggleAutoDeposit)
+  el['close-server-window'].addEventListener('click', closeServerWindow)
+  el['server-window-dialog'].addEventListener('cancel', (event) => { event.preventDefault(); closeServerWindow() })
   el['proxy-enabled'].addEventListener('change', syncProxyFields)
   el['proxy-type'].addEventListener('change', () => {
     el['proxy-port'].value = el['proxy-type'].value === 'http' ? 8080 : 1080
   })
   el['chat-form'].addEventListener('submit', sendChat)
   el['chat-message'].addEventListener('keydown', navigateChatHistory)
-  el['manage-macros'].addEventListener('click', () => el['macro-editor'].hidden ? openMacroEditor() : closeMacroEditor())
+  el['manage-macros'].addEventListener('click', openMacroEditor)
   el['add-macro'].addEventListener('click', () => addMacroRow())
   el['cancel-macros'].addEventListener('click', closeMacroEditor)
   el['save-macros'].addEventListener('click', saveMacros)
+  el['close-macro-dialog'].addEventListener('click', closeMacroEditor)
+  el['macro-dialog'].addEventListener('cancel', (event) => { event.preventDefault(); closeMacroEditor() })
   el['ui-scale'].addEventListener('input', () => {
     el['ui-scale-value'].textContent = `${el['ui-scale'].value}%`
     applyUiScale(el['ui-scale'].value)
@@ -83,7 +140,19 @@ function bindEvents() {
   el['clear-console'].addEventListener('click', () => {
     state.logs.set(state.selectedId, [])
     renderConsole()
+    el['console-menu'].hidePopover?.()
   })
+  el['toggle-inventory'].addEventListener('click', toggleInventory)
+  el['toggle-sidebar'].addEventListener('click', toggleSidebar)
+  el['quick-scale'].addEventListener('input', () => previewQuickScale(el['quick-scale'].value))
+  el['quick-scale'].addEventListener('change', () => saveQuickScale(el['quick-scale'].value))
+  el['quick-scale-number'].addEventListener('input', () => previewTypedScale(el['quick-scale-number'].value))
+  el['quick-scale-number'].addEventListener('change', () => saveQuickScale(el['quick-scale-number'].value))
+  el['quick-scale-number'].addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') { event.preventDefault(); void saveQuickScale(el['quick-scale-number'].value) }
+  })
+  el['reset-scale'].addEventListener('click', () => saveQuickScale(100))
+  document.querySelectorAll('[data-collapse-target]').forEach((button) => button.addEventListener('click', () => toggleSection(button)))
   bindManualMovement()
   bindPanelResizers()
   document.querySelectorAll('[data-look]').forEach((button) => button.addEventListener('click', () => run(() => api.look(state.selectedId, button.dataset.look))))
@@ -101,7 +170,7 @@ function render() {
   const account = selectedAccount()
   el['empty-state'].hidden = Boolean(account)
   el.dashboard.hidden = !account
-  if (!account) return
+  if (!account) { renderServerWindow(); return }
 
   const status = getStatus(account.id)
   el['account-title'].textContent = account.label
@@ -119,6 +188,7 @@ function render() {
   renderConsole()
   renderMacroPad()
   renderTelemetry()
+  renderServerWindow()
 }
 
 function renderAccountList() {
@@ -149,6 +219,8 @@ function renderAccountList() {
       releaseAllManualInputs()
       state.selectedId = account.id
       state.selectedInventorySlot = null
+      state.movingInventorySlot = null
+      hideItemTooltip()
       render()
     })
     const controls = document.createElement('span')
@@ -279,43 +351,293 @@ function renderTelemetry() {
   el['detail-health'].textContent = telemetry ? `${formatNumber(telemetry.health)} / 20` : '—'
   el['detail-hunger'].textContent = telemetry ? `${formatNumber(telemetry.food)} / 20` : '—'
   el['detail-coordinates'].textContent = telemetry?.position ? `${telemetry.position.x}, ${telemetry.position.y}, ${telemetry.position.z}` : '—'
-  el['detail-chest'].textContent = telemetry?.nearestChest ? `${telemetry.nearestChest.x}, ${telemetry.nearestChest.y}, ${telemetry.nearestChest.z} (${formatNumber(telemetry.nearestChest.distance)} blocks)` : telemetry ? 'Not found within 5 blocks' : '—'
+  el['detail-chest'].textContent = telemetry?.nearestChest ? `${formatContainerType(telemetry.nearestChest.type)} at ${telemetry.nearestChest.x}, ${telemetry.nearestChest.y}, ${telemetry.nearestChest.z} (${formatNumber(telemetry.nearestChest.distance)} blocks)` : telemetry ? 'Not found within 5 blocks' : '—'
   el['detail-dimension'].textContent = telemetry ? String(telemetry.dimension || 'unknown').replace(/^minecraft:/, '') : '—'
   const items = telemetry?.inventory || []
   if (!items.some((item) => item.slot === state.selectedInventorySlot)) state.selectedInventorySlot = null
+  if (!items.some((item) => item.slot === state.movingInventorySlot)) state.movingInventorySlot = null
   el['inventory-count'].textContent = telemetry ? `${items.length} occupied slot${items.length === 1 ? '' : 's'}` : 'Connect to view items'
-  if (!items.length) {
+  if (!telemetry) {
     const empty = document.createElement('div')
     empty.className = 'inventory-empty'
-    empty.textContent = telemetry ? 'Inventory is empty.' : 'Inventory will appear while this account is online.'
+    empty.textContent = 'Inventory will appear while this account is online.'
     el['inventory-grid'].replaceChildren(empty)
     updateInventoryActions()
     return
   }
-  el['inventory-grid'].replaceChildren(...items.map((item) => {
-    const slot = document.createElement('button')
-    slot.type = 'button'
-    slot.className = `inventory-slot${item.slot === state.selectedInventorySlot ? ' selected' : ''}`
-    slot.setAttribute('aria-pressed', item.slot === state.selectedInventorySlot ? 'true' : 'false')
-    slot.addEventListener('click', () => {
-      state.selectedInventorySlot = state.selectedInventorySlot === item.slot ? null : item.slot
-      renderTelemetry()
-    })
-    const name = document.createElement('strong')
-    name.textContent = item.displayName
-    const meta = document.createElement('span')
-    meta.textContent = `×${item.count} · slot ${item.slot}`
-    slot.append(name, meta)
-    return slot
-  }))
+  const bySlot = new Map(items.map((item) => [item.slot, item]))
+  const shell = document.createElement('div')
+  shell.className = 'minecraft-inventory'
+  const equipment = createInventorySection('Gear', [5, 6, 7, 8, 45], bySlot, telemetry, 'equipment')
+  const storage = createInventorySection('Inventory', Array.from({ length: 27 }, (_, index) => index + 9), bySlot, telemetry, 'storage')
+  const hotbar = createInventorySection('Hotbar', Array.from({ length: 9 }, (_, index) => index + 36), bySlot, telemetry, 'hotbar')
+  const main = document.createElement('div')
+  main.className = 'minecraft-inventory-main'
+  main.append(storage, hotbar)
+  shell.append(equipment, main)
+  el['inventory-grid'].replaceChildren(shell)
   updateInventoryActions()
+}
+
+function createInventorySection(labelText, slots, bySlot, telemetry, kind) {
+  const section = document.createElement('section')
+  section.className = `minecraft-inventory-section ${kind}`
+  const label = document.createElement('div')
+  label.className = 'minecraft-section-label'
+  label.textContent = labelText
+  const grid = document.createElement('div')
+  grid.className = `minecraft-slot-grid ${kind}`
+  grid.replaceChildren(...slots.map((slotNumber) => createPlayerSlot(slotNumber, bySlot.get(slotNumber), telemetry)))
+  section.append(label, grid)
+  return section
+}
+
+function createPlayerSlot(slotNumber, item, telemetry) {
+  const slot = document.createElement('button')
+  slot.type = 'button'
+  const locked = item && isSelectedAccountSlotLocked(slotNumber)
+  const held = slotNumber === 36 + (telemetry.selectedHotbarSlot || 0)
+  slot.className = `minecraft-slot${item ? '' : ' empty'}${slotNumber === state.selectedInventorySlot ? ' selected' : ''}${slotNumber === state.movingInventorySlot ? ' moving' : ''}${locked ? ' locked' : ''}${held ? ' held' : ''}`
+  slot.dataset.slot = slotNumber
+  slot.setAttribute('aria-label', item ? `${itemTooltipName(item)}, slot ${slotNumber}${locked ? ', locked' : ''}${held ? ', held' : ''}` : `Empty slot ${slotNumber}`)
+  slot.append(createSlotContents(item, { locked, held }))
+  slot.addEventListener('click', () => {
+    if (state.movingInventorySlot != null) return void moveInventoryItem(state.movingInventorySlot, slotNumber)
+    if (!item) return
+    state.selectedInventorySlot = state.selectedInventorySlot === slotNumber ? null : slotNumber
+    renderTelemetry()
+  })
+  if (item) {
+    slot.draggable = true
+    slot.addEventListener('dragstart', (event) => { event.dataTransfer.setData('text/plain', String(slotNumber)); event.dataTransfer.effectAllowed = 'move' })
+    bindItemTooltip(slot, item)
+  }
+  slot.addEventListener('dragover', (event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move' })
+  slot.addEventListener('drop', (event) => { event.preventDefault(); const source = Number(event.dataTransfer.getData('text/plain')); if (Number.isInteger(source)) void moveInventoryItem(source, slotNumber) })
+  return slot
+}
+
+function createSlotContents(item, { locked = false, held = false } = {}) {
+  const fragment = document.createDocumentFragment()
+  if (!item) return fragment
+  fragment.append(createItemIcon(item))
+  if (item.count > 1) {
+    const count = document.createElement('span')
+    count.className = 'minecraft-item-count'
+    count.textContent = item.count
+    fragment.append(count)
+  }
+  if (item.durability) {
+    const durability = document.createElement('span')
+    durability.className = 'minecraft-durability'
+    durability.style.setProperty('--durability', `${item.durability.percent}%`)
+    fragment.append(durability)
+  }
+  if (item.enchants?.length) {
+    const badge = document.createElement('span')
+    badge.className = 'minecraft-enchanted'
+    badge.textContent = '✦'
+    badge.title = `${item.enchants.length} enchantment${item.enchants.length === 1 ? '' : 's'}`
+    fragment.append(badge)
+  }
+  if (item.lore?.length) {
+    const badge = document.createElement('span')
+    badge.className = 'minecraft-lore'
+    badge.textContent = '▤'
+    badge.title = `${item.lore.length} lore line${item.lore.length === 1 ? '' : 's'}`
+    fragment.append(badge)
+  }
+  if (locked) { const badge = document.createElement('span'); badge.className = 'minecraft-lock'; badge.textContent = '◆'; fragment.append(badge) }
+  if (held) { const badge = document.createElement('span'); badge.className = 'minecraft-held'; badge.textContent = '▲'; fragment.append(badge) }
+  return fragment
+}
+
+function createItemIcon(item) {
+  const icon = document.createElement('span')
+  icon.className = `minecraft-item-icon${item.enchants?.length ? ' enchanted' : ''}`
+  const atlas = window.__minecraftItemAtlas
+  const index = atlas?.items?.[item.name]
+  if (Number.isInteger(index)) {
+    icon.style.backgroundPosition = `${-(index % atlas.columns) * atlas.cell}px ${-Math.floor(index / atlas.columns) * atlas.cell}px`
+    icon.style.backgroundSize = `${atlas.columns * atlas.cell}px ${atlas.rows * atlas.cell}px`
+  } else icon.classList.add('missing')
+  return icon
+}
+
+function itemTooltipName(item) { return item.customName || item.displayName || item.name || 'Unknown item' }
+
+function bindItemTooltip(target, item) {
+  target.addEventListener('mouseenter', (event) => showItemTooltip(item, event))
+  target.addEventListener('mousemove', positionItemTooltip)
+  target.addEventListener('mouseleave', hideItemTooltip)
+  target.addEventListener('focus', (event) => showItemTooltip(item, event))
+  target.addEventListener('blur', hideItemTooltip)
+}
+
+function showItemTooltip(item, event) {
+  const layer = event.currentTarget?.closest('dialog') || document.body
+  if (el['item-tooltip'].parentElement !== layer) layer.append(el['item-tooltip'])
+  const lines = []
+  const title = document.createElement('strong')
+  title.textContent = itemTooltipName(item)
+  lines.push(title)
+  for (const enchant of item.enchants || []) {
+    const detail = enchantmentDetail(enchant)
+    const line = document.createElement('span')
+    line.className = `enchant${detail.curse ? ' curse' : ''}`
+    line.textContent = `${formatMinecraftName(enchant.name)} ${romanNumeral(enchant.level)}`
+    const effect = document.createElement('span')
+    effect.className = 'enchant-detail'
+    effect.textContent = detail.description
+    const level = document.createElement('span')
+    level.className = 'enchant-level'
+    level.textContent = detail.maximum ? `Level ${detail.level} of ${detail.maximum}` : `Level ${detail.level}`
+    lines.push(line, effect, level)
+  }
+  if (item.lore?.length) {
+    const heading = document.createElement('span')
+    heading.className = 'lore-heading'
+    heading.textContent = 'Lore'
+    lines.push(heading)
+  }
+  for (const [index, loreText] of (item.lore || []).entries()) {
+    const line = document.createElement('span')
+    line.className = 'lore'
+    const segments = item.loreSegments?.[index]
+    if (Array.isArray(segments) && segments.length) appendLoreSegments(line, segments)
+    else line.textContent = loreText
+    lines.push(line)
+  }
+  if (item.durability) { const line = document.createElement('span'); line.textContent = `Durability: ${item.durability.remaining} / ${item.durability.maximum}`; lines.push(line) }
+  const technical = document.createElement('span')
+  technical.className = 'technical'
+  technical.textContent = `minecraft:${item.name} · ×${item.count}`
+  lines.push(technical)
+  el['item-tooltip'].replaceChildren(...lines)
+  el['item-tooltip'].hidden = false
+  positionItemTooltip(event)
+}
+
+function positionItemTooltip(event) {
+  if (el['item-tooltip'].hidden) return
+  const x = Number(event.clientX) || event.currentTarget?.getBoundingClientRect().right || 0
+  const y = Number(event.clientY) || event.currentTarget?.getBoundingClientRect().top || 0
+  const width = el['item-tooltip'].offsetWidth
+  const height = el['item-tooltip'].offsetHeight
+  const dialog = el['item-tooltip'].parentElement?.matches('dialog') ? el['item-tooltip'].parentElement.getBoundingClientRect() : null
+  const bounds = dialog || { left: 0, top: 0, right: innerWidth, bottom: innerHeight }
+  el['item-tooltip'].style.left = `${Math.max(bounds.left + 8, Math.min(x + 14, bounds.right - width - 8))}px`
+  el['item-tooltip'].style.top = `${Math.max(bounds.top + 8, Math.min(y + 14, bounds.bottom - height - 8))}px`
+}
+
+function hideItemTooltip() { el['item-tooltip'].hidden = true }
+
+function formatMinecraftName(value) { return String(value || '').replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()) }
+
+function romanNumeral(value) {
+  const known = ['', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X']
+  return known[value] || String(value)
+}
+
+function enchantmentDetail(enchant) {
+  const name = String(enchant?.name || '').replace(/^minecraft:/, '')
+  const level = Math.max(1, Number(enchant?.level) || 1)
+  const [maximum, description] = ENCHANTMENT_DETAILS[name] || [null, 'Enchanted item effect.']
+  return {
+    level,
+    maximum,
+    description: typeof description === 'function' ? description(level) : description,
+    curse: name.includes('curse')
+  }
+}
+
+function formatEffectNumber(value) { return Number.isInteger(value) ? String(value) : Number(value).toFixed(1) }
+
+function appendLoreSegments(container, segments) {
+  for (const segment of segments) {
+    const part = document.createElement('span')
+    part.textContent = String(segment.text || '')
+    if (/^#[0-9a-f]{6}$/i.test(segment.color || '')) part.style.color = segment.color
+    if (segment.bold) part.style.fontWeight = '700'
+    if (segment.italic === false) part.style.fontStyle = 'normal'
+    else if (segment.italic) part.style.fontStyle = 'italic'
+    const decorations = [segment.underlined && 'underline', segment.strikethrough && 'line-through'].filter(Boolean)
+    if (decorations.length) part.style.textDecoration = decorations.join(' ')
+    container.append(part)
+  }
 }
 
 function updateInventoryActions(canInteract = ['online', 'connected'].includes(getStatus(state.selectedId).status)) {
   const telemetry = state.telemetry.get(state.selectedId)
   const item = telemetry?.inventory?.find((entry) => entry.slot === state.selectedInventorySlot)
-  el['drop-selected'].disabled = !canInteract || !item
-  el['drop-selected'].textContent = item ? `Drop ${item.count} × ${item.displayName}` : 'Drop selected stack'
+  const locked = item && isSelectedAccountSlotLocked(item.slot)
+  el['drop-selected'].disabled = !canInteract || !item || locked
+  el['drop-selected'].textContent = 'Drop'
+  el['drop-selected'].title = item ? locked ? `${item.displayName} is locked` : `Drop ${item.count} × ${item.displayName}` : 'Select a stack to drop'
+  el['lock-selected'].disabled = !item
+  el['lock-selected'].textContent = locked ? 'Unlock' : 'Lock'
+  el['lock-selected'].title = item ? `${locked ? 'Unlock' : 'Lock'} ${item.displayName}` : 'Select a stack to lock'
+  el['hold-selected'].disabled = !canInteract || !item
+  el['equip-selected'].disabled = !canInteract || !item
+}
+
+async function moveInventoryItem(sourceSlot, destinationSlot) {
+  if (sourceSlot === destinationSlot) { state.movingInventorySlot = null; renderTelemetry(); return }
+  hideItemTooltip()
+  try {
+    const result = await api.moveInventorySlot(state.selectedId, sourceSlot, destinationSlot)
+    const account = selectedAccount()
+    if (account && result.account) Object.assign(account, result.account)
+    state.selectedInventorySlot = result.targetSlot
+    state.movingInventorySlot = null
+    toast(`Moved item to slot ${result.targetSlot}.`)
+  } catch (error) { toast(cleanError(error), 'error') }
+  renderTelemetry()
+}
+
+async function holdSelectedItem() { await equipOrHoldSelected('hand') }
+
+async function equipSelectedItem() { await equipOrHoldSelected(el['equip-destination'].value) }
+
+async function equipOrHoldSelected(destination) {
+  const slot = state.selectedInventorySlot
+  if (slot == null) return
+  hideItemTooltip()
+  try {
+    const result = await api.equipInventoryItem(state.selectedId, slot, destination)
+    const account = selectedAccount()
+    if (account && result.account) Object.assign(account, result.account)
+    state.selectedInventorySlot = result.targetSlot
+    state.movingInventorySlot = null
+    toast(result.destination === 'hand' ? 'Selected item is now held.' : `Equipped to ${formatMinecraftName(result.destination)}.`)
+  } catch (error) { toast(cleanError(error), 'error') }
+  renderTelemetry()
+}
+
+async function toggleSelectedItemLock() {
+  const account = selectedAccount()
+  const slot = state.selectedInventorySlot
+  if (!account || slot == null) return
+  const locked = !isSelectedAccountSlotLocked(slot)
+  el['lock-selected'].disabled = true
+  try {
+    const saved = await api.setItemLock(account.id, slot, locked)
+    Object.assign(account, saved)
+    toast(locked ? 'Item stack locked.' : 'Item stack unlocked.')
+  } catch (error) { toast(cleanError(error), 'error') }
+  renderTelemetry()
+}
+
+function isSelectedAccountSlotLocked(slot) {
+  return (selectedAccount()?.lockedInventorySlots || []).includes(Number(slot))
+}
+
+function formatSlotType(item) {
+  return item.slotType && item.slotType !== 'inventory' ? item.slotType : `slot ${item.slot}`
+}
+
+function formatContainerType(type) {
+  return String(type || 'chest').replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
 }
 
 async function dropSelectedStack() {
@@ -605,15 +927,14 @@ function renderMacroPad(canInteract = ['online', 'connected'].includes(getStatus
 function openMacroEditor() {
   el['macro-rows'].replaceChildren()
   for (const macro of state.settings.macros || []) addMacroRow(macro)
-  el['macro-editor'].hidden = false
-  el['manage-macros'].setAttribute('aria-expanded', 'true')
+  el['macro-menu'].hidePopover?.()
   if (!state.settings.macros?.length) addMacroRow()
+  if (!el['macro-dialog'].open) el['macro-dialog'].showModal()
   el['macro-rows'].querySelector('input')?.focus()
 }
 
 function closeMacroEditor() {
-  el['macro-editor'].hidden = true
-  el['manage-macros'].setAttribute('aria-expanded', 'false')
+  if (el['macro-dialog'].open) el['macro-dialog'].close()
 }
 
 function addMacroRow(macro = {}) {
@@ -658,7 +979,10 @@ async function saveMacros() {
 function handleBotEvent({ type, id, payload }) {
   if (type === 'status') {
     state.statuses.set(id, payload)
-    if (!['online', 'connected'].includes(payload.status)) releaseAllManualInputs(id)
+    if (!['online', 'connected'].includes(payload.status)) {
+      releaseAllManualInputs(id)
+      state.serverWindows.delete(id)
+    }
     renderAccountList()
     if (id === state.selectedId) renderStatus(payload)
   }
@@ -670,6 +994,11 @@ function handleBotEvent({ type, id, payload }) {
   if (type === 'telemetry') {
     state.telemetry.set(id, payload)
     if (id === state.selectedId) renderTelemetry()
+  }
+  if (type === 'window') {
+    if (payload.open) state.serverWindows.set(id, payload)
+    else state.serverWindows.delete(id)
+    if (id === state.selectedId) renderServerWindow()
   }
   if (type === 'version') {
     state.resolvedVersions.set(id, payload.version)
@@ -704,6 +1033,43 @@ function handleBotEvent({ type, id, payload }) {
   }
 }
 
+function renderServerWindow() {
+  const menu = state.serverWindows.get(state.selectedId)
+  if (!menu) {
+    if (el['server-window-dialog'].open) el['server-window-dialog'].close()
+    return
+  }
+  el['server-window-title'].textContent = menu.title || 'Server menu'
+  const slots = new Map((menu.slots || []).map((item) => [item.slot, item]))
+  const highestSlot = Math.max(-1, ...slots.keys()) + 1
+  const size = Math.max(highestSlot, Math.min(Number(menu.size) || 0, 256))
+  el['server-window-grid'].replaceChildren(...Array.from({ length: size }, (_, slotNumber) => {
+    const item = slots.get(slotNumber)
+    if (!item) {
+      const empty = document.createElement('span')
+      empty.className = 'minecraft-slot empty server-window-empty'
+      empty.setAttribute('aria-hidden', 'true')
+      return empty
+    }
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.className = 'minecraft-slot server-window-slot'
+    button.setAttribute('aria-label', `${itemTooltipName(item)}, server slot ${item.slot}`)
+    button.append(createSlotContents(item))
+    bindItemTooltip(button, item)
+    button.addEventListener('click', () => run(() => api.clickWindowSlot(state.selectedId, item.slot)))
+    return button
+  }))
+  if (!el['server-window-dialog'].open) el['server-window-dialog'].showModal()
+}
+
+async function closeServerWindow() {
+  const id = state.selectedId
+  if (!id) return
+  try { await api.closeServerWindow(id) }
+  catch (error) { toast(cleanError(error), 'error') }
+}
+
 async function openSettingsDialog() {
   try {
     const settings = await api.getSettings()
@@ -735,16 +1101,66 @@ async function saveSettings() {
 
 function applyUiScale(value) {
   const scale = Math.max(75, Math.min(Number(value) || 100, 125))
+  if (el['quick-scale-value']) el['quick-scale-value'].textContent = `${scale}%`
+  if (el['quick-scale']) el['quick-scale'].value = scale
+  if (el['quick-scale-number']) el['quick-scale-number'].value = scale
   api.setUiScale(scale)
+  requestAnimationFrame(() => applyPanelLayout(state.settings))
+}
+
+function previewQuickScale(value) {
+  const scale = Math.max(75, Math.min(Number(value) || 100, 125))
+  state.settings.uiScale = scale
+  el['ui-scale'].value = scale
+  el['ui-scale-value'].textContent = `${scale}%`
+  applyUiScale(scale)
+}
+
+function previewTypedScale(value) {
+  const scale = Number(value)
+  if (!Number.isFinite(scale) || scale < 75 || scale > 125) return
+  previewQuickScale(scale)
+}
+
+async function saveQuickScale(value) {
+  const scale = Math.max(75, Math.min(Number(value) || 100, 125))
+  state.settings.uiScale = scale
+  el['ui-scale'].value = scale
+  el['ui-scale-value'].textContent = `${scale}%`
+  applyUiScale(scale)
+  el['display-menu'].hidePopover?.()
+  try { state.settings = await api.saveSettings({ ...state.settings }) } catch (error) { toast(`Scale was not saved: ${cleanError(error)}`, 'error') }
+}
+
+function toggleSidebar() {
+  const collapsed = document.querySelector('.app-shell').classList.toggle('sidebar-collapsed')
+  el['toggle-sidebar'].textContent = collapsed ? '›' : '‹'
+  el['toggle-sidebar'].setAttribute('aria-expanded', String(!collapsed))
+  el['toggle-sidebar'].title = collapsed ? 'Expand accounts sidebar' : 'Collapse accounts sidebar'
+  requestAnimationFrame(() => applyPanelLayout(state.settings))
+}
+
+function toggleSection(button) {
+  const target = document.getElementById(button.dataset.collapseTarget)
+  if (!target) return
+  const collapsed = target.classList.toggle('collapsed')
+  button.textContent = collapsed ? '⌄' : '⌃'
+  button.setAttribute('aria-expanded', String(!collapsed))
+  button.title = `${collapsed ? 'Expand' : 'Collapse'} ${target.getAttribute('aria-labelledby')?.replace('-title', '') || 'section'}`
 }
 
 function applyPanelLayout(settings = state.settings) {
   const sidePanelWidth = Math.max(240, Math.min(Number(settings.sidePanelWidth) || 300, 520))
-  const inventoryHeight = Math.max(minimumInventoryHeight(), Math.min(Number(settings.inventoryHeight) || 112, 360))
+  const minimum = minimumInventoryHeight()
+  const dashboardHeight = el.dashboard?.clientHeight || document.querySelector('.main-content')?.clientHeight || innerHeight
+  const reservedWorkspace = innerHeight <= 680 ? 190 : 285
+  const chromeHeight = (document.querySelector('.topbar')?.offsetHeight || 46) + (el['status-banner']?.offsetHeight || 52) + 40
+  const maximum = Math.max(minimum, Math.min(360, Math.floor(dashboardHeight * 0.34), dashboardHeight - chromeHeight - reservedWorkspace))
+  const inventoryHeight = Math.max(minimum, Math.min(Number(settings.inventoryHeight) || 220, maximum))
   state.settings.sidePanelWidth = sidePanelWidth
   state.settings.inventoryHeight = inventoryHeight
   document.documentElement.style.setProperty('--side-panel-width', `${sidePanelWidth}px`)
-  document.documentElement.style.setProperty('--inventory-height', `${inventoryHeight}px`)
+  document.documentElement.style.setProperty('--inventory-height', `${state.inventoryCollapsed ? 58 : inventoryHeight}px`)
   el['column-resizer'].setAttribute('aria-valuetext', `Controls ${sidePanelWidth} pixels wide`)
   el['inventory-resizer'].setAttribute('aria-valuetext', `Inventory ${inventoryHeight} pixels high`)
 }
@@ -758,7 +1174,9 @@ function bindPanelResizers() {
   const resizeInventory = (inventoryHeight) => {
     const dashboardHeight = el.dashboard?.clientHeight || 700
     const minimum = minimumInventoryHeight()
-    const maximum = Math.max(minimum, Math.min(360, dashboardHeight - 260))
+    const reservedWorkspace = innerHeight <= 680 ? 190 : 285
+    const chromeHeight = (document.querySelector('.topbar')?.offsetHeight || 46) + (el['status-banner']?.offsetHeight || 52) + 40
+    const maximum = Math.max(minimum, Math.min(360, Math.floor(dashboardHeight * 0.34), dashboardHeight - chromeHeight - reservedWorkspace))
     state.settings.inventoryHeight = Math.max(minimum, Math.min(inventoryHeight, maximum))
     applyPanelLayout(state.settings)
   }
@@ -768,15 +1186,23 @@ function bindPanelResizers() {
     keys: { ArrowLeft: 1, ArrowRight: -1 }
   })
   bindSplitter(el['inventory-resizer'], {
-    axis: 'y', value: () => state.settings.inventoryHeight || 112,
+    axis: 'y', value: () => state.settings.inventoryHeight || 220,
     resize: (start, delta) => resizeInventory(start - delta),
     keys: { ArrowUp: 1, ArrowDown: -1 }
   })
 }
 
 function minimumInventoryHeight() {
-  const headerHeight = document.querySelector('.inventory-header')?.scrollHeight || 36
-  return Math.max(84, Math.min(220, Math.ceil(headerHeight) + 48))
+  return matchMedia('(max-width: 960px)').matches || innerHeight <= 680 ? 120 : 150
+}
+
+function toggleInventory() {
+  state.inventoryCollapsed = !state.inventoryCollapsed
+  el.dashboard.classList.toggle('inventory-collapsed', state.inventoryCollapsed)
+  el['toggle-inventory'].textContent = state.inventoryCollapsed ? 'Expand' : 'Collapse'
+  el['toggle-inventory'].setAttribute('aria-expanded', String(!state.inventoryCollapsed))
+  el['inventory-resizer'].hidden = state.inventoryCollapsed
+  applyPanelLayout(state.settings)
 }
 
 function observePanelFit() {
@@ -784,12 +1210,10 @@ function observePanelFit() {
   if (!inventoryHeader || typeof ResizeObserver !== 'function') return
   const observer = new ResizeObserver(() => {
     if (el.dashboard.hidden) return
-    const minimum = minimumInventoryHeight()
-    if ((state.settings.inventoryHeight || 112) >= minimum) return
-    state.settings.inventoryHeight = minimum
     applyPanelLayout(state.settings)
   })
   observer.observe(inventoryHeader)
+  window.addEventListener('resize', () => requestAnimationFrame(() => applyPanelLayout(state.settings)))
   requestAnimationFrame(() => applyPanelLayout(state.settings))
 }
 
@@ -816,7 +1240,7 @@ function bindSplitter(handle, config) {
   handle.addEventListener('pointerup', finish)
   handle.addEventListener('pointercancel', finish)
   handle.addEventListener('dblclick', () => {
-    config.resize(config.axis === 'x' ? 300 : 112, 0)
+    config.resize(config.axis === 'x' ? 300 : 280, 0)
     savePanelLayout()
   })
   handle.addEventListener('keydown', (event) => {
