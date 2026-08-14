@@ -985,7 +985,10 @@ function applyUiScale(value) {
 
 function applyPanelLayout(settings = state.settings) {
   const sidePanelWidth = Math.max(240, Math.min(Number(settings.sidePanelWidth) || 300, 520))
-  const inventoryHeight = Math.max(minimumInventoryHeight(), Math.min(Number(settings.inventoryHeight) || 400, 480))
+  const minimum = minimumInventoryHeight()
+  const dashboardHeight = el.dashboard?.clientHeight || document.querySelector('.main-content')?.clientHeight || innerHeight
+  const maximum = Math.max(minimum, Math.min(480, dashboardHeight - 260))
+  const inventoryHeight = Math.max(minimum, Math.min(Number(settings.inventoryHeight) || 400, maximum))
   state.settings.sidePanelWidth = sidePanelWidth
   state.settings.inventoryHeight = inventoryHeight
   document.documentElement.style.setProperty('--side-panel-width', `${sidePanelWidth}px`)
@@ -1021,6 +1024,7 @@ function bindPanelResizers() {
 
 function minimumInventoryHeight() {
   const headerHeight = document.querySelector('.inventory-header')?.scrollHeight || 36
+  if (matchMedia('(max-width: 960px)').matches || innerHeight <= 680) return Math.max(130, Math.min(240, Math.ceil(headerHeight) + 72))
   return Math.max(240, Math.min(420, Math.ceil(headerHeight) + 240))
 }
 
@@ -1029,12 +1033,10 @@ function observePanelFit() {
   if (!inventoryHeader || typeof ResizeObserver !== 'function') return
   const observer = new ResizeObserver(() => {
     if (el.dashboard.hidden) return
-    const minimum = minimumInventoryHeight()
-    if ((state.settings.inventoryHeight || 400) >= minimum) return
-    state.settings.inventoryHeight = minimum
     applyPanelLayout(state.settings)
   })
   observer.observe(inventoryHeader)
+  window.addEventListener('resize', () => requestAnimationFrame(() => applyPanelLayout(state.settings)))
   requestAnimationFrame(() => applyPanelLayout(state.settings))
 }
 
@@ -1061,7 +1063,7 @@ function bindSplitter(handle, config) {
   handle.addEventListener('pointerup', finish)
   handle.addEventListener('pointercancel', finish)
   handle.addEventListener('dblclick', () => {
-    config.resize(config.axis === 'x' ? 300 : 112, 0)
+    config.resize(config.axis === 'x' ? 300 : 280, 0)
     savePanelLayout()
   })
   handle.addEventListener('keydown', (event) => {

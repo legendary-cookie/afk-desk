@@ -130,6 +130,24 @@ def run() -> None:
         desktop = str(Path(gettempdir()) / "afkdesk-ui-desktop.png")
         page.screenshot(path=desktop)
 
+        compact = browser.new_page(viewport={"width": 860, "height": 600})
+        compact.add_init_script(STUB)
+        compact.goto(URL, wait_until="domcontentloaded")
+        compact.locator("#dashboard:not([hidden])").wait_for()
+        assert compact.locator("#inventory-resizer").is_visible()
+        before_height = compact.locator(".inventory-panel").bounding_box()["height"]
+        compact_handle = compact.locator("#inventory-resizer").bounding_box()
+        compact.mouse.move(compact_handle["x"] + compact_handle["width"] / 2, compact_handle["y"] + compact_handle["height"] / 2)
+        compact.mouse.down()
+        compact.mouse.move(compact_handle["x"], compact_handle["y"] + 70)
+        compact.mouse.up()
+        after_height = compact.locator(".inventory-panel").bounding_box()["height"]
+        assert after_height < before_height, (before_height, after_height)
+        assert compact.locator(".console-panel").bounding_box()["height"] >= 120
+        assert compact.evaluate("document.body.scrollHeight <= innerHeight")
+        compact_path = str(Path(gettempdir()) / "afkdesk-ui-compact.png")
+        compact.screenshot(path=compact_path)
+
         narrow = browser.new_page(viewport={"width": 700, "height": 800})
         narrow.add_init_script(STUB)
         narrow.goto(URL, wait_until="domcontentloaded")
@@ -139,6 +157,7 @@ def run() -> None:
         narrow.screenshot(path=narrow_path, full_page=True)
         browser.close()
         print(desktop)
+        print(compact_path)
         print(narrow_path)
 
 

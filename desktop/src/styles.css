@@ -17,7 +17,7 @@
   --radius-sm: 6px;
   --radius-md: 10px;
   --side-panel-width: 300px;
-  --inventory-height: 112px;
+  --inventory-height: 400px;
   --shadow: 0 18px 60px rgb(0 0 0 / 45%);
   font-family: Inter, "Segoe UI", system-ui, sans-serif;
 }
@@ -298,14 +298,18 @@ dialog::backdrop { background: rgb(3 5 8 / 78%); backdrop-filter: blur(3px); }
 .toast.error { border-color: rgb(241 110 116 / 45%); }
 
 @media (max-width: 960px) {
-  .app-shell { grid-template-columns: 220px minmax(0,1fr); }
-  .main-content { overflow-y: auto; padding: 22px; }
-  .dashboard { display: block; height: auto; }
-  .workspace-grid { grid-template-columns: 1fr; }
-  .layout-resizer { display: none; }
-  .console-panel { height: min(620px, calc(100vh - 140px)); min-height: 430px; }
-  .controls-column { grid-template-columns: 1fr 1fr; grid-template-rows: auto; }
-  .inventory-panel { max-height: 240px; }
+  .app-shell { grid-template-columns: 200px minmax(0,1fr); }
+  .sidebar { padding: 14px 10px 12px; }
+  .main-content { height: 100vh; overflow: hidden; padding: 12px 14px; }
+  .dashboard { display: grid; height: 100%; }
+  .workspace-grid { grid-template-columns: minmax(260px, 1fr) 10px clamp(220px, 34%, 260px); }
+  .layout-resizer { display: block; }
+  .console-panel { height: 100%; min-height: 0; }
+  .controls-column { grid-template-columns: 1fr; grid-template-rows: auto auto; }
+  .inventory-panel { max-height: none; }
+  .inventory-header { flex-wrap: nowrap; gap: 8px; overflow-x: auto; scrollbar-width: thin; }
+  .inventory-toolbar { width: max-content; flex-wrap: nowrap; justify-content: flex-start; }
+  .inventory-toolbar .compact-toggle, .inventory-toolbar .button { flex: 0 0 auto; white-space: nowrap; }
 }
 
 @media (max-width: 700px) {
@@ -316,9 +320,15 @@ dialog::backdrop { background: rgb(3 5 8 / 78%); backdrop-filter: blur(3px); }
   .account-list { max-height: 180px; }
   .privacy-note { display: none; }
   .main-content { height: auto; overflow: visible; padding: 18px 14px; }
+  .dashboard { display: block; height: auto; }
+  .workspace-grid { grid-template-columns: 1fr; }
+  .layout-resizer { display: none; }
   .topbar { align-items: center; }
   .console-panel { height: min(560px, calc(100vh - 140px)); min-height: 400px; }
   .controls-column { grid-template-columns: 1fr; }
+  .inventory-panel { max-height: 300px; }
+  .inventory-header { flex-wrap: wrap; overflow-x: visible; }
+  .inventory-toolbar { width: 100%; flex-wrap: wrap; }
   .check-grid { grid-template-columns: 1fr; }
   .generated-link { grid-template-columns: 1fr; }
   .action-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
