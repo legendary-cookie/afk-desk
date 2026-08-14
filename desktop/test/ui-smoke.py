@@ -107,6 +107,7 @@ def run() -> None:
         sword.hover()
         tooltip = page.locator("#item-tooltip").inner_text()
         assert "Sharpness V" in tooltip and "Bound to town" in tooltip, tooltip
+        assert "Increases melee damage by 3" in tooltip and "Level 5 of 5" in tooltip, tooltip
         sword.click()
         page.locator("#hold-selected").click()
         assert page.evaluate("window.__equips") == [[36, "hand"]]

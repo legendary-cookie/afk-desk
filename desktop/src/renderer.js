@@ -10,6 +10,53 @@ const KEY_CONTROLS = {
 
 const activeManualInputs = new Map()
 
+const ENCHANTMENT_DETAILS = {
+  aqua_affinity: [1, 'Speeds up underwater mining.'],
+  bane_of_arthropods: [5, (level) => `Adds ${formatEffectNumber(level * 2.5)} damage to arthropods and slows them.`],
+  binding_curse: [1, 'Prevents equipped armor from being removed.'],
+  blast_protection: [4, 'Reduces explosion damage and knockback.'],
+  breach: [4, (level) => `Reduces the target's effective armor by ${level * 15}%.`],
+  channeling: [1, 'Summons lightning when a thrown trident hits during a thunderstorm.'],
+  curse_of_binding: [1, 'Prevents equipped armor from being removed.'],
+  curse_of_vanishing: [1, 'Causes the item to disappear when its holder dies.'],
+  density: [5, (level) => `Adds ${formatEffectNumber(level * 0.5)} damage per block fallen to mace smash attacks.`],
+  depth_strider: [3, 'Increases underwater movement speed.'],
+  efficiency: [5, 'Increases mining speed.'],
+  feather_falling: [4, 'Reduces fall damage.'],
+  fire_aspect: [2, 'Sets melee targets on fire.'],
+  fire_protection: [4, 'Reduces fire damage and burn time.'],
+  flame: [1, 'Sets arrows on fire.'],
+  fortune: [3, 'Increases certain block drops.'],
+  frost_walker: [2, 'Freezes nearby water while walking.'],
+  impaling: [5, 'Increases trident damage against aquatic targets.'],
+  infinity: [1, 'Allows normal arrows to be fired without consuming them.'],
+  knockback: [2, 'Increases melee knockback.'],
+  looting: [3, 'Increases mob drops.'],
+  loyalty: [3, 'Returns a thrown trident to its owner.'],
+  luck_of_the_sea: [3, 'Improves fishing treasure quality.'],
+  lure: [3, 'Reduces the wait for a fish to bite.'],
+  mending: [1, 'Uses collected experience to repair the item.'],
+  multishot: [1, 'Fires three projectiles while consuming one.'],
+  piercing: [4, (level) => `Lets crossbow projectiles pass through up to ${level} target${level === 1 ? '' : 's'}.`],
+  power: [5, 'Increases arrow damage.'],
+  projectile_protection: [4, 'Reduces projectile damage.'],
+  protection: [4, 'Reduces most incoming damage.'],
+  punch: [2, 'Increases arrow knockback.'],
+  quick_charge: [3, 'Reduces crossbow loading time.'],
+  respiration: [3, 'Extends underwater breathing time.'],
+  riptide: [3, 'Launches the user with a wet thrown trident.'],
+  sharpness: [5, (level) => `Increases melee damage by ${formatEffectNumber(0.5 * level + 0.5)}.`],
+  silk_touch: [1, 'Makes certain blocks drop themselves.'],
+  smite: [5, (level) => `Adds ${formatEffectNumber(level * 2.5)} damage to undead targets.`],
+  soul_speed: [3, 'Increases movement speed on soul sand and soul soil.'],
+  sweeping_edge: [3, 'Increases sweeping attack damage.'],
+  swift_sneak: [3, 'Increases movement speed while sneaking.'],
+  thorns: [3, 'May damage attackers when the wearer is hit.'],
+  unbreaking: [3, 'Reduces the chance that durability is consumed.'],
+  vanishing_curse: [1, 'Causes the item to disappear when its holder dies.'],
+  wind_burst: [3, 'Launches the attacker upward after a mace smash attack.']
+}
+
 const state = {
   accounts: [],
   selectedId: null,
@@ -406,7 +453,19 @@ function showItemTooltip(item, event) {
   const title = document.createElement('strong')
   title.textContent = itemTooltipName(item)
   lines.push(title)
-  for (const enchant of item.enchants || []) { const line = document.createElement('span'); line.className = 'enchant'; line.textContent = `${formatMinecraftName(enchant.name)} ${romanNumeral(enchant.level)}`; lines.push(line) }
+  for (const enchant of item.enchants || []) {
+    const detail = enchantmentDetail(enchant)
+    const line = document.createElement('span')
+    line.className = `enchant${detail.curse ? ' curse' : ''}`
+    line.textContent = `${formatMinecraftName(enchant.name)} ${romanNumeral(enchant.level)}`
+    const effect = document.createElement('span')
+    effect.className = 'enchant-detail'
+    effect.textContent = detail.description
+    const level = document.createElement('span')
+    level.className = 'enchant-level'
+    level.textContent = detail.maximum ? `Level ${detail.level} of ${detail.maximum}` : `Level ${detail.level}`
+    lines.push(line, effect, level)
+  }
   for (const loreText of item.lore || []) { const line = document.createElement('span'); line.className = 'lore'; line.textContent = loreText; lines.push(line) }
   if (item.durability) { const line = document.createElement('span'); line.textContent = `Durability: ${item.durability.remaining} / ${item.durability.maximum}`; lines.push(line) }
   const technical = document.createElement('span')
@@ -438,6 +497,20 @@ function romanNumeral(value) {
   const known = ['', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X']
   return known[value] || String(value)
 }
+
+function enchantmentDetail(enchant) {
+  const name = String(enchant?.name || '').replace(/^minecraft:/, '')
+  const level = Math.max(1, Number(enchant?.level) || 1)
+  const [maximum, description] = ENCHANTMENT_DETAILS[name] || [null, 'Enchanted item effect.']
+  return {
+    level,
+    maximum,
+    description: typeof description === 'function' ? description(level) : description,
+    curse: name.includes('curse')
+  }
+}
+
+function formatEffectNumber(value) { return Number.isInteger(value) ? String(value) : Number(value).toFixed(1) }
 
 function updateInventoryActions(canInteract = ['online', 'connected'].includes(getStatus(state.selectedId).status)) {
   const telemetry = state.telemetry.get(state.selectedId)
