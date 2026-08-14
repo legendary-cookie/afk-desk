@@ -97,7 +97,7 @@ def run() -> None:
         assert page.evaluate("document.body.scrollHeight <= innerHeight")
         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
         assert page.locator("#macro-pad").is_visible()
-        page.evaluate("window.__botEvent({ type: 'telemetry', id: 'one', payload: { health: 20, food: 20, selectedHotbarSlot: 0, position: {x: 1, y: 64, z: 2}, dimension: 'overworld', nearestChest: { type: 'barrel', x: 2, y: 64, z: 2, distance: 1 }, inventory: [{ slot: 5, slotType: 'helmet', name: 'diamond_helmet', displayName: 'Diamond Helmet', count: 1, durability: { remaining: 350, maximum: 363, percent: 96 } }, { slot: 36, slotType: 'inventory', name: 'diamond_sword', displayName: 'Diamond Sword', customName: 'Town Blade', lore: ['Bound to town'], enchants: [{name: 'sharpness', level: 5}], count: 1, durability: { remaining: 1500, maximum: 1561, percent: 96 } }] } })")
+        page.evaluate("window.__botEvent({ type: 'telemetry', id: 'one', payload: { health: 20, food: 20, selectedHotbarSlot: 0, position: {x: 1, y: 64, z: 2}, dimension: 'overworld', nearestChest: { type: 'barrel', x: 2, y: 64, z: 2, distance: 1 }, inventory: [{ slot: 5, slotType: 'helmet', name: 'diamond_helmet', displayName: 'Diamond Helmet', count: 1, durability: { remaining: 350, maximum: 363, percent: 96 } }, { slot: 36, slotType: 'inventory', name: 'diamond_sword', displayName: 'Diamond Sword', customName: 'Town Blade', lore: ['Bound to town', 'Soulbound'], loreSegments: [[{text: 'Bound ', color: '#ffaa00'}, {text: 'to town', color: '#ffaa00'}], [{text: 'Soulbound', color: '#aa00aa'}]], enchants: [{name: 'sharpness', level: 5}], count: 1, durability: { remaining: 1500, maximum: 1561, percent: 96 } }] } })")
         helmet = page.locator('.minecraft-slot[aria-label^="Diamond Helmet"]')
         helmet.hover()
         assert "Durability: 350 / 363" in page.locator("#item-tooltip").inner_text()
@@ -108,6 +108,8 @@ def run() -> None:
         tooltip = page.locator("#item-tooltip").inner_text()
         assert "Sharpness V" in tooltip and "Bound to town" in tooltip, tooltip
         assert "Increases melee damage by 3" in tooltip and "Level 5 of 5" in tooltip, tooltip
+        assert "LORE" in tooltip and "Soulbound" in tooltip, tooltip
+        assert page.locator("#item-tooltip .lore span").first.evaluate("element => getComputedStyle(element).color") == "rgb(255, 170, 0)"
         sword.click()
         page.locator("#hold-selected").click()
         assert page.evaluate("window.__equips") == [[36, "hand"]]

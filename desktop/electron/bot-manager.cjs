@@ -1201,6 +1201,12 @@ function buildTelemetry(bot, nearestChest = null, environmentalMovement, fluidMo
   }
 }
 
+const NAMED_CHAT_COLORS = {
+  black: '#000000', dark_blue: '#0000aa', dark_green: '#00aa00', dark_aqua: '#00aaaa', dark_red: '#aa0000',
+  dark_purple: '#aa00aa', gold: '#ffaa00', gray: '#aaaaaa', dark_gray: '#555555', blue: '#5555ff',
+  green: '#55ff55', aqua: '#55ffff', red: '#ff5555', light_purple: '#ff55ff', yellow: '#ffff55', white: '#ffffff'
+}
+
 function itemDurability(item) {
   const maximum = Number(item?.maxDurability)
   if (!Number.isFinite(maximum) || maximum <= 0) return {}
@@ -1212,11 +1218,14 @@ function itemDurability(item) {
 function itemTooltipDetails(item) {
   let customName = ''
   let lore = []
+  let loreSegments = []
   let enchants = []
   try { customName = String(extractText(item?.customName) || '').slice(0, 160) } catch {}
   try {
     const source = Array.isArray(item?.customLore) ? item.customLore : item?.customLore ? [item.customLore] : []
-    lore = source.map((line) => String(extractText(line) || line || '').slice(0, 200)).filter(Boolean).slice(0, 20)
+    const details = source.map(loreLineDetails).filter((line) => line.text).slice(0, 20)
+    lore = details.map((line) => line.text)
+    loreSegments = details.map((line) => line.segments)
   } catch {}
   try {
     enchants = (item?.enchants || []).map((enchant) => ({
@@ -1224,7 +1233,46 @@ function itemTooltipDetails(item) {
       level: Math.max(1, Math.min(Number(enchant?.lvl) || 1, 255))
     })).filter((enchant) => enchant.name).slice(0, 20)
   } catch {}
-  return { ...(customName ? { customName } : {}), ...(lore.length ? { lore } : {}), ...(enchants.length ? { enchants } : {}) }
+  return { ...(customName ? { customName } : {}), ...(lore.length ? { lore, loreSegments } : {}), ...(enchants.length ? { enchants } : {}) }
+}
+
+function loreLineDetails(value) {
+  const parsed = parseComponentValue(value)
+  const text = String(extractText(parsed) || extractText(value) || '').replaceAll('\r', '').slice(0, 400)
+  const segments = componentTextSegments(parsed).filter((segment) => segment.text).slice(0, 64)
+  return { text, segments: segments.length ? segments : [{ text }] }
+}
+
+function parseComponentValue(value) {
+  if (typeof value !== 'string') return value
+  try { return JSON.parse(value) } catch { return value }
+}
+
+function componentTextSegments(value, inherited = {}) {
+  if (typeof value === 'string') return parseMinecraftFormatting(value).map((segment) => ({ ...inherited, ...segment }))
+  if (Array.isArray(value)) return value.flatMap((part) => componentTextSegments(part, inherited))
+  if (!value || typeof value !== 'object') return []
+  if (value.type === 'string') return componentTextSegments(value.value, inherited)
+  const source = value.type === 'compound' && value.value ? value.value : value
+  const style = { ...inherited }
+  const color = componentScalar(source.color)
+  if (/^#[0-9a-f]{6}$/i.test(color)) style.color = color.toLowerCase()
+  else if (NAMED_CHAT_COLORS[color]) style.color = NAMED_CHAT_COLORS[color]
+  for (const key of ['bold', 'italic', 'underlined', 'strikethrough']) {
+    const setting = componentScalar(source[key])
+    if (typeof setting === 'boolean') style[key] = setting
+  }
+  const segments = []
+  const text = componentScalar(source.text)
+  if (typeof text === 'string' && text) segments.push(...componentTextSegments(text, style))
+  const extra = source.extra?.value?.value || source.extra?.value || source.extra
+  if (Array.isArray(extra)) segments.push(...extra.flatMap((part) => componentTextSegments(part, style)))
+  return segments
+}
+
+function componentScalar(value) {
+  if (value && typeof value === 'object' && 'value' in value) return value.value
+  return value
 }
 
 function playerInventorySlot(value) {

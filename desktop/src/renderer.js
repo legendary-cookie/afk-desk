@@ -466,7 +466,20 @@ function showItemTooltip(item, event) {
     level.textContent = detail.maximum ? `Level ${detail.level} of ${detail.maximum}` : `Level ${detail.level}`
     lines.push(line, effect, level)
   }
-  for (const loreText of item.lore || []) { const line = document.createElement('span'); line.className = 'lore'; line.textContent = loreText; lines.push(line) }
+  if (item.lore?.length) {
+    const heading = document.createElement('span')
+    heading.className = 'lore-heading'
+    heading.textContent = 'Lore'
+    lines.push(heading)
+  }
+  for (const [index, loreText] of (item.lore || []).entries()) {
+    const line = document.createElement('span')
+    line.className = 'lore'
+    const segments = item.loreSegments?.[index]
+    if (Array.isArray(segments) && segments.length) appendLoreSegments(line, segments)
+    else line.textContent = loreText
+    lines.push(line)
+  }
   if (item.durability) { const line = document.createElement('span'); line.textContent = `Durability: ${item.durability.remaining} / ${item.durability.maximum}`; lines.push(line) }
   const technical = document.createElement('span')
   technical.className = 'technical'
@@ -511,6 +524,20 @@ function enchantmentDetail(enchant) {
 }
 
 function formatEffectNumber(value) { return Number.isInteger(value) ? String(value) : Number(value).toFixed(1) }
+
+function appendLoreSegments(container, segments) {
+  for (const segment of segments) {
+    const part = document.createElement('span')
+    part.textContent = String(segment.text || '')
+    if (/^#[0-9a-f]{6}$/i.test(segment.color || '')) part.style.color = segment.color
+    if (segment.bold) part.style.fontWeight = '700'
+    if (segment.italic === false) part.style.fontStyle = 'normal'
+    else if (segment.italic) part.style.fontStyle = 'italic'
+    const decorations = [segment.underlined && 'underline', segment.strikethrough && 'line-through'].filter(Boolean)
+    if (decorations.length) part.style.textDecoration = decorations.join(' ')
+    container.append(part)
+  }
+}
 
 function updateInventoryActions(canInteract = ['online', 'connected'].includes(getStatus(state.selectedId).status)) {
   const telemetry = state.telemetry.get(state.selectedId)

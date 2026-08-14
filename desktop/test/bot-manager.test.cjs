@@ -311,7 +311,7 @@ test('builds a bounded player health, position, and inventory snapshot', () => {
 test('includes armor slots and remaining durability for equipment and inventory tools', () => {
   const bot = new FakeBot()
   const helmet = { slot: 5, name: 'diamond_helmet', displayName: 'Diamond Helmet', count: 1, maxDurability: 363, durabilityUsed: 13 }
-  const sword = { slot: 36, name: 'diamond_sword', displayName: 'Diamond Sword', customName: 'Town Blade', customLore: ['Bound to town'], enchants: [{ name: 'sharpness', lvl: 5 }], count: 1, maxDurability: 1561, durabilityUsed: 61 }
+  const sword = { slot: 36, name: 'diamond_sword', displayName: 'Diamond Sword', customName: 'Town Blade', customLore: ['{"text":"Bound ","color":"gold","extra":[{"text":"to town","italic":false}]}', '{"text":"Soulbound","color":"dark_purple"}'], enchants: [{ name: 'sharpness', lvl: 5 }], count: 1, maxDurability: 1561, durabilityUsed: 61 }
   bot.inventory.slots[5] = helmet
   bot.inventory.slots[36] = sword
   bot.inventory.items = () => [sword]
@@ -320,7 +320,7 @@ test('includes armor slots and remaining durability for equipment and inventory 
 
   assert.deepEqual(snapshot.inventory, [
     { slot: 5, slotType: 'helmet', name: 'diamond_helmet', displayName: 'Diamond Helmet', count: 1, durability: { remaining: 350, maximum: 363, percent: 96 } },
-    { slot: 36, slotType: 'inventory', name: 'diamond_sword', displayName: 'Diamond Sword', count: 1, durability: { remaining: 1500, maximum: 1561, percent: 96 }, customName: 'Town Blade', lore: ['Bound to town'], enchants: [{ name: 'sharpness', level: 5 }] }
+    { slot: 36, slotType: 'inventory', name: 'diamond_sword', displayName: 'Diamond Sword', count: 1, durability: { remaining: 1500, maximum: 1561, percent: 96 }, customName: 'Town Blade', lore: ['Bound to town', 'Soulbound'], loreSegments: [[{ text: 'Bound ', color: '#ffaa00' }, { text: 'to town', color: '#ffaa00', italic: false }], [{ text: 'Soulbound', color: '#aa00aa' }]], enchants: [{ name: 'sharpness', level: 5 }] }
   ])
 })
 
