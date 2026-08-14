@@ -119,7 +119,11 @@ def run() -> None:
         assert page.locator("#drop-selected").is_disabled()
         page.evaluate("window.__botEvent({ type: 'window', id: 'one', payload: { open: true, title: 'Town Menu', size: 9, slots: [{ slot: 0, name: 'emerald', displayName: 'Join Town', count: 1 }] } })")
         page.locator("#server-window-dialog").wait_for(state="visible")
-        page.get_by_role("button", name="Join Town").click()
+        menu_item = page.get_by_role("button", name="Join Town")
+        menu_item.hover()
+        assert page.evaluate("document.querySelector('#item-tooltip').parentElement.id") == "server-window-dialog"
+        assert page.locator("#item-tooltip").is_visible()
+        menu_item.click()
         assert page.evaluate("window.__windowClicks") == [0]
         page.locator("#close-server-window").click()
         page.locator("#server-window-dialog").wait_for(state="hidden")

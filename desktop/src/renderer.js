@@ -400,6 +400,8 @@ function bindItemTooltip(target, item) {
 }
 
 function showItemTooltip(item, event) {
+  const layer = event.currentTarget?.closest('dialog') || document.body
+  if (el['item-tooltip'].parentElement !== layer) layer.append(el['item-tooltip'])
   const lines = []
   const title = document.createElement('strong')
   title.textContent = itemTooltipName(item)
@@ -422,8 +424,10 @@ function positionItemTooltip(event) {
   const y = Number(event.clientY) || event.currentTarget?.getBoundingClientRect().top || 0
   const width = el['item-tooltip'].offsetWidth
   const height = el['item-tooltip'].offsetHeight
-  el['item-tooltip'].style.left = `${Math.max(8, Math.min(x + 14, innerWidth - width - 8))}px`
-  el['item-tooltip'].style.top = `${Math.max(8, Math.min(y + 14, innerHeight - height - 8))}px`
+  const dialog = el['item-tooltip'].parentElement?.matches('dialog') ? el['item-tooltip'].parentElement.getBoundingClientRect() : null
+  const bounds = dialog || { left: 0, top: 0, right: innerWidth, bottom: innerHeight }
+  el['item-tooltip'].style.left = `${Math.max(bounds.left + 8, Math.min(x + 14, bounds.right - width - 8))}px`
+  el['item-tooltip'].style.top = `${Math.max(bounds.top + 8, Math.min(y + 14, bounds.bottom - height - 8))}px`
 }
 
 function hideItemTooltip() { el['item-tooltip'].hidden = true }
