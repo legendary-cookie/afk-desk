@@ -10,7 +10,7 @@ test('desktop UI exposes cancellable account setup, settings, proxy, startup, an
     'open-settings', 'start-with-windows', 'connect-on-startup', 'proxy-enabled', 'proxy-type',
     'proxy-host', 'proxy-port', 'proxy-username', 'proxy-password', 'detail-health', 'detail-environment', 'detail-water',
     'detail-coordinates', 'detail-chest', 'inventory-grid', 'hold-selected', 'equip-destination', 'equip-selected', 'lock-selected', 'drop-selected', 'auto-deposit-toggle', 'auto-deposit-setting',
-    'server-window-dialog', 'server-window-title', 'server-window-grid', 'close-server-window',
+    'server-window-dialog', 'server-window-title', 'server-window-stage', 'server-window-art', 'server-window-grid', 'close-server-window',
     'anti-afk-min-delay', 'anti-afk-max-delay', 'anti-afk-duration', 'anti-afk-look-degrees',
     'anti-afk-walk-distance', 'anti-afk-jump', 'anti-afk-look', 'anti-afk-sneak', 'anti-afk-swing',
     'anti-afk-walk', 'environmental-movement', 'stagger-startup-connections', 'startup-connection-delay'
@@ -40,6 +40,14 @@ test('inventory and server menus use a Minecraft-style icon grid and hover toolt
   assert.match(script, /createInventorySection\('Hotbar'/)
   assert.match(script, /item\.enchants/)
   assert.match(script, /item\.lore/)
+  assert.match(script, /item\.resourceIcon/)
+  assert.match(script, /renderServerWindowArt/)
+  assert.match(css, /\.server-window-art\s*\{[^}]*image-rendering:\s*pixelated/s)
+  assert.match(css, /\.server-window-stage\.has-container-art\s*\{[^}]*--resource-art-width/s)
+  assert.match(css, /\.server-window-stage\.has-container-art \.server-window-grid\s*\{[^}]*top:\s*36px[^}]*left:\s*16px[^}]*repeat\(9,\s*32px\)/s)
+  assert.match(css, /\.server-window-stage\.has-container-art \.minecraft-slot\s*\{[^}]*width:\s*32px[^}]*background:\s*transparent/s)
+  assert.match(script, /pixiestudios_air\$\/i/)
+  assert.match(script, /opaqueCanvasBounds/)
 })
 
 test('chat, controls, and inventory expose independent persistent splitters', () => {

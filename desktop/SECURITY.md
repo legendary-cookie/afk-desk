@@ -9,4 +9,4 @@
 
 ## Known dependency advisory
 
-As of 2026-07-29, `npm audit --omit=dev` reports moderate `uuid` advisories through Mineflayer's Microsoft authentication dependency chain. npm offers only a forced downgrade to an obsolete, incompatible Mineflayer release. This is tracked pending an upstream compatible dependency update; no forced downgrade is applied.
+As of 2026-08-15, `npm audit --omit=dev` reports six moderate `uuid` advisories through Mineflayer's Microsoft authentication dependency chain. npm offers only a forced downgrade to an obsolete, incompatible Mineflayer release. This is tracked pending an upstream compatible dependency update; no forced downgrade is applied. AFK Desk 0.8.1 uses `adm-zip` 0.6.0, which removes the separate crafted-ZIP memory-allocation advisory found during resource-pack release review.

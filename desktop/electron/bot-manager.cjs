@@ -1,6 +1,7 @@
 const path = require('node:path')
 const { applyProtocolFixes } = require('./protocol-fixes.cjs')
 const { createProxyConnect } = require('./proxy-connect.cjs')
+const { ResourcePackLoader, normalizePackEvent } = require('./resource-pack.cjs')
 const {
   CONFIGURATION_PACKET_NAMES,
   installMovementPacketCompatibility,
@@ -36,7 +37,8 @@ class BotManager {
     scheduleAntiAfkTimer = setTimeout,
     clearAntiAfkTimer = clearTimeout,
     random = Math.random,
-    diagnose = () => {}
+    diagnose = () => {},
+    resourcePackLoader
   }) {
     this.profilesPath = profilesPath
     this.emit = emit
@@ -49,6 +51,7 @@ class BotManager {
     this.clearAntiAfkTimer = clearAntiAfkTimer
     this.random = random
     this.diagnose = diagnose
+    this.resourcePackLoader = resourcePackLoader || new ResourcePackLoader({ cacheDir: path.join(path.dirname(profilesPath), 'resource-packs') })
     this.sessions = new Map()
     this.reconnects = new Map()
     this.nextAutomaticServerSwitchAt = 0
@@ -75,6 +78,13 @@ class BotManager {
       checkTimeoutInterval: 45_000,
       onMsaCode: (code) => this.emit('login-code', account.id, normalizeLoginCode(code))
     })
+    if (!account.version && account.lastSuccessfulVersion) {
+      this.emit('log', account.id, {
+        kind: 'system',
+        message: `Auto version: using proven Minecraft ${account.lastSuccessfulVersion} for this server.`,
+        at: Date.now()
+      })
+    }
     installMovementPacketCompatibility(bot)
     installModernPlayerInputCompatibility(bot)
 
@@ -109,6 +119,7 @@ class BotManager {
       lastMovementDiagnosticAt: 0,
       identityKey: '',
       telemetryKey: '',
+      resourcePack: null,
       versionReported: false,
       versionConfirmed: false
     }
@@ -224,7 +235,7 @@ class BotManager {
 
     const emitTelemetry = () => {
       if (!this.sessions.has(account.id)) return
-      const snapshot = buildTelemetry(bot, session.nearestChest, session.account.environmentalMovement, session.fluidMotion)
+      const snapshot = buildTelemetry(bot, session.nearestChest, session.account.environmentalMovement, session.fluidMotion, session.resourcePack)
       const { at: _at, ...stableSnapshot } = snapshot
       const key = JSON.stringify(stableSnapshot)
       if (key === session.telemetryKey) return
@@ -247,9 +258,41 @@ class BotManager {
     bot.inventory?.on?.('updateSlot', emitTelemetry)
     bot.on('windowOpen', (window) => {
       if (session.depositing) return
-      const emitWindow = () => this.emit('window', account.id, buildWindowSnapshot(window, bot.registry, bot.__afkDeskEnchantmentsById))
+      const emitWindow = () => this.emit('window', account.id, buildWindowSnapshot(window, bot.registry, bot.__afkDeskEnchantmentsById, session.resourcePack))
       emitWindow()
+      const snapshot = buildWindowSnapshot(window, bot.registry, bot.__afkDeskEnchantmentsById, session.resourcePack)
+      this.diagnose({
+        event: 'server_window_open',
+        accountId: account.id,
+        title: snapshot.title,
+        size: snapshot.size,
+        resourceArt: Boolean(snapshot.resourceTitle),
+        resourceModels: snapshot.slots.filter((item) => item.resourceModel).slice(0, 54).map((item) => ({ slot: item.slot, model: item.resourceModel }))
+      })
       window?.on?.('updateSlot', emitWindow)
+    })
+    bot.on('resourcePack', async (first, second) => {
+      const pack = normalizePackEvent(first, second)
+      if (!pack.url) {
+        this.emit('log', account.id, { kind: 'error', message: 'The server offered a resource pack without a usable HTTP address.', at: Date.now() })
+        rejectResourcePack(bot, first, second, pack.hash)
+        return
+      }
+      const host = safeUrlHost(pack.url)
+      this.emit('log', account.id, { kind: 'system', message: `Loading server resource pack from ${host}…`, at: Date.now() })
+      try {
+        session.resourcePack = await this.resourcePackLoader.load(pack.url, pack.hash)
+        bot.acceptResourcePack?.()
+        session.telemetryKey = ''
+        emitTelemetry()
+        if (bot.currentWindow && !session.depositing) this.emit('window', account.id, buildWindowSnapshot(bot.currentWindow, bot.registry, bot.__afkDeskEnchantmentsById, session.resourcePack))
+        this.emit('log', account.id, { kind: 'system', message: 'Server resource pack loaded. Custom menu art is enabled.', at: Date.now() })
+        this.diagnose({ event: 'resource_pack_loaded', accountId: account.id, source: session.resourcePack.source, sha1: session.resourcePack.sha1 })
+      } catch (error) {
+        rejectResourcePack(bot, first, second, pack.hash)
+        this.emit('log', account.id, { kind: 'error', message: `Server resource pack failed: ${String(error?.message || error).slice(0, 180)}`, at: Date.now() })
+        this.diagnose({ event: 'resource_pack_failed', accountId: account.id, host, message: String(error?.message || error).slice(0, 180) })
+      }
     })
     bot.on('windowClose', () => {
       if (!session.depositing) this.emit('window', account.id, { open: false })
@@ -1160,7 +1203,7 @@ function waterDepth(block) {
   return safeLevel >= 8 ? 0 : safeLevel
 }
 
-function buildTelemetry(bot, nearestChest = null, environmentalMovement, fluidMotion = null) {
+function buildTelemetry(bot, nearestChest = null, environmentalMovement, fluidMotion = null, resourcePack = null) {
   const position = bot?.entity?.position
   const finite = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback
   const bySlot = new Map((bot?.inventory?.items?.() || []).map((item) => [Number(item.slot), item]))
@@ -1175,7 +1218,8 @@ function buildTelemetry(bot, nearestChest = null, environmentalMovement, fluidMo
     displayName: String(item.displayName || item.name || 'Unknown item').slice(0, 100),
     count: Math.max(1, Math.min(Number(item.count) || 1, 127)),
     ...itemDurability(item),
-    ...itemTooltipDetails(item, bot?.registry, bot?.__afkDeskEnchantmentsById)
+    ...itemTooltipDetails(item, bot?.registry, bot?.__afkDeskEnchantmentsById),
+    ...resourcePack?.itemAppearance?.(item)
   }))
   const environment = environmentalMovement === undefined ? undefined : {
     enabled: environmentalMovement !== false,
@@ -1365,7 +1409,7 @@ function containerLabel(block) {
   return 'chest'
 }
 
-function buildWindowSnapshot(window, registry, enchantmentsById) {
+function buildWindowSnapshot(window, registry, enchantmentsById, resourcePack = null) {
   const limit = Math.max(0, Math.min(Number(window?.inventoryStart) || window?.slots?.length || 0, 256))
   const slots = (window?.slots || []).slice(0, limit).map((item, slot) => item ? {
     slot,
@@ -1373,9 +1417,28 @@ function buildWindowSnapshot(window, registry, enchantmentsById) {
     displayName: String(item.displayName || item.name || 'Unknown item').slice(0, 100),
     count: Math.max(1, Math.min(Number(item.count) || 1, 127)),
     ...itemDurability(item),
-    ...itemTooltipDetails(item, registry, enchantmentsById)
+    ...itemTooltipDetails(item, registry, enchantmentsById),
+    ...resourcePack?.itemAppearance?.(item)
   } : null).filter(Boolean)
-  return { open: true, title: String(extractText(window?.title) || 'Server menu').slice(0, 100), size: limit, slots }
+  const titleSource = window?.title?.json ?? window?.title
+  const resourceTitle = resourcePack?.titleAppearance?.(titleSource)
+  const title = resourceTitle ? 'Custom server menu' : String(extractText(window?.title) || 'Server menu').slice(0, 100)
+  return { open: true, title, ...(resourceTitle ? { resourceTitle } : {}), size: limit, slots }
+}
+
+function safeUrlHost(value) {
+  try { return new URL(String(value)).host.slice(0, 120) || 'server' } catch { return 'server' }
+}
+
+function rejectResourcePack(bot, first, second, hash) {
+  try {
+    if (bot?.supportFeature?.('resourcePackUsesUUID')) {
+      const uuid = [first, second].find((value) => value && typeof value === 'object')
+      if (uuid) return bot._client?.write?.('resource_pack_receive', { uuid, result: 1 })
+    }
+    if (bot?.supportFeature?.('resourcePackUsesHash')) return bot._client?.write?.('resource_pack_receive', { hash: hash || '', result: 1 })
+    return bot?._client?.write?.('resource_pack_receive', { result: 1 })
+  } catch {}
 }
 
 module.exports = { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, normalizeSkinUrl, findNearestChest, buildTelemetry, buildWindowSnapshot, normalizeLockedSlots, describeNetworkError, reconnectDelaySeconds, normalizeAntiAfkSettings, inspectFluidCurrent, recordFluidCorrection, installMovementPacketCompatibility, installModernPlayerInputCompatibility }

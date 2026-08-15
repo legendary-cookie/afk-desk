@@ -1,6 +1,6 @@
 {
   "name": "afkdesk",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "A simple, local-first Minecraft AFK desktop client",
   "main": "electron/main.cjs",
   "author": "AFK Desk contributors",
@@ -15,6 +15,7 @@
     "postinstall": "patch-package"
   },
   "dependencies": {
+    "adm-zip": "^0.6.0",
     "mineflayer": "4.37.1",
     "socks": "^2.8.9"
   },

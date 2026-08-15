@@ -1,5 +1,6 @@
 from pathlib import Path
 from tempfile import gettempdir
+import base64
 from playwright.sync_api import sync_playwright
 
 
@@ -164,9 +165,20 @@ def run() -> None:
         page.locator("#lock-selected").click()
         assert "locked" in sword.get_attribute("class")
         assert page.locator("#drop-selected").is_disabled()
-        page.evaluate("window.__botEvent({ type: 'window', id: 'one', payload: { open: true, title: 'Town Menu', size: 9, slots: [{ slot: 0, name: 'emerald', displayName: 'Join Town', count: 1 }] } })")
+        pixel = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+XfSUWQAAAABJRU5ErkJggg=="
+        container_svg = '<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256"><rect x="38" y="0" width="176" height="227" fill="white"/></svg>'
+        container_art = "data:image/svg+xml;base64," + base64.b64encode(container_svg.encode()).decode()
+        page.evaluate("([pixel, art]) => window.__botEvent({ type: 'window', id: 'one', payload: { open: true, title: 'Town Menu', resourceTitle: { text: 'Town Menu', glyphs: [{ character: 'T', image: art, sourceX: 0, sourceY: 0, sourceWidth: 256, sourceHeight: 256, renderHeight: 256, ascent: 19, advance: 256 }] }, size: 54, slots: [{ slot: 0, name: 'emerald', displayName: 'Join Town', count: 1, resourceIcon: pixel, resourceModel: 'veridian:item/mission' }] } })", [pixel, container_art])
         page.locator("#server-window-dialog").wait_for(state="visible")
+        page.locator("#server-window-art:not([hidden])").wait_for()
         menu_item = page.get_by_role("button", name="Join Town")
+        stage_box = page.locator("#server-window-stage").bounding_box()
+        grid_box = page.locator("#server-window-grid").bounding_box()
+        slot_box = menu_item.bounding_box()
+        assert round(stage_box["width"]) == 352 and round(stage_box["height"]) == 454, stage_box
+        assert round(grid_box["x"] - stage_box["x"]) == 16 and round(grid_box["y"] - stage_box["y"]) == 36, (stage_box, grid_box)
+        assert round(slot_box["width"]) == 32 and round(slot_box["height"]) == 32, slot_box
+        assert menu_item.locator(".minecraft-item-icon.custom-resource").count() == 1
         menu_item.hover()
         assert page.evaluate("document.querySelector('#item-tooltip').parentElement.id") == "server-window-dialog"
         assert page.locator("#item-tooltip").is_visible()

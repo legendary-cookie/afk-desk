@@ -569,6 +569,43 @@ test('emits server container menus and supports safe left-click interaction', as
   manager.disconnect('menu')
 })
 
+test('loads and accepts a server resource pack before refreshing custom menu art', async () => {
+  const events = []
+  const bot = new FakeBot()
+  let accepted = 0
+  let loaded
+  bot.acceptResourcePack = () => { accepted++ }
+  bot.denyResourcePack = () => { throw new Error('resource pack should load') }
+  const resourcePack = {
+    source: 'https://packs.example/menu.zip',
+    sha1: 'abc',
+    itemAppearance: (item) => item.name === 'gold_nugget' ? { resourceIcon: 'data:image/png;base64,custom', resourceModel: 'veridian:item/mission' } : {},
+    titleAppearance: () => ({ text: '\ue001', glyphs: [{ character: '\ue001', image: 'data:image/png;base64,custom', advance: 16 }] })
+  }
+  const manager = new BotManager({
+    profilesPath: 'profiles',
+    emit: (...event) => events.push(event),
+    createBot: () => bot,
+    resourcePackLoader: { load: async (...args) => { loaded = args; return resourcePack } }
+  })
+  manager.connect({ id: 'pack', username: 'user@example.com', host: 'localhost', antiAfk: false, autoReconnect: false })
+  bot.currentWindow = { title: '\ue001', inventoryStart: 9, slots: [{ name: 'gold_nugget', displayName: 'Mission', count: 1 }] }
+
+  bot.emit('resourcePack', '0123456789012345678901234567890123456789', 'https://packs.example/menu.zip?token=private')
+  await new Promise((resolve) => setImmediate(resolve))
+
+  assert.deepEqual(loaded, ['https://packs.example/menu.zip?token=private', '0123456789012345678901234567890123456789'])
+  assert.equal(accepted, 1)
+  const menu = events.filter(([type]) => type === 'window').at(-1)[2]
+  assert.equal(menu.title, 'Custom server menu')
+  assert.equal(menu.resourceTitle.text, '\ue001')
+  assert.equal(menu.slots[0].resourceModel, 'veridian:item/mission')
+  assert.match(menu.slots[0].resourceIcon, /^data:image\/png/)
+  assert.equal(events.some(([type]) => type === 'window'), true)
+  assert.equal(events.some(([type, , payload]) => type === 'log' && /Custom menu art is enabled/.test(payload.message)), true)
+  manager.disconnect('pack')
+})
+
 test('resends client settings after Velocity enters configuration', async () => {
   const events = []
   const bot = new FakeBot()

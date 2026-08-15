@@ -266,7 +266,16 @@ h1, h2, p { margin-top: 0; }
 .minecraft-tooltip .technical { margin-top: 3px; color: #555; }
 #server-window-dialog { width: min(680px, calc(100vw - 40px)); }
 .server-window-content { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; width: 100%; max-height: min(680px, calc(100vh - 40px)); overflow: hidden; }
-.server-window-grid { display: grid; grid-template-columns: repeat(9, 40px); justify-content: center; gap: 2px; min-height: 120px; overflow-y: auto; padding: 18px; background: #c6c6c6; }
+.server-window-stage { position: relative; min-height: 120px; overflow: auto; background: #c6c6c6; }
+.server-window-art { position: absolute; z-index: 0; top: 0; left: 50%; translate: -50% 0; width: auto; max-width: 100%; height: auto; image-rendering: pixelated; pointer-events: none; }
+.server-window-grid { position: relative; z-index: 1; display: grid; grid-template-columns: repeat(9, 40px); justify-content: center; gap: 2px; min-height: 120px; padding: 18px; }
+.server-window-stage.has-container-art { width: var(--resource-art-width); height: var(--resource-art-height); min-height: 0; max-width: 100%; justify-self: center; overflow: hidden; background: transparent; }
+.server-window-stage.has-container-art .server-window-art { left: 0; translate: none; width: var(--resource-art-width); max-width: none; height: var(--resource-art-height); }
+.server-window-stage.has-container-art .server-window-grid { position: absolute; top: 36px; left: 16px; grid-template-columns: repeat(9, 32px); grid-auto-rows: 32px; justify-content: start; gap: 4px; min-height: 0; padding: 0; background: transparent; }
+.server-window-stage.has-container-art .minecraft-slot { width: 32px; height: 32px; padding: 0; background: transparent; border-color: transparent; box-shadow: none; }
+.server-window-stage.has-container-art .server-window-slot:hover,
+.server-window-stage.has-container-art .server-window-slot:focus-visible { background: rgb(255 255 255 / 12%); outline: 2px solid rgb(255 255 255 / 55%); outline-offset: -2px; }
+.minecraft-item-icon.custom-resource { width: 32px; height: 32px; background-position: center; background-repeat: no-repeat; background-size: contain; image-rendering: pixelated; }
 .server-window-empty { min-height: 40px; }
 .server-window-help { margin: 0; padding: 0 16px 16px; color: var(--muted); font-size: 10px; }
 

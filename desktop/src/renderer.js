@@ -81,7 +81,7 @@ const el = Object.fromEntries([
   'chat-form', 'chat-message', 'macro-pad', 'manage-macros', 'macro-dialog', 'close-macro-dialog', 'macro-editor', 'macro-rows', 'add-macro', 'cancel-macros', 'save-macros', 'account-dialog', 'account-form', 'dialog-title', 'account-id', 'label',
   'username', 'host', 'port', 'version', 'connect-on-startup', 'proxy-enabled', 'proxy-fields', 'proxy-type', 'proxy-host', 'proxy-port', 'proxy-username', 'proxy-password', 'proxy-password-help', 'proxy-clear-password', 'anti-afk', 'anti-afk-min-delay', 'anti-afk-max-delay', 'anti-afk-duration', 'anti-afk-look-degrees', 'anti-afk-walk-distance', 'anti-afk-jump', 'anti-afk-look', 'anti-afk-sneak', 'anti-afk-swing', 'anti-afk-walk', 'environmental-movement', 'auto-reconnect', 'auto-reconnect-delay', 'auto-reconnect-max', 'auto-deposit-setting', 'join-message', 'server-change-message',
   'message-delay', 'form-error', 'delete-account', 'login-dialog', 'login-code', 'open-login-private', 'open-login',
-  'close-login', 'ui-scale', 'ui-scale-value', 'column-resizer', 'inventory-resizer', 'server-window-dialog', 'server-window-title', 'server-window-grid', 'close-server-window', 'item-tooltip', 'toast-region'
+  'close-login', 'ui-scale', 'ui-scale-value', 'column-resizer', 'inventory-resizer', 'server-window-dialog', 'server-window-title', 'server-window-stage', 'server-window-art', 'server-window-grid', 'close-server-window', 'item-tooltip', 'toast-region'
 ].map((id) => [id, document.getElementById(id)]))
 
 async function init() {
@@ -455,6 +455,11 @@ function createSlotContents(item, { locked = false, held = false } = {}) {
 function createItemIcon(item) {
   const icon = document.createElement('span')
   icon.className = `minecraft-item-icon${item.enchants?.length ? ' enchanted' : ''}`
+  if (item.resourceIcon) {
+    icon.classList.add('custom-resource')
+    icon.style.backgroundImage = `url("${item.resourceIcon}")`
+    return icon
+  }
   const atlas = window.__minecraftItemAtlas
   const index = atlas?.items?.[item.name]
   if (Number.isInteger(index)) {
@@ -1043,6 +1048,7 @@ function renderServerWindow() {
   const slots = new Map((menu.slots || []).map((item) => [item.slot, item]))
   const highestSlot = Math.max(-1, ...slots.keys()) + 1
   const size = Math.max(highestSlot, Math.min(Number(menu.size) || 0, 256))
+  void renderServerWindowArt(menu.resourceTitle, size)
   el['server-window-grid'].replaceChildren(...Array.from({ length: size }, (_, slotNumber) => {
     const item = slots.get(slotNumber)
     if (!item) {
@@ -1054,13 +1060,120 @@ function renderServerWindow() {
     const button = document.createElement('button')
     button.type = 'button'
     button.className = 'minecraft-slot server-window-slot'
+    if (item.resourceModel) button.dataset.resourceModel = item.resourceModel
     button.setAttribute('aria-label', `${itemTooltipName(item)}, server slot ${item.slot}`)
-    button.append(createSlotContents(item))
+    if (!/pixiestudios_air$/i.test(item.resourceModel || '')) button.append(createSlotContents(item))
     bindItemTooltip(button, item)
     button.addEventListener('click', () => run(() => api.clickWindowSlot(state.selectedId, item.slot)))
     return button
   }))
   if (!el['server-window-dialog'].open) el['server-window-dialog'].showModal()
+}
+
+let serverArtGeneration = 0
+const resourceImageCache = new Map()
+
+async function renderServerWindowArt(resourceTitle, menuSize = 0) {
+  const generation = ++serverArtGeneration
+  const canvas = el['server-window-art']
+  const stage = el['server-window-stage']
+  const glyphs = Array.isArray(resourceTitle?.glyphs) ? resourceTitle.glyphs.slice(0, 160) : []
+  if (!glyphs.some((glyph) => glyph.image)) {
+    canvas.hidden = true
+    stage.classList.remove('has-resource-art')
+    stage.classList.remove('has-container-art')
+    stage.style.removeProperty('--resource-art-width')
+    stage.style.removeProperty('--resource-art-height')
+    return
+  }
+  const drawable = []
+  let cursor = 0
+  let minX = 0
+  let maxX = 1
+  let baseline = 0
+  let belowBaseline = 0
+  for (const glyph of glyphs) {
+    const height = Math.max(1, Math.min(Number(glyph.renderHeight) || 8, 512))
+    const ascent = Math.max(-512, Math.min(Number(glyph.ascent) || height, 512))
+    const sourceWidth = Math.max(1, Number(glyph.sourceWidth) || 1)
+    const sourceHeight = Math.max(1, Number(glyph.sourceHeight) || 1)
+    const width = Math.max(1, Math.round(sourceWidth * (height / sourceHeight)))
+    if (glyph.image) drawable.push({ glyph, x: cursor, width, height, ascent })
+    minX = Math.min(minX, cursor)
+    maxX = Math.max(maxX, cursor + width)
+    baseline = Math.max(baseline, ascent)
+    belowBaseline = Math.max(belowBaseline, height - ascent)
+    cursor += Number.isFinite(Number(glyph.advance)) ? Number(glyph.advance) : width
+  }
+  const width = Math.max(1, Math.min(Math.ceil(maxX - minX), 2048))
+  const height = Math.max(1, Math.min(Math.ceil(baseline + belowBaseline), 1024))
+  const images = await Promise.all(drawable.map(({ glyph }) => loadResourceImage(glyph.image)))
+  if (generation !== serverArtGeneration) return
+  canvas.width = width
+  canvas.height = height
+  const context = canvas.getContext('2d')
+  context.clearRect(0, 0, width, height)
+  context.imageSmoothingEnabled = false
+  drawable.forEach(({ glyph, x, width: drawWidth, height: drawHeight, ascent }, index) => {
+    const image = images[index]
+    if (!image) return
+    context.drawImage(image, Number(glyph.sourceX) || 0, Number(glyph.sourceY) || 0, Number(glyph.sourceWidth) || image.width, Number(glyph.sourceHeight) || image.height, Math.round(x - minX), Math.round(baseline - ascent), drawWidth, drawHeight)
+  })
+  const bounds = opaqueCanvasBounds(context, width, height)
+  const artWidth = bounds?.width || width
+  const artHeight = bounds?.height || height
+  if (bounds && (bounds.x || bounds.y || bounds.width !== width || bounds.height !== height)) {
+    const pixels = context.getImageData(bounds.x, bounds.y, bounds.width, bounds.height)
+    canvas.width = bounds.width
+    canvas.height = bounds.height
+    const croppedContext = canvas.getContext('2d')
+    croppedContext.imageSmoothingEnabled = false
+    croppedContext.putImageData(pixels, 0, 0)
+  }
+  canvas.hidden = false
+  stage.classList.add('has-resource-art')
+  const containerArt = Number(menuSize) >= 9 && artWidth >= 100 && artHeight >= 100
+  stage.classList.toggle('has-container-art', containerArt)
+  if (containerArt) {
+    stage.style.setProperty('--resource-art-width', `${artWidth * 2}px`)
+    stage.style.setProperty('--resource-art-height', `${artHeight * 2}px`)
+    canvas.style.width = `${artWidth * 2}px`
+    canvas.style.height = `${artHeight * 2}px`
+  } else {
+    stage.style.removeProperty('--resource-art-width')
+    stage.style.removeProperty('--resource-art-height')
+    canvas.style.removeProperty('width')
+    canvas.style.removeProperty('height')
+  }
+}
+
+function opaqueCanvasBounds(context, width, height) {
+  let pixels
+  try { pixels = context.getImageData(0, 0, width, height).data } catch { return null }
+  let left = width
+  let top = height
+  let right = -1
+  let bottom = -1
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (pixels[((y * width + x) * 4) + 3] === 0) continue
+      if (x < left) left = x
+      if (x > right) right = x
+      if (y < top) top = y
+      if (y > bottom) bottom = y
+    }
+  }
+  return right >= left && bottom >= top ? { x: left, y: top, width: right - left + 1, height: bottom - top + 1 } : null
+}
+
+function loadResourceImage(source) {
+  if (!resourceImageCache.has(source)) resourceImageCache.set(source, new Promise((resolve) => {
+    const image = new Image()
+    image.onload = () => resolve(image)
+    image.onerror = () => resolve(null)
+    image.src = source
+  }))
+  return resourceImageCache.get(source)
 }
 
 async function closeServerWindow() {

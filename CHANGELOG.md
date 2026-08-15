@@ -2,6 +2,21 @@
 
 For the complete desktop history from 0.1.0 onward, including source tags, installers, and comparisons, see [HISTORY.md](HISTORY.md).
 
+## Desktop 0.8.1 — 2026-08-15
+
+### Added
+
+- Server resource-pack downloading, SHA-1 validation, local caching, and bounded parsing for custom server menus.
+- Resource-pack item-model icons and bitmap-font container backgrounds with transparent clickable slots and Minecraft-style tooltips.
+
+### Fixed
+
+- Correctly handles packs whose ZIP directory reports corrupt multi-gigabyte expanded sizes without trusting those values or removing decompression limits.
+- Upgraded the ZIP parser to the release that fixes its crafted-archive memory-allocation advisory.
+- Crops transparent bitmap padding and aligns six-row container hitboxes with the visible 2× Minecraft GUI artwork.
+- Prevents Mineflayer resource-pack rejection from writing an invalid second protocol response.
+- Clearing an explicit Minecraft version now clears its stale remembered version before Auto detection or same-server stable fallback.
+
 ## Desktop 0.8.0 — 2026-08-15
 
 ### Added

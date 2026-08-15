@@ -317,7 +317,10 @@
           <div><div class="eyebrow">Server menu</div><h2 id="server-window-title">Server menu</h2></div>
           <button id="close-server-window" class="icon-button" type="button" aria-label="Close server menu">×</button>
         </header>
-        <div id="server-window-grid" class="server-window-grid"></div>
+        <div id="server-window-stage" class="server-window-stage">
+          <canvas id="server-window-art" class="server-window-art" aria-hidden="true" hidden></canvas>
+          <div id="server-window-grid" class="server-window-grid"></div>
+        </div>
         <p class="server-window-help">Select an item to left-click that slot. The server controls what each item does.</p>
       </div>
     </dialog>

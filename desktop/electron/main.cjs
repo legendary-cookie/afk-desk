@@ -5,7 +5,7 @@ const { AccountStore, SettingsStore, startupConnectionDelay } = require('./store
 const { BotManager, normalizeSkinUrl } = require('./bot-manager.cjs')
 const { sendToWindow } = require('./window-events.cjs')
 const { DiagnosticLog } = require('./diagnostic-log.cjs')
-const { preferredVersionForAccount } = require('./version-compatibility.cjs')
+const { preferredVersionForAccount, rememberedVersionState } = require('./version-compatibility.cjs')
 const movementDiagnosticsEnabled = process.env.AFK_DESK_MOVEMENT_DIAGNOSTICS === '1'
 
 let mainWindow
@@ -251,6 +251,9 @@ function validateAccount(input, existing) {
   const port = Number(input?.port) || 25565
   if (port < 1 || port > 65535) throw new Error('Port must be between 1 and 65535.')
   const minecraftName = normalizeMinecraftName(input?.minecraftName)
+  const version = String(input?.version || '').trim()
+  if (version && !/^\d+\.\d+(?:\.\d+)?$/.test(version)) throw new Error('Minecraft version must look like 1.21.1, or be blank for Auto-detect.')
+  const rememberedVersion = rememberedVersionState(version, input, existing)
   const antiAfk = input?.antiAfk !== false
   const antiAfkJump = input?.antiAfkJump !== false
   const antiAfkLook = input?.antiAfkLook !== false
@@ -266,9 +269,8 @@ function validateAccount(input, existing) {
     username,
     host,
     port,
-    version: String(input?.version || '').trim(),
-    lastSuccessfulVersion: String(input?.lastSuccessfulVersion || existing?.lastSuccessfulVersion || existing?.version || '').trim().slice(0, 32),
-    lastSuccessfulVersionStable: input?.lastSuccessfulVersionStable === true || existing?.lastSuccessfulVersionStable === true,
+    version,
+    ...rememberedVersion,
     minecraftName,
     minecraftUuid: normalizeUuid(input?.minecraftUuid),
     skinUrl: normalizeSkinUrl(input?.skinUrl),
