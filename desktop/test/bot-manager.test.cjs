@@ -4,7 +4,7 @@ const { EventEmitter } = require('node:events')
 const fs = require('node:fs')
 const path = require('node:path')
 const { Vec3 } = require('vec3')
-const { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, normalizeSkinUrl, buildTelemetry, describeNetworkError, reconnectDelaySeconds, inspectFluidCurrent, recordFluidCorrection, installMovementPacketCompatibility, installModernPlayerInputCompatibility } = require('../electron/bot-manager.cjs')
+const { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, normalizeSkinUrl, findNearestChest, buildTelemetry, describeNetworkError, reconnectDelaySeconds, inspectFluidCurrent, recordFluidCorrection, installMovementPacketCompatibility, installModernPlayerInputCompatibility } = require('../electron/bot-manager.cjs')
 const { computeSignedChatChecksum } = require('../electron/protocol-fixes.cjs')
 const { snapshotNearbyEntities } = require('../electron/movement-compatibility.cjs')
 
@@ -480,11 +480,13 @@ test('finds the closest chest and deposits all inventory stacks only when enable
     const block = { name: 'chest', position: { x: 11, y: 64, z: 10 } }
     return matching(block) ? block : null
   }
+  bot.canSeeBlock = () => true
   const deposits = []
   let closed = false
+  const depositClosed = Promise.withResolvers()
   bot.openChest = async () => ({
     deposit: async (...args) => deposits.push(args),
-    close: () => { closed = true }
+    close: () => { closed = true; depositClosed.resolve() }
   })
   const manager = new BotManager({ profilesPath: 'profiles', emit: (...event) => events.push(event), createBot: () => bot })
   manager.connect({ id: 'chest', username: 'user@example.com', host: 'localhost', antiAfk: false, autoReconnect: false, autoDepositToChest: false })
@@ -493,11 +495,81 @@ test('finds the closest chest and deposits all inventory stacks only when enable
   assert.deepEqual(deposits, [])
   assert.deepEqual(events.filter(([type]) => type === 'telemetry').at(-1)[2].nearestChest, { type: 'chest', x: 11, y: 64, z: 10, distance: 1 })
 
-  await manager.setAutoDeposit('chest', true)
+  manager.setAutoDeposit('chest', true)
+  await depositClosed.promise
   assert.deepEqual(deposits, [[4, 0, 64, null], [264, 0, 2, null]])
   assert.equal(closed, true)
   assert.match(events.filter(([type]) => type === 'log').at(-1)[2].message, /Deposited 66 items into chest at 11, 64, 10/)
   manager.disconnect('chest')
+})
+
+test('auto-deposit search uses the account range and rejects containers without line of sight', () => {
+  const bot = new FakeBot()
+  bot.entity = { position: { x: 10, y: 64, z: 10 } }
+  const hidden = { name: 'chest', position: { x: 11, y: 64, z: 10 } }
+  const visible = { name: 'barrel', position: { x: 17, y: 64, z: 10 } }
+  let expectedRange = 9
+  bot.canSeeBlock = (block) => block === visible
+  bot.findBlock = ({ matching, maxDistance, useExtraInfo }) => {
+    assert.equal(maxDistance, expectedRange)
+    assert.equal(matching(hidden), true)
+    assert.equal(useExtraInfo(hidden), false)
+    assert.equal(useExtraInfo(visible), true)
+    return visible
+  }
+
+  assert.equal(findNearestChest(bot, 9), visible)
+  expectedRange = 16
+  assert.equal(findNearestChest(bot, 100), visible)
+  expectedRange = 1
+  assert.equal(findNearestChest(bot, 0), visible)
+})
+
+test('turning auto-deposit off cancels the remaining queued stacks and closes the container', async (t) => {
+  const bot = new FakeBot()
+  const firstDepositStarted = Promise.withResolvers()
+  const releaseFirstDeposit = Promise.withResolvers()
+  const depositClosed = Promise.withResolvers()
+  const deposits = []
+  let closed = false
+  bot.inventory.items = () => [
+    { slot: 36, type: 4, metadata: 0, nbt: null, count: 64 },
+    { slot: 37, type: 264, metadata: 0, nbt: null, count: 2 }
+  ]
+  bot.entity = { position: { x: 10, y: 64, z: 10 } }
+  bot.canSeeBlock = () => true
+  bot.findBlock = ({ useExtraInfo }) => {
+    const block = { name: 'chest', position: { x: 11, y: 64, z: 10 } }
+    return useExtraInfo(block) ? block : null
+  }
+  bot.openChest = async () => ({
+    deposit: async (...args) => {
+      deposits.push(args)
+      if (deposits.length === 1) {
+        firstDepositStarted.resolve()
+        await releaseFirstDeposit.promise
+      }
+    },
+    close: () => { closed = true; depositClosed.resolve() }
+  })
+  const events = []
+  const manager = new BotManager({ profilesPath: 'profiles', emit: (...event) => events.push(event), createBot: () => bot })
+  t.after(() => manager.disconnect('cancel-deposit'))
+  manager.connect({
+    id: 'cancel-deposit', username: 'user@example.com', host: 'localhost', antiAfk: false,
+    autoReconnect: false, autoDepositToChest: false
+  })
+
+  manager.setAutoDeposit('cancel-deposit', true)
+  await firstDepositStarted.promise
+  manager.setAutoDeposit('cancel-deposit', false)
+  releaseFirstDeposit.resolve()
+  await depositClosed.promise
+  await new Promise((resolve) => setImmediate(resolve))
+
+  assert.deepEqual(deposits, [[4, 0, 64, null]])
+  assert.equal(closed, true)
+  assert.equal(events.some(([type, , payload]) => type === 'log' && /Auto-deposit failed/.test(payload.message)), false)
 })
 
 test('auto-deposit supports barrels and leaves locked stacks in inventory', async (t) => {
@@ -511,6 +583,7 @@ test('auto-deposit supports barrels and leaves locked stacks in inventory', asyn
     const block = { name: 'barrel', position: { x: 10, y: 64, z: 11 } }
     return matching(block) ? block : null
   }
+  bot.canSeeBlock = () => true
   const deposits = []
   bot.openContainer = async () => {
     const container = {

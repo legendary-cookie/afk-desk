@@ -67,7 +67,9 @@ function registerIpc() {
     const existing = store.list().find((account) => account.id === input?.id)
     const account = validateAccount(input, existing)
     const saved = store.save(account)
-    if (existing && existing.autoDepositToChest !== saved.autoDepositToChest) await bots.setAutoDeposit(saved.id, saved.autoDepositToChest)
+    if (existing && (existing.autoDepositToChest !== saved.autoDepositToChest || existing.autoDepositRange !== saved.autoDepositRange)) {
+      bots.setAutoDeposit(saved.id, saved.autoDepositToChest, saved.autoDepositRange)
+    }
     if (existing && existing.environmentalMovement !== saved.environmentalMovement) bots.setEnvironmentalMovement(saved.id, saved.environmentalMovement)
     if (existing && antiAfkChanged(existing, saved)) bots.setAntiAfk(saved.id, saved)
     return publicAccount(saved)
@@ -116,7 +118,7 @@ function registerIpc() {
     const account = store.list().find((item) => item.id === id)
     if (!account) throw new Error('Account not found.')
     const updated = store.save({ ...account, autoDepositToChest: enabled === true })
-    await bots.setAutoDeposit(id, updated.autoDepositToChest)
+    bots.setAutoDeposit(id, updated.autoDepositToChest, updated.autoDepositRange)
     return publicAccount(updated)
   })
   ipcMain.handle('auth:open-isolated', (_event, { id, url, code }) => openIsolatedLogin(id, url, code))
@@ -295,6 +297,7 @@ function validateAccount(input, existing) {
     autoReconnectMaxAttempts: Math.max(0, Math.min(Number(input?.autoReconnectMaxAttempts) || 0, 1000)),
     connectOnStartup: input?.connectOnStartup === true,
     autoDepositToChest: input?.autoDepositToChest === true,
+    autoDepositRange: Math.round(bounded(input?.autoDepositRange ?? existing?.autoDepositRange, 1, 16, 5)),
     lockedInventorySlots: normalizeLockedSlots(input?.lockedInventorySlots ?? existing?.lockedInventorySlots),
     proxy: validateProxy(input?.proxy, existing?.proxy),
     joinMessage: String(input?.joinMessage || '').trim().slice(0, 256),

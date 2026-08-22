@@ -24,7 +24,8 @@ const WATERLIKE_NAMES = new Set(['bubble_column', 'seagrass', 'tall_seagrass', '
 const FLOW_DIRECTIONS = [[0, 1], [-1, 0], [0, -1], [1, 0]]
 const FLUID_CONTACT_GRACE_MS = 750
 const CHEST_SCAN_INTERVAL = 5000
-const CHEST_MAX_DISTANCE = 5
+const DEFAULT_AUTO_DEPOSIT_RANGE = 5
+const MAX_AUTO_DEPOSIT_RANGE = 16
 class BotManager {
   constructor({
     profilesPath,
@@ -106,6 +107,8 @@ class BotManager {
       ready: false,
       switching: false,
       depositing: false,
+      depositRevision: 0,
+      activeDepositContainer: null,
       inventoryAction: false,
       joinMessageSent: false,
       worldReadyAt: 0,
@@ -536,18 +539,29 @@ class BotManager {
     if (bot.currentWindow) bot.closeWindow(bot.currentWindow)
   }
 
-  async setAutoDeposit(id, enabled) {
+  setAutoDeposit(id, enabled, range) {
     const session = this.sessions.get(id)
     if (!session) return
-    session.account.autoDepositToChest = enabled === true
-    if (enabled) await this.refreshChest(id)
-    else this.emitTelemetry(id)
+    const nextEnabled = enabled === true
+    const nextRange = normalizeAutoDepositRange(range ?? session.account.autoDepositRange)
+    const changed = session.account.autoDepositToChest !== nextEnabled || session.account.autoDepositRange !== nextRange
+    session.account.autoDepositToChest = nextEnabled
+    session.account.autoDepositRange = nextRange
+    if (changed) session.depositRevision += 1
+    if (!nextEnabled) {
+      try { session.activeDepositContainer?.close() } catch {}
+      session.activeDepositContainer = null
+      this.emitTelemetry(id)
+      if (!session.depositing) void this.refreshChest(id)
+      return
+    }
+    if (!session.depositing) void this.refreshChest(id)
   }
 
   async refreshChest(id) {
     const session = this.sessions.get(id)
     if (!session?.bot?.entity || session.depositing || session.inventoryAction || session.bot.currentWindow) return
-    const block = findNearestChest(session.bot)
+    const block = findNearestChest(session.bot, session.account.autoDepositRange)
     session.nearestChest = block ? chestLocation(session.bot, block) : null
     this.emitTelemetry(id)
     if (!session.account.autoDepositToChest || !block) return
@@ -555,22 +569,31 @@ class BotManager {
     const items = (session.bot.inventory?.items?.() || []).filter((item) => !lockedSlots.has(Number(item.slot)))
     if (!items.length) return
     session.depositing = true
+    const depositRevision = session.depositRevision
     let chest
+    let deposited = 0
     try {
       chest = await (session.bot.openContainer || session.bot.openChest).call(session.bot, block)
-      let deposited = 0
+      session.activeDepositContainer = chest
       for (const item of items) {
+        if (!isDepositActive(session, depositRevision)) break
         await chest.deposit(item.type, item.metadata ?? null, item.count, item.nbt)
         deposited += item.count
       }
-      const { x, y, z } = session.nearestChest
-      this.emit('log', id, { kind: 'sent', message: `Deposited ${deposited} items into ${containerLabel(block)} at ${x}, ${y}, ${z}.`, at: Date.now() })
+      if (deposited > 0) {
+        const { x, y, z } = chestLocation(session.bot, block)
+        this.emit('log', id, { kind: 'sent', message: `Deposited ${deposited} items into ${containerLabel(block)} at ${x}, ${y}, ${z}.`, at: Date.now() })
+      }
     } catch (error) {
-      this.emit('log', id, { kind: 'error', message: `Auto-deposit failed: ${String(error?.message || error).slice(0, 160)}`, at: Date.now() })
+      if (isDepositActive(session, depositRevision)) {
+        this.emit('log', id, { kind: 'error', message: `Auto-deposit failed: ${String(error?.message || error).slice(0, 160)}`, at: Date.now() })
+      }
     } finally {
+      if (session.activeDepositContainer === chest) session.activeDepositContainer = null
       try { chest?.close() } catch {}
       session.depositing = false
       this.emitTelemetry(id)
+      if (session.depositRevision !== depositRevision) void this.refreshChest(id)
     }
   }
 
@@ -810,6 +833,9 @@ class BotManager {
   }
 
   clearTimers(session) {
+    session.depositRevision += 1
+    try { session.activeDepositContainer?.close() } catch {}
+    session.activeDepositContainer = null
     for (const timer of session.manualControlTimers || []) this.clearAntiAfkTimer(timer[1])
     session.manualControlTimers?.clear()
     session.manualControls?.clear()
@@ -969,9 +995,26 @@ function normalizeSkinUrl(value) {
   } catch { return '' }
 }
 
-function findNearestChest(bot) {
+function findNearestChest(bot, maxDistance = DEFAULT_AUTO_DEPOSIT_RANGE) {
   if (!bot?.entity?.position || typeof bot.findBlock !== 'function') return null
-  return bot.findBlock({ matching: (block) => CHEST_NAMES.has(block?.name), maxDistance: CHEST_MAX_DISTANCE })
+  return bot.findBlock({
+    matching: (block) => CHEST_NAMES.has(block?.name),
+    maxDistance: normalizeAutoDepositRange(maxDistance),
+    useExtraInfo: (block) => {
+      try { return typeof bot.canSeeBlock === 'function' && bot.canSeeBlock(block) === true }
+      catch { return false }
+    }
+  })
+}
+
+function normalizeAutoDepositRange(value) {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return DEFAULT_AUTO_DEPOSIT_RANGE
+  return Math.max(1, Math.min(Math.round(number), MAX_AUTO_DEPOSIT_RANGE))
+}
+
+function isDepositActive(session, revision) {
+  return session?.account?.autoDepositToChest === true && session.depositRevision === revision
 }
 
 function chestLocation(bot, block) {

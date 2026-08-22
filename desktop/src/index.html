@@ -232,8 +232,9 @@
           <label class="toggle-row full">
             <input id="auto-deposit-setting" type="checkbox" />
             <span class="toggle" aria-hidden="true"></span>
-            <span><strong>Auto-deposit inventory</strong><small>Off by default. Moves unlocked inventory stacks into the closest chest, trapped chest, or barrel within five blocks and records its coordinates.</small></span>
+            <span><strong>Auto-deposit inventory</strong><small>Off by default. Moves unlocked inventory stacks only into a visible chest, trapped chest, or barrel and records its coordinates.</small></span>
           </label>
+          <label class="field full"><span>Auto-deposit search range (blocks)</span><input id="auto-deposit-range" type="number" min="1" max="16" step="1" value="5" /><small>Only visible containers within this distance are eligible. Default: 5 blocks.</small></label>
           <div class="form-section full">
             <h3>Automatic messages</h3>
             <p>Send a chat message or command when this account joins or changes server/world.</p>

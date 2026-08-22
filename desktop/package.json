@@ -1,6 +1,6 @@
 {
   "name": "afkdesk",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "description": "A simple, local-first Minecraft AFK desktop client",
   "main": "electron/main.cjs",
   "author": "AFK Desk contributors",

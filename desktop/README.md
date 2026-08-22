@@ -18,7 +18,7 @@ AFK Desk is a local-first desktop client for keeping Minecraft Java accounts con
 - Minecraft-style gear, inventory, and hotbar grids with vanilla item textures, counts, durability bars, enchantment glint, and Minecraft-like hover tooltips
 - Drag or move stacks between slots, select the held hotbar item, and equip armor or off-hand gear
 - Select, lock/unlock, and safely drop a specific inventory stack; locked stacks are protected from drops and auto-deposit
-- Optional per-account auto-deposit into the closest chest, trapped chest, or barrel, with traceable coordinates
+- Optional per-account auto-deposit into the closest visible chest, trapped chest, or barrel, with an editable 1–16 block range and traceable coordinates
 - Interactive Minecraft-style popup for chest menus opened by server commands, including downloaded resource-pack backgrounds, custom item models, aligned click targets, and tooltip details
 - Change-only player-state updates and reduced chunk distance for lower resource use
 - Quick movement controls

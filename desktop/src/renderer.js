@@ -79,7 +79,7 @@ const el = Object.fromEntries([
   'edit-account', 'connection-button', 'status-banner', 'status-name', 'status-detail', 'server-address',
   'detail-username', 'detail-server', 'detail-version', 'detail-antiafk', 'detail-environment', 'detail-water', 'detail-health', 'detail-hunger', 'detail-coordinates', 'detail-chest', 'detail-dimension', 'inventory-count', 'inventory-grid', 'auto-deposit-toggle', 'hold-selected', 'equip-destination', 'equip-selected', 'lock-selected', 'drop-selected', 'toggle-inventory', 'console-log', 'clear-console',
   'chat-form', 'chat-message', 'macro-pad', 'manage-macros', 'macro-dialog', 'close-macro-dialog', 'macro-editor', 'macro-rows', 'add-macro', 'cancel-macros', 'save-macros', 'account-dialog', 'account-form', 'dialog-title', 'account-id', 'label',
-  'username', 'host', 'port', 'version', 'connect-on-startup', 'proxy-enabled', 'proxy-fields', 'proxy-type', 'proxy-host', 'proxy-port', 'proxy-username', 'proxy-password', 'proxy-password-help', 'proxy-clear-password', 'anti-afk', 'anti-afk-min-delay', 'anti-afk-max-delay', 'anti-afk-duration', 'anti-afk-look-degrees', 'anti-afk-walk-distance', 'anti-afk-jump', 'anti-afk-look', 'anti-afk-sneak', 'anti-afk-swing', 'anti-afk-walk', 'environmental-movement', 'auto-reconnect', 'auto-reconnect-delay', 'auto-reconnect-max', 'auto-deposit-setting', 'join-message', 'server-change-message',
+  'username', 'host', 'port', 'version', 'connect-on-startup', 'proxy-enabled', 'proxy-fields', 'proxy-type', 'proxy-host', 'proxy-port', 'proxy-username', 'proxy-password', 'proxy-password-help', 'proxy-clear-password', 'anti-afk', 'anti-afk-min-delay', 'anti-afk-max-delay', 'anti-afk-duration', 'anti-afk-look-degrees', 'anti-afk-walk-distance', 'anti-afk-jump', 'anti-afk-look', 'anti-afk-sneak', 'anti-afk-swing', 'anti-afk-walk', 'environmental-movement', 'auto-reconnect', 'auto-reconnect-delay', 'auto-reconnect-max', 'auto-deposit-setting', 'auto-deposit-range', 'join-message', 'server-change-message',
   'message-delay', 'form-error', 'delete-account', 'login-dialog', 'login-code', 'open-login-private', 'open-login',
   'close-login', 'ui-scale', 'ui-scale-value', 'column-resizer', 'inventory-resizer', 'server-window-dialog', 'server-window-title', 'server-window-stage', 'server-window-art', 'server-window-grid', 'close-server-window', 'item-tooltip', 'toast-region'
 ].map((id) => [id, document.getElementById(id)]))
@@ -351,7 +351,8 @@ function renderTelemetry() {
   el['detail-health'].textContent = telemetry ? `${formatNumber(telemetry.health)} / 20` : '—'
   el['detail-hunger'].textContent = telemetry ? `${formatNumber(telemetry.food)} / 20` : '—'
   el['detail-coordinates'].textContent = telemetry?.position ? `${telemetry.position.x}, ${telemetry.position.y}, ${telemetry.position.z}` : '—'
-  el['detail-chest'].textContent = telemetry?.nearestChest ? `${formatContainerType(telemetry.nearestChest.type)} at ${telemetry.nearestChest.x}, ${telemetry.nearestChest.y}, ${telemetry.nearestChest.z} (${formatNumber(telemetry.nearestChest.distance)} blocks)` : telemetry ? 'Not found within 5 blocks' : '—'
+  const depositRange = selectedAccount()?.autoDepositRange || 5
+  el['detail-chest'].textContent = telemetry?.nearestChest ? `${formatContainerType(telemetry.nearestChest.type)} at ${telemetry.nearestChest.x}, ${telemetry.nearestChest.y}, ${telemetry.nearestChest.z} (${formatNumber(telemetry.nearestChest.distance)} blocks)` : telemetry ? `No visible container within ${depositRange} blocks` : '—'
   el['detail-dimension'].textContent = telemetry ? String(telemetry.dimension || 'unknown').replace(/^minecraft:/, '') : '—'
   const items = telemetry?.inventory || []
   if (!items.some((item) => item.slot === state.selectedInventorySlot)) state.selectedInventorySlot = null
@@ -713,6 +714,7 @@ function openAccountDialog(account) {
   el['auto-reconnect-delay'].value = account?.autoReconnectDelay || 5
   el['auto-reconnect-max'].value = account?.autoReconnectMaxAttempts ?? 0
   el['auto-deposit-setting'].checked = account?.autoDepositToChest === true
+  el['auto-deposit-range'].value = account?.autoDepositRange ?? 5
   el['join-message'].value = account?.joinMessage || ''
   el['server-change-message'].value = account?.serverChangeMessage || ''
   el['message-delay'].value = account?.messageDelay ?? 6
@@ -761,6 +763,7 @@ async function saveAccount(event) {
     autoReconnectDelay: Number(el['auto-reconnect-delay'].value),
     autoReconnectMaxAttempts: Number(el['auto-reconnect-max'].value),
     autoDepositToChest: el['auto-deposit-setting'].checked,
+    autoDepositRange: Number(el['auto-deposit-range'].value),
     joinMessage: el['join-message'].value,
     serverChangeMessage: el['server-change-message'].value,
     messageDelay: Number(el['message-delay'].value)

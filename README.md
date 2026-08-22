@@ -48,7 +48,7 @@ See the [complete 0.8.1 release notes](https://github.com/legendary-cookie/afk-d
 - Selection and explicit dropping of individual inventory stacks
 - Minecraft-style gear, inventory, and hotbar grids with vanilla item icons, stack counts, durability bars, enchantment glint, and hover tooltips
 - Drag or move stacks between slots, choose the held hotbar item, and equip armor or off-hand gear
-- Optional nearby-chest auto-deposit with traceable chest coordinates
+- Optional per-account auto-deposit into visible chests or barrels, with an editable 1–16 block range, item locks, and traceable coordinates
 - Interactive Minecraft-style chest-menu popups with server resource-pack artwork, custom item models, and bitmap-font GUI backgrounds
 - Modern Velocity server-switch compatibility
 - Interface scaling and persistent responsive panel layouts

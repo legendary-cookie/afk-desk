@@ -12,6 +12,7 @@ window.__controls = [];
 window.__windowClicks = [];
 window.__inventoryMoves = [];
 window.__equips = [];
+window.__savedAccount = null;
 window.__scale = 100;
 window.__settings = { startWithWindows: false, staggerStartupConnections: true, startupConnectionDelay: 3, uiScale: 100, sidePanelWidth: 300, inventoryHeight: 220, macros: [{ label: 'Town', message: '/server towny' }] };
 window.afkDesk = {
@@ -27,7 +28,7 @@ window.afkDesk = {
   moveInventorySlot: async (_id, sourceSlot, destinationSlot) => { window.__inventoryMoves.push([sourceSlot, destinationSlot]); return { account: {}, sourceSlot, targetSlot: destinationSlot }; },
   equipInventoryItem: async (_id, slot, destination) => { window.__equips.push([slot, destination]); return { account: {}, sourceSlot: slot, targetSlot: slot, destination: destination === 'auto' ? 'head' : destination }; },
   clickWindowSlot: async (_id, slot) => { window.__windowClicks.push(slot); }, closeServerWindow: async () => { window.__botEvent({ type: 'window', id: 'one', payload: { open: false } }); },
-  saveAccount: async (value) => value, deleteAccount: async () => {},
+  saveAccount: async (value) => (window.__savedAccount = value), deleteAccount: async () => {},
   openExternal: async () => {}, openIsolatedLogin: async () => {}
 };
 """
@@ -188,6 +189,14 @@ def run() -> None:
         page.locator("#server-window-dialog").wait_for(state="hidden")
         page.locator("#display-menu-trigger").click()
         assert page.locator("#quick-scale-number").is_visible()
+        page.locator("#display-menu-trigger").click()
+        page.locator("#edit-account").click()
+        assert page.locator("#auto-deposit-range").input_value() == "5"
+        page.locator("#auto-deposit-range").fill("9")
+        page.locator("#save-account").click()
+        page.locator("#account-dialog").wait_for(state="hidden")
+        assert page.evaluate("window.__savedAccount.autoDepositRange") == 9
+        page.locator("#display-menu-trigger").click()
         desktop = str(Path(gettempdir()) / "afkdesk-ui-desktop.png")
         page.screenshot(path=desktop)
         page.locator("#display-menu-trigger").click()

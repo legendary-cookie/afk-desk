@@ -171,6 +171,7 @@ test('open dialogs stay pinned to the viewport and lock page scrolling', () => {
 test('desktop bridge exposes inventory actions and accounts default automatic deposits off', () => {
   const preload = fs.readFileSync(path.join(__dirname, '..', 'electron', 'preload.cjs'), 'utf8')
   const main = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
+  const html = fs.readFileSync(path.join(__dirname, '..', 'src', 'index.html'), 'utf8')
   assert.match(preload, /dropStack:.*bot:drop-stack/)
   assert.match(preload, /setAutoDeposit:.*bot:auto-deposit/)
   assert.match(preload, /setItemLock:.*bot:item-lock/)
@@ -180,6 +181,8 @@ test('desktop bridge exposes inventory actions and accounts default automatic de
   assert.match(preload, /closeServerWindow:.*bot:window-close/)
   assert.match(main, /lockedInventorySlots:/)
   assert.match(main, /autoDepositToChest:\s*input\?\.autoDepositToChest === true/)
+  assert.match(main, /autoDepositRange:/)
+  assert.match(html, /id="auto-deposit-range"[^>]+min="1"[^>]+max="16"/)
   assert.match(main, /messageDelay:.*\? 6 :/)
   assert.match(main, /environmentalMovement:\s*input\?\.environmentalMovement !== false/)
   assert.match(main, /startupConnectionDelay\(settings, index\)/)
