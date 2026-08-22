@@ -20,6 +20,7 @@ This archive preserves the actual desktop source snapshot and Windows installer 
 | 0.7.0 | 2026-08-09 | Added branded/versioned UI and independently resizable responsive panels; fixed stable automatic version selection; temporarily removed browser and remote access. | [source](https://github.com/legendary-cookie/afk-desk/tree/v0.7.0) · [changes](https://github.com/legendary-cookie/afk-desk/compare/v0.6.0...v0.7.0) · [release](https://github.com/legendary-cookie/afk-desk/releases/tag/v0.7.0) |
 | 0.8.0 | 2026-08-15 | Added Minecraft-style interactive inventory and server menus, item movement/equipment/locks, rich tooltips, and a simpler scalable dashboard; fixed modern enchantment names and levels. | [source](https://github.com/legendary-cookie/afk-desk/tree/v0.8.0) · [changes](https://github.com/legendary-cookie/afk-desk/compare/v0.7.0...v0.8.0) · [release](https://github.com/legendary-cookie/afk-desk/releases/tag/v0.8.0) |
 | 0.8.1 | 2026-08-15 | Added bounded server resource-pack parsing and custom bitmap/item-model menu artwork; fixed malformed ZIP metadata, resource-pack response serialization, GUI cropping/alignment, and blank Auto-version resets. | [source](https://github.com/legendary-cookie/afk-desk/tree/v0.8.1) · [changes](https://github.com/legendary-cookie/afk-desk/compare/v0.8.0...v0.8.1) · [release](https://github.com/legendary-cookie/afk-desk/releases/tag/v0.8.1) |
+| 0.8.2 | 2026-08-22 | Added cancellable, line-of-sight-aware auto-deposit with per-account range controls and brought Android forward as a standalone 0.8.2 APK. | [source](https://github.com/legendary-cookie/afk-desk/tree/v0.8.2) · [changes](https://github.com/legendary-cookie/afk-desk/compare/v0.8.1...v0.8.2) · [release](https://github.com/legendary-cookie/afk-desk/releases/tag/v0.8.2) |
 
 ## Archive layout
 
@@ -27,7 +28,7 @@ This archive preserves the actual desktop source snapshot and Windows installer 
 - Tag `desktop-v0.4.1` preserves the final desktop-only snapshot.
 - Tag `v0.4.1` points to the current desktop/mobile monorepo release.
 - Tag `v0.5.0` points to the inventory-control and chest-automation desktop release in the monorepo.
-- Tags `v0.6.0` through `v0.8.1` point to the later desktop releases in the monorepo.
+- Tags `v0.6.0` through `v0.8.2` point to the later monorepo releases.
 - Every historical release includes its original Windows installer and an explicit desktop source ZIP.
 - [RELEASE_CHECKSUMS.txt](RELEASE_CHECKSUMS.txt) contains SHA-256 hashes for the preserved artifacts.
 

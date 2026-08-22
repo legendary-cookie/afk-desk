@@ -1,5 +1,7 @@
 # Building AFK Desk Mobile
 
+These instructions build Android **0.8.2**.
+
 ## Android
 
 The release configuration supports ARM64 and 32-bit ARM devices running Android 7.0 or newer.

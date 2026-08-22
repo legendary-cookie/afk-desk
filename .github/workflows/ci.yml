@@ -38,4 +38,6 @@ jobs:
           cache-dependency-path: mobile/package-lock.json
       - run: npm ci
       - run: npm test -- --runInBand
+      - run: npm ci --omit=dev --prefix nodejs-assets/nodejs-project
+      - run: node --test nodejs-assets/nodejs-project/test/bot-manager.test.cjs
       - run: npx tsc --noEmit

@@ -2,12 +2,14 @@
 
 For the complete desktop history from 0.1.0 onward, including source tags, installers, and comparisons, see [HISTORY.md](HISTORY.md).
 
-## Desktop 0.8.2 — 2026-08-22
+## Desktop and Android 0.8.2 — 2026-08-22
 
 ### Added
 
 - A per-account auto-deposit search-range editor from 1 to 16 blocks, defaulting to 5.
 - Line-of-sight filtering so auto-deposit only targets visible chests, trapped chests, and barrels.
+- A standalone Android 0.8.2 APK with the same cancellable auto-deposit, LOS, range, and coordinate controls.
+- Current Mineflayer protocol support in the embedded Android engine.
 
 ### Fixed
 
