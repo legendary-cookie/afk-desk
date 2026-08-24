@@ -2,7 +2,30 @@
 
 For the complete desktop history from 0.1.0 onward, including source tags, installers, and comparisons, see [HISTORY.md](HISTORY.md).
 
-## Desktop and Android 0.9.0 — In development
+## Desktop and Android 0.9.2 — 2026-08-24
+
+### Fixed
+
+- Version pickers now list only complete bot-engine versions (Minecraft 1.8.8 through 1.21.11); protocol-only 1.7 was removed because Mineflayer rejects it before login.
+- Android now uses the same modern movement packet, collision flag, and `player_input` compatibility layer as Windows.
+- Fresh Android engine installs now replay the same Mineflayer and physics patches as Windows before pruning build-only tooling.
+
+### Verified
+
+- Added a real local client/server matrix for every advertised version covering spawn, forward/back/left/right movement, jump, sprint/sneak input, look, chat, held-item selection, and arm swing on both Windows and Android engines.
+- Expanded directional-water physics coverage from three recent releases to every advertised version.
+
+## Desktop and Android 0.9.1 — 2026-08-24
+
+### Fixed
+
+- Modern proxy transfers now quiesce movement, tick, chat, and inventory packets while the connection is temporarily in the configuration state, preventing destination servers from rejecting 1.20.2+ clients during a server switch.
+- Windows and Android use the same configuration-state packet guard, including Minecraft 1.21.11.
+
+### Verified
+
+- Added regression coverage proving gameplay packets are suppressed only during configuration and resume in play state.
+## Desktop and Android 0.9.0 — 2026-08-24
 
 ### Added
 
@@ -17,7 +40,7 @@ For the complete desktop history from 0.1.0 onward, including source tags, insta
 
 ### Verified
 
-- Automatic version detection against matching local protocol servers for every engine-advertised version from 1.7 through 1.21.11.
+- Automatic version detection against matching local protocol servers for every protocol version then advertised by the app.
 
 ## Android 0.8.3 — 2026-08-24
 

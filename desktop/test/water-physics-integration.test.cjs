@@ -162,13 +162,15 @@ test('passive shallow-water collisions do not synthesize an exit-water jump', ()
   assert.equal(bot.entity.velocity.y, 0.3, 'intentional movement must retain Mineflayer exit-water behavior')
 })
 
-for (const version of ['1.21.1', '1.21.8', '1.21.11']) {
+for (const version of require('../electron/version-support.cjs').supportedVersions().reverse()) {
   test(`the installed ${version} physics stack moves a player in directional water`, () => {
     const registry = minecraftData(version)
     const Block = prismarineBlock(version)
     const block = (name, position, level = 0) => {
       const definition = registry.blocksByName[name]
-      const value = Block.fromStateId(definition.minStateId + level, 0)
+      const value = registry.supportFeature('blockMetadata')
+        ? new Block(definition.id, registry.biomesByName.plains?.id || 1, level)
+        : Block.fromStateId(definition.minStateId + level, 0)
       value.position = position.clone()
       return value
     }

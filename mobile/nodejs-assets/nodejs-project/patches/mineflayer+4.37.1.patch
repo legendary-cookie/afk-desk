@@ -1,0 +1,139 @@
+diff --git a/node_modules/mineflayer/lib/plugins/physics.js b/node_modules/mineflayer/lib/plugins/physics.js
+index cecae69..f8271fc 100644
+--- a/node_modules/mineflayer/lib/plugins/physics.js
++++ b/node_modules/mineflayer/lib/plugins/physics.js
+@@ -1,6 +1,5 @@
+ const { Vec3 } = require('vec3')
+ const assert = require('assert')
+-const math = require('../math')
+ const conv = require('../conversions')
+ const { performance } = require('perf_hooks')
+ const { createDoneTask, createTask } = require('../promise_utils')
+@@ -12,6 +11,11 @@ module.exports = inject
+ const PI = Math.PI
+ const PI_2 = Math.PI * 2
+ const PHYSICS_INTERVAL_MS = 50
++// Sample elapsed time more frequently than the 50 ms simulation step. On
++// Windows a 50 ms interval can be rounded to ~62 ms, causing the fixed-step
++// accumulator to periodically execute two simulation ticks in one callback.
++// A shorter sampler keeps the simulation at 20 TPS while avoiding burst ticks.
++const PHYSICS_SCHEDULER_INTERVAL_MS = 10
+ const PHYSICS_TIMESTEP = PHYSICS_INTERVAL_MS / 1000 // 0.05
+
+ function inject (bot, { physicsEnabled, maxCatchupTicks }) {
+@@ -20,6 +24,8 @@ function inject (bot, { physicsEnabled, maxCatchupTicks }) {
+   const physics = Physics(bot.registry, world)
+ 
+   const positionUpdateSentEveryTick = bot.supportFeature('positionUpdateSentEveryTick')
++  const supportsPlayerInput = bot.supportFeature('newPlayerInputPacket')
++  const supportsClientTickEnd = bot.supportFeature('sendsClientTickEndPacket')
+ 
+   bot.jumpQueued = false
+   bot.jumpTicks = 0 // autojump cooldown
+@@ -35,6 +41,7 @@ function inject (bot, { physicsEnabled, maxCatchupTicks }) {
+   }
+   let lastSentYaw = null
+   let lastSentPitch = null
++  let lastSentInput = null
+   let doPhysicsTimer = null
+   let lastPhysicsFrameTime = null
+   let shouldUsePhysics = false
+@@ -76,16 +83,48 @@ function inject (bot, { physicsEnabled, maxCatchupTicks }) {
+   }
+ 
+   function tickPhysics (now) {
+-    if (!bot.entity?.position || !Number.isFinite(bot.entity.position.x)) return // entity not ready
+-    if (bot.blockAt(bot.entity.position) == null) return // check if chunk is unloaded
+-    if (bot.physicsEnabled && shouldUsePhysics) {
+-      physics.simulatePlayer(new PlayerState(bot, controlState), world).apply(bot)
+-      bot.emit('physicsTick')
+-      bot.emit('physicTick') // Deprecated, only exists to support old plugins. May be removed in the future
++    try {
++      if (!bot.entity?.position || !Number.isFinite(bot.entity.position.x)) return // entity not ready
++      if (bot.blockAt(bot.entity.position) == null) return // check if chunk is unloaded
++      updatePlayerInput()
++      if (shouldUsePhysics) updateRotation()
++      if (bot.physicsEnabled && shouldUsePhysics) {
++        const state = new PlayerState(bot, controlState)
++        state.yaw = lastSentYaw
++        state.pitch = lastSentPitch
++        physics.simulatePlayer(state, world).apply(bot)
++        bot.emit('physicsTick')
++        bot.emit('physicTick') // Deprecated, only exists to support old plugins. May be removed in the future
++      }
++      if (shouldUsePhysics) {
++        updatePosition(now)
++      }
++    } finally {
++      if (supportsClientTickEnd) bot._client.write('tick_end', {})
+     }
+-    if (shouldUsePhysics) {
+-      updatePosition(now)
++  }
++
++  function updateRotation () {
++    // Movement physics must use the exact rotation reported to the server.
++    // Do not slew it: pathfinder steers by changing the target yaw every tick.
++    lastSentYaw = bot.entity.yaw
++    lastSentPitch = bot.entity.pitch
++  }
++
++  function updatePlayerInput () {
++    if (!supportsPlayerInput) return
++    const inputs = {
++      forward: controlState.forward,
++      backward: controlState.back,
++      left: controlState.left,
++      right: controlState.right,
++      jump: controlState.jump,
++      shift: controlState.sneak,
++      sprint: controlState.sprint
+     }
++    if (lastSentInput !== null && Object.keys(inputs).every(key => inputs[key] === lastSentInput[key])) return
++    bot._client.write('player_input', { inputs })
++    lastSentInput = inputs
+   }
+ 
+   // remove this when 'physicTick' is removed
+@@ -159,16 +198,6 @@ function inject (bot, { physicsEnabled, maxCatchupTicks }) {
+     // Don't send position with invalid coordinates (NaN after death)
+     if (!Number.isFinite(bot.entity.position.x)) return
+ 
+-    // Increment the yaw in baby steps so that notchian clients (not the server) can keep up.
+-    const dYaw = deltaYaw(bot.entity.yaw, lastSentYaw)
+-    const dPitch = bot.entity.pitch - (lastSentPitch || 0)
+-
+-    // Vanilla doesn't clamp yaw, so we don't want to do it either
+-    const maxDeltaYaw = PHYSICS_TIMESTEP * physics.yawSpeed
+-    const maxDeltaPitch = PHYSICS_TIMESTEP * physics.pitchSpeed
+-    lastSentYaw += math.clamp(-maxDeltaYaw, dYaw, maxDeltaYaw)
+-    lastSentPitch += math.clamp(-maxDeltaPitch, dPitch, maxDeltaPitch)
+-
+     const yaw = Math.fround(conv.toNotchianYaw(lastSentYaw))
+     const pitch = Math.fround(conv.toNotchianPitch(lastSentPitch))
+     const position = bot.entity.position
+@@ -258,14 +287,7 @@ function inject (bot, { physicsEnabled, maxCatchupTicks }) {
+         jumpBoost: 0
+       })
+     } else if (control === 'sneak') {
+-      if (bot.supportFeature('newPlayerInputPacket')) {
+-        // In 1.21.6+, sneak is handled via player_input packet
+-        bot._client.write('player_input', {
+-          inputs: {
+-            shift: state
+-          }
+-        })
+-      } else {
++      if (!supportsPlayerInput) {
+         // Legacy entity_action approach for older versions
+         bot._client.write('entity_action', {
+           entityId: bot.entity.id,
+@@ -484,7 +506,7 @@ function inject (bot, { physicsEnabled, maxCatchupTicks }) {
+     shouldUsePhysics = false
+     if (doPhysicsTimer === null) {
+       lastPhysicsFrameTime = performance.now()
+-      doPhysicsTimer = setInterval(doPhysics, PHYSICS_INTERVAL_MS)
++      doPhysicsTimer = setInterval(doPhysics, PHYSICS_SCHEDULER_INTERVAL_MS)
+     }
+   })
+   bot.on('end', cleanup)

@@ -15,28 +15,29 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/legendary-cookie/afk-desk/releases/download/v0.8.2/AFK-Desk-Setup-0.8.2.exe"><strong>Download AFK Desk 0.8.2 for Windows</strong></a>
-  · <a href="https://github.com/legendary-cookie/afk-desk/releases/download/v0.8.3/AFK-Desk-Mobile-0.8.3.apk"><strong>Download Android 0.8.3</strong></a>
-  · <a href="https://github.com/legendary-cookie/afk-desk/releases/tag/v0.8.3">Release notes</a>
+  <a href="https://github.com/legendary-cookie/afk-desk/releases/download/v0.9.2/AFK-Desk-Setup-0.9.2.exe"><strong>Download AFK Desk 0.9.2 for Windows</strong></a>
+  · <a href="https://github.com/legendary-cookie/afk-desk/releases/download/v0.9.2/AFK-Desk-Android-0.9.2.apk"><strong>Download Android 0.9.2</strong></a>
+  · <a href="https://github.com/legendary-cookie/afk-desk/releases/tag/v0.9.2">Release notes</a>
   · <a href="HISTORY.md">Version history</a>
 </p>
 
 AFK Desk supports multiple Microsoft-authenticated accounts, chat and commands, customizable anti-AFK behavior, live player state, inventory actions, proxies, startup connections, and automatic reconnect. It has no subscriptions, analytics, or account-count limits.
 
-## Android 0.8.3 hotfix
+## Version 0.9.2
 
-- Inventory keys and other item stacks can be dropped from their exact selected slot after confirmation.
-- Android now downloads, validates, caches, and renders custom server menus from server resource packs.
-- Custom menu slots are interactive and support bitmap-font backgrounds and custom item-model icons.
-- Chat stays inside a bounded scroller, pauses automatic following while older messages are being read, and resumes with **Follow latest**.
+- Windows and Android expose the same 28 complete bot versions from Minecraft 1.8.8 through 1.21.11.
+- Every listed version is covered by local client/server tests for movement, jumping, chat, hotbar selection, and arm actions.
+- Directional-water physics is tested across the complete version matrix on both engines.
+- Modern proxy transfers pause gameplay packets during configuration and resume them after the destination world loads.
+- Chat completion supports commands and player names, while clickable server chat actions remain interactive.
 
-See the [complete 0.8.3 hotfix notes](https://github.com/legendary-cookie/afk-desk/releases/tag/v0.8.3) for verification details and the APK checksum.
+See the [complete 0.9.2 release notes](https://github.com/legendary-cookie/afk-desk/releases/tag/v0.9.2) for verification details and artifact checksums.
 
 ## Features
 
 - Multiple Microsoft accounts with automatic IGN and player-head discovery
 - Microsoft device-code authentication without collecting account passwords
-- Automatic Minecraft version detection with stable same-server version reuse
+- Automatic Minecraft version detection with stable same-server version reuse, plus exact selection from 1.8.8 through 1.21.11
 - Fixed-size scrolling console, Minecraft chat colors, commands, history, and editable macros
 - Separate configurable initial-join and server-change messages
 - Automatic reconnect with exponential backoff and stalled-connection recovery
@@ -58,8 +59,8 @@ See the [complete 0.8.3 hotfix notes](https://github.com/legendary-cookie/afk-de
 
 | Platform | Version | Download | Notes |
 | --- | --- | --- | --- |
-| Windows desktop | 0.8.2 | [Installer](https://github.com/legendary-cookie/afk-desk/releases/download/v0.8.2/AFK-Desk-Setup-0.8.2.exe) | Primary Electron + Mineflayer client |
-| Android | 0.8.3 | [APK](https://github.com/legendary-cookie/afk-desk/releases/download/v0.8.3/AFK-Desk-Mobile-0.8.3.apk) | Standalone on-device client with foreground service |
+| Windows desktop | 0.9.2 | [Installer](https://github.com/legendary-cookie/afk-desk/releases/download/v0.9.2/AFK-Desk-Setup-0.9.2.exe) | Primary Electron + Mineflayer client |
+| Android | 0.9.2 | [APK](https://github.com/legendary-cookie/afk-desk/releases/download/v0.9.2/AFK-Desk-Android-0.9.2.apk) | Standalone on-device client with foreground service |
 | iOS | 0.1.0 source | [Build instructions](mobile/BUILDING.md) | Requires macOS, Xcode, and personal signing |
 
 GitHub provides ZIP and TAR source archives on every [release page](https://github.com/legendary-cookie/afk-desk/releases). Published artifact hashes are recorded in [RELEASE_CHECKSUMS.txt](RELEASE_CHECKSUMS.txt).
@@ -68,8 +69,8 @@ GitHub provides ZIP and TAR source archives on every [release page](https://gith
 
 | Project | Stack | Current version | Notes |
 | --- | --- | --- | --- |
-| [`desktop/`](desktop/) | Electron + Mineflayer | 0.8.2 | Primary Windows desktop client |
-| [`mobile/`](mobile/) | React Native + embedded Node.js | 0.8.3 Android | Standalone Android client and iOS Xcode source |
+| [`desktop/`](desktop/) | Electron + Mineflayer | 0.9.2 | Primary Windows desktop client |
+| [`mobile/`](mobile/) | React Native + embedded Node.js | 0.9.2 Android | Standalone Android client and iOS Xcode source |
 | [`fabric-movement-diagnostics/`](fabric-movement-diagnostics/) | Fabric | Reference utility | Compares vanilla movement diagnostics without account secrets |
 
 ## Run from source

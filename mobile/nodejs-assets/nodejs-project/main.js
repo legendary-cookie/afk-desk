@@ -36,7 +36,7 @@ bridge.channel.on('engine-command', async ({ requestId, action, account, account
   }
 })
 
-bridge.channel.post('engine-ready', { version: '0.9.0' })
+bridge.channel.post('engine-ready', { version: '0.9.2' })
 
 bridge.app.on('pause', (pauseLock) => {
   // Android keeps the runtime alive through AFK Desk's foreground service.

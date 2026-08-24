@@ -1,6 +1,6 @@
 # Building AFK Desk Mobile
 
-These instructions build Android **0.9.0**.
+These instructions build Android **0.9.2**.
 
 ## Android
 
@@ -11,7 +11,8 @@ Install JDK 17, Android SDK Platform 35, Build Tools 35.0.0, NDK 26.1.10909125, 
 ```powershell
 npm ci
 cd nodejs-assets/nodejs-project
-npm ci --omit=dev
+npm ci
+npm prune --omit=dev --ignore-scripts
 cd ../../android
 ./gradlew assembleRelease
 ```

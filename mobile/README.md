@@ -2,7 +2,7 @@
 
 AFK Desk Mobile is the standalone React Native client. It embeds Node.js and Mineflayer on the device, so it does not require the Windows app to stay online.
 
-Current Android development version: **0.9.0**.
+Current Android development version: **0.9.2**.
 
 ## Features
 

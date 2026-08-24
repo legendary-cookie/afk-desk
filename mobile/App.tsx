@@ -25,7 +25,7 @@ type Telemetry = {health: number; food: number; position: null | {x: number; y: 
 type Session = {status: string; detail: string; logs: Log[]; telemetry?: Telemetry; serverWindow?: ServerMenu | null};
 
 const STORAGE_KEY = 'afkdesk.mobile.accounts.v1';
-const SUPPORTED_GAME_VERSIONS = ['1.21.11', '1.21.9', '1.21.8', '1.21.6', '1.21.5', '1.21.4', '1.21.3', '1.21.1', '1.20.6', '1.20.4', '1.20.2', '1.20.1', '1.20', '1.19.4', '1.19.3', '1.19.2', '1.19', '1.18.2', '1.17.1', '1.16.5', '1.15.2', '1.14.4', '1.13.2', '1.12.2', '1.11.2', '1.10.2', '1.9.4', '1.8.8', '1.7'];
+const SUPPORTED_GAME_VERSIONS = ['1.21.11', '1.21.9', '1.21.8', '1.21.6', '1.21.5', '1.21.4', '1.21.3', '1.21.1', '1.20.6', '1.20.4', '1.20.2', '1.20.1', '1.20', '1.19.4', '1.19.3', '1.19.2', '1.19', '1.18.2', '1.17.1', '1.16.5', '1.15.2', '1.14.4', '1.13.2', '1.12.2', '1.11.2', '1.10.2', '1.9.4', '1.8.8'];
 const EMPTY_PROXY: ProxyConfig = {enabled: false, type: 'socks5', host: '', port: '1080', username: '', password: ''};
 const blankAccount = (): Account => ({
   id: `${Date.now()}-${Math.random().toString(16).slice(2)}`, username: '', host: '', port: '25565', version: '',
@@ -242,7 +242,7 @@ function App(): React.JSX.Element {
   return <SafeAreaView style={styles.safe}>
     <StatusBar barStyle="light-content" backgroundColor="#090c10" />
     <View style={styles.header}>
-      <View><Text style={styles.brand}>AFK Desk 0.9.0</Text><Text style={styles.muted}>{engineReady ? 'On-device Minecraft client' : 'Starting engine…'}</Text></View>
+      <View><Text style={styles.brand}>AFK Desk 0.9.2</Text><Text style={styles.muted}>{engineReady ? 'On-device Minecraft client' : 'Starting engine…'}</Text></View>
       <Pressable style={styles.smallButton} onPress={() => setSettingsOpen(true)}><Text style={styles.buttonText}>Settings</Text></Pressable>
     </View>
 

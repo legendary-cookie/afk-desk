@@ -1,6 +1,7 @@
 const protocol = require('minecraft-protocol')
 
-const SUPPORTED = Object.freeze([...protocol.supportedVersions])
+// Match the picker to versions the full Mineflayer bot engine can initialize.
+const SUPPORTED = Object.freeze(protocol.supportedVersions.filter(version => version !== '1.7'))
 const SUPPORTED_SET = new Set(SUPPORTED)
 
 function supportedVersions() {

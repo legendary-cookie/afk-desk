@@ -54,3 +54,8 @@ b38b2182c8a824516b3a8a39735738fcfa6b92e4176fb8d4ae3570fc83e76d76  AFK-Desk-Mobil
 # Android 0.8.3 hotfix
 
 1091563f9885aa9b184472f5054869e63edf19eb162eb51b14284fb1f7c38ab7  AFK-Desk-Mobile-0.8.3.apk
+
+# Desktop and Android 0.9.2
+
+42f206679a67dff91a4ebcf2011cf5207ccf4f31f5b28dacbb01869b3895a156  AFK-Desk-Setup-0.9.2.exe
+018f56747a523542d9cc3f76a912757b0f49c7f1965ba98350e0d432fdc7ce79  AFK-Desk-Android-0.9.2.apk

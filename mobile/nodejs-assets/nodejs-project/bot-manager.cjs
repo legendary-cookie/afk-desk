@@ -3,6 +3,7 @@ const { applyProtocolFixes } = require('./protocol-fixes.cjs')
 const { createProxyConnect } = require('./proxy-connect.cjs')
 const { ResourcePackLoader, normalizePackEvent } = require('./resource-pack.cjs')
 const { normalizeVersionSelection } = require('./version-support.cjs')
+const { installMovementPacketCompatibility, installModernPlayerInputCompatibility } = require('./movement-compatibility.cjs')
 applyProtocolFixes()
 const mineflayer = require('mineflayer')
 
@@ -11,6 +12,14 @@ const CONTAINER_NAMES = new Set(['chest', 'trapped_chest', 'barrel'])
 const DEFAULT_AUTO_DEPOSIT_RANGE = 5
 const MAX_AUTO_DEPOSIT_RANGE = 16
 const CONTAINER_SCAN_INTERVAL = 5000
+const CONFIGURATION_BLOCKED_GAMEPLAY_PACKETS = new Set([
+  'position', 'look', 'position_look', 'flying', 'player_input', 'tick_end',
+  'entity_action', 'arm_animation', 'held_item_slot', 'block_dig', 'block_place',
+  'use_item', 'use_entity', 'window_click', 'close_window',
+  'creative_inventory_action', 'spectate', 'teleport_confirm', 'vehicle_move',
+  'steer_vehicle', 'chat', 'chat_message', 'chat_command',
+  'chat_command_signed', 'tab_complete', 'client_command'
+])
 
 class BotManager {
   constructor({ profilesPath, emit, createBot = mineflayer.createBot, scheduleReconnectTimer = setTimeout, clearReconnectTimer = clearTimeout, resourcePackLoader }) {
@@ -45,6 +54,8 @@ class BotManager {
       hideErrors: true,
       onMsaCode: (code) => this.emit('login-code', account.id, normalizeLoginCode(code))
     })
+    installMovementPacketCompatibility(bot)
+    installModernPlayerInputCompatibility(bot)
 
     const session = {
       bot, account: { ...account }, antiAfkTimer: null, jumpTimer: null, telemetryTimer: null,
@@ -605,6 +616,17 @@ function buildTelemetry(bot, nearestChest = null, resourcePack = null) {
   }
 }
 
+function installConfigurationPacketGuard(bot) {
+  const client = bot?._client
+  if (!client || typeof client.write !== 'function' || client.__afkDeskConfigurationPacketGuard) return
+  const write = client.write.bind(client)
+  client.write = (name, payload) => {
+    if (client.state === 'configuration' && CONFIGURATION_BLOCKED_GAMEPLAY_PACKETS.has(name)) return
+    return write(name, payload)
+  }
+  client.__afkDeskConfigurationPacketGuard = true
+}
+
 const CHAT_NAMED_COLORS = {
   black: '#000000', dark_blue: '#0000aa', dark_green: '#00aa00', dark_aqua: '#00aaaa', dark_red: '#aa0000', dark_purple: '#aa00aa', gold: '#ffaa00', gray: '#aaaaaa', dark_gray: '#555555', blue: '#5555ff', green: '#55ff55', aqua: '#55ffff', red: '#ff5555', light_purple: '#ff55ff', yellow: '#ffff55', white: '#ffffff'
 }
@@ -729,4 +751,4 @@ function rejectResourcePack(bot, first, second, hash) {
   } catch {}
 }
 
-module.exports = { BotManager, normalizeLoginCode, extractText, shouldUseProxyCommandPacket, parseMinecraftFormatting, parseInteractiveChat, normalizeSkinUrl, findNearestChest, buildTelemetry, buildWindowSnapshot }
+module.exports = { BotManager, normalizeLoginCode, extractText, shouldUseProxyCommandPacket, parseMinecraftFormatting, parseInteractiveChat, normalizeSkinUrl, findNearestChest, buildTelemetry, buildWindowSnapshot, installConfigurationPacketGuard }

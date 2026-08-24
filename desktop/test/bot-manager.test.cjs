@@ -1234,6 +1234,29 @@ test('modern prediction servers receive complete initial and changed player inpu
   assert.deepEqual(diagnostics.map((entry) => entry.inputs), bot.writes.map(([, payload]) => payload.inputs))
 })
 
+test('gameplay packets are quiesced while a modern server transfer is configuring', () => {
+  const bot = new FakeBot()
+  const diagnostics = []
+  bot.supportFeature = (name) => name === 'newPlayerInputPacket'
+  bot.__afkDeskPacketDiagnostic = (entry) => diagnostics.push(entry)
+  installMovementPacketCompatibility(bot)
+
+  bot._client.state = 'configuration'
+  bot._client.write('tick_end', {})
+  bot._client.write('player_input', { inputs: { forward: true } })
+  bot._client.write('position', { x: 1, y: 64, z: 2, flags: { onGround: true } })
+  bot._client.write('settings', { locale: 'en_us' })
+
+  assert.deepEqual(bot.writes, [['settings', { locale: 'en_us' }]])
+  assert.deepEqual(diagnostics.filter((entry) => entry.event === 'protocol_packet_suppressed').map((entry) => entry.name), [
+    'tick_end', 'player_input', 'position'
+  ])
+
+  bot._client.state = 'play'
+  bot._client.write('tick_end', {})
+  assert.deepEqual(bot.writes.at(-1), ['tick_end', {}])
+})
+
 test('installed Mineflayer closes modern client ticks and sends complete input state', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'node_modules', 'mineflayer', 'lib', 'plugins', 'physics.js'), 'utf8')
   assert.match(source, /finally \{\s*if \(supportsClientTickEnd\) bot\._client\.write\('tick_end'/)

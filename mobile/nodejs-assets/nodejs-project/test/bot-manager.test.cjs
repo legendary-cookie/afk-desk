@@ -1,7 +1,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const { EventEmitter } = require('node:events')
-const { BotManager, findNearestChest, parseInteractiveChat } = require('../bot-manager.cjs')
+const { BotManager, findNearestChest, parseInteractiveChat, installConfigurationPacketGuard } = require('../bot-manager.cjs')
 
 class FakeBot extends EventEmitter {
   constructor() {
@@ -73,6 +73,24 @@ test('mobile drops exactly the inventory stack selected by slot', async (t) => {
   assert.equal(bot.tossed, selected)
   assert.match(events.find(([type]) => type === 'log')?.[2].message, /Dropped 3 × Dungeon Key/)
   await assert.rejects(manager.dropStack('drop', 38), /no longer available/i)
+})
+
+test('mobile quiesces gameplay packets during modern server configuration', () => {
+  const bot = new FakeBot()
+  const writes = []
+  bot._client.write = (name, payload) => writes.push([name, payload])
+  installConfigurationPacketGuard(bot)
+
+  bot._client.state = 'configuration'
+  bot._client.write('tick_end', {})
+  bot._client.write('player_input', { inputs: { forward: true } })
+  bot._client.write('position', { x: 1, y: 64, z: 2 })
+  bot._client.write('settings', { locale: 'en_us' })
+  assert.deepEqual(writes, [['settings', { locale: 'en_us' }]])
+
+  bot._client.state = 'play'
+  bot._client.write('position', { x: 1, y: 64, z: 2 })
+  assert.deepEqual(writes.at(-1), ['position', { x: 1, y: 64, z: 2 }])
 })
 
 test('mobile loads resource-pack art and exposes clickable server menus', async (t) => {
