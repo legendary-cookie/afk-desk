@@ -39,5 +39,6 @@ jobs:
       - run: npm ci
       - run: npm test -- --runInBand
       - run: npm ci --omit=dev --prefix nodejs-assets/nodejs-project
-      - run: node --test nodejs-assets/nodejs-project/test/bot-manager.test.cjs
+      - run: node --test
+        working-directory: mobile/nodejs-assets/nodejs-project
       - run: npx tsc --noEmit

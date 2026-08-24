@@ -1,6 +1,7 @@
 const path = require('node:path')
 const { applyProtocolFixes } = require('./protocol-fixes.cjs')
 const { createProxyConnect } = require('./proxy-connect.cjs')
+const { ResourcePackLoader, normalizePackEvent } = require('./resource-pack.cjs')
 applyProtocolFixes()
 const mineflayer = require('mineflayer')
 
@@ -11,12 +12,13 @@ const MAX_AUTO_DEPOSIT_RANGE = 16
 const CONTAINER_SCAN_INTERVAL = 5000
 
 class BotManager {
-  constructor({ profilesPath, emit, createBot = mineflayer.createBot, scheduleReconnectTimer = setTimeout, clearReconnectTimer = clearTimeout }) {
+  constructor({ profilesPath, emit, createBot = mineflayer.createBot, scheduleReconnectTimer = setTimeout, clearReconnectTimer = clearTimeout, resourcePackLoader }) {
     this.profilesPath = profilesPath
     this.emit = emit
     this.createBot = createBot
     this.scheduleReconnectTimer = scheduleReconnectTimer
     this.clearReconnectTimer = clearReconnectTimer
+    this.resourcePackLoader = resourcePackLoader || new ResourcePackLoader({ cacheDir: path.join(path.dirname(profilesPath), 'resource-packs') })
     this.sessions = new Map()
     this.reconnects = new Map()
   }
@@ -46,7 +48,8 @@ class BotManager {
       bot, account: { ...account }, antiAfkTimer: null, jumpTimer: null, telemetryTimer: null,
       containerScanTimer: null, messageTimers: new Set(), ready: false, switching: false,
       joinMessageSent: false, identityKey: '', telemetryKey: '', nearestChest: null,
-      depositing: false, depositRevision: 0, activeDepositContainer: null
+      depositing: false, depositRevision: 0, activeDepositContainer: null,
+      inventoryAction: false, resourcePack: null
     }
     this.sessions.set(account.id, session)
     this.status(account.id, 'connecting', reconnecting ? `Reconnect attempt ${reconnectState.attempts}…` : `Connecting to ${account.host}…`)
@@ -120,6 +123,36 @@ class BotManager {
     bot.on('playerUpdated', (player) => { if (player?.username === bot.username) emitIdentity() })
     bot.on('health', emitTelemetry)
     bot.inventory?.on?.('updateSlot', emitTelemetry)
+    bot.on('windowOpen', (window) => {
+      if (session.depositing) return
+      const emitWindow = () => this.emit('window', account.id, buildWindowSnapshot(window, session.resourcePack))
+      emitWindow()
+      window?.on?.('updateSlot', emitWindow)
+    })
+    bot.on('windowClose', () => {
+      if (!session.depositing) this.emit('window', account.id, { open: false })
+    })
+    bot.on('resourcePack', async (first, second) => {
+      const pack = normalizePackEvent(first, second)
+      if (!pack.url) {
+        this.emit('log', account.id, { kind: 'error', message: 'The server offered a resource pack without a usable HTTP address.', at: Date.now() })
+        rejectResourcePack(bot, first, second, pack.hash)
+        return
+      }
+      const host = safeUrlHost(pack.url)
+      this.emit('log', account.id, { kind: 'system', message: `Loading server resource pack from ${host}…`, at: Date.now() })
+      try {
+        session.resourcePack = await this.resourcePackLoader.load(pack.url, pack.hash)
+        bot.acceptResourcePack?.()
+        session.telemetryKey = ''
+        emitTelemetry()
+        if (bot.currentWindow && !session.depositing) this.emit('window', account.id, buildWindowSnapshot(bot.currentWindow, session.resourcePack))
+        this.emit('log', account.id, { kind: 'system', message: 'Server resource pack loaded. Custom menu art is enabled.', at: Date.now() })
+      } catch (error) {
+        rejectResourcePack(bot, first, second, pack.hash)
+        this.emit('log', account.id, { kind: 'error', message: `Server resource pack failed: ${String(error?.message || error).slice(0, 180)}`, at: Date.now() })
+      }
+    })
     bot.on('spawn', markReady)
     bot.on('forcedMove', markReady)
     bot.on('respawn', () => {
@@ -219,6 +252,45 @@ class BotManager {
     bot.look(bot.entity.yaw + delta, bot.entity.pitch, true)
   }
 
+  async dropStack(id, slot) {
+    return this.withInventoryAction(id, async (bot) => {
+      const safeSlot = playerInventorySlot(slot)
+      const item = bot.inventory?.slots?.[safeSlot] || bot.inventory?.items?.().find((entry) => Number(entry.slot) === safeSlot)
+      if (!item) throw new Error('That inventory stack is no longer available.')
+      await bot.tossStack(item)
+      this.emit('log', id, { kind: 'sent', message: `Dropped ${item.count} × ${item.displayName || item.name}`, at: Date.now() })
+    })
+  }
+
+  async withInventoryAction(id, action) {
+    const session = this.sessions.get(id)
+    const bot = this.requireOnline(id)
+    if (bot.currentWindow) throw new Error('Close the server menu before managing player inventory.')
+    if (session.depositing || session.inventoryAction) throw new Error('Another inventory action is still running.')
+    session.inventoryAction = true
+    try { return await action(bot, session) }
+    finally {
+      session.inventoryAction = false
+      this.emitTelemetry(id)
+    }
+  }
+
+  async clickWindowSlot(id, slot) {
+    const bot = this.requireOnline(id)
+    const window = bot.currentWindow
+    if (!window) throw new Error('The server menu is no longer open.')
+    const safeSlot = Number(slot)
+    if (!Number.isInteger(safeSlot) || safeSlot < 0 || safeSlot > 255) throw new Error('Invalid server-menu slot.')
+    const inventoryStart = Math.max(0, Number(window.inventoryStart) || window.slots?.length || 0)
+    if (safeSlot >= inventoryStart) throw new Error('Only server-menu slots can be clicked here.')
+    await bot.clickWindow(safeSlot, 0, 0)
+  }
+
+  closeWindow(id) {
+    const bot = this.requireOnline(id)
+    if (bot.currentWindow) bot.closeWindow(bot.currentWindow)
+  }
+
   setAutoDeposit(id, enabled, range) {
     const session = this.sessions.get(id)
     if (!session) return
@@ -245,7 +317,7 @@ class BotManager {
 
   async refreshChest(id) {
     const session = this.sessions.get(id)
-    if (!session?.bot?.entity || session.depositing || session.bot.currentWindow) return
+    if (!session?.bot?.entity || session.depositing || session.inventoryAction || session.bot.currentWindow) return
     const block = findNearestChest(session.bot, session.account.autoDepositRange)
     session.nearestChest = block ? containerLocation(session.bot, block) : null
     this.emitTelemetry(id)
@@ -284,7 +356,7 @@ class BotManager {
   emitTelemetry(id) {
     const session = this.sessions.get(id)
     if (!session) return
-    const snapshot = buildTelemetry(session.bot, session.nearestChest)
+    const snapshot = buildTelemetry(session.bot, session.nearestChest, session.resourcePack)
     const { at: _at, ...stableSnapshot } = snapshot
     const key = JSON.stringify(stableSnapshot)
     if (key === session.telemetryKey) return
@@ -494,14 +566,15 @@ function containerLabel(block) {
   return String(block?.name || 'chest').replace(/_/g, ' ')
 }
 
-function buildTelemetry(bot, nearestChest = null) {
+function buildTelemetry(bot, nearestChest = null, resourcePack = null) {
   const position = bot?.entity?.position
   const finite = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback
   const inventory = (bot?.inventory?.items?.() || []).slice(0, 46).map((item) => ({
     slot: Math.max(0, Math.min(Number(item.slot) || 0, 255)),
     name: String(item.name || '').slice(0, 80),
     displayName: String(item.displayName || item.name || 'Unknown item').slice(0, 100),
-    count: Math.max(1, Math.min(Number(item.count) || 1, 127))
+    count: Math.max(1, Math.min(Number(item.count) || 1, 127)),
+    ...resourcePack?.itemAppearance?.(item)
   }))
   return {
     health: Math.max(0, Math.min(finite(bot?.health), 20)),
@@ -518,4 +591,40 @@ function buildTelemetry(bot, nearestChest = null) {
   }
 }
 
-module.exports = { BotManager, normalizeLoginCode, extractText, shouldUseProxyCommandPacket, parseMinecraftFormatting, normalizeSkinUrl, findNearestChest, buildTelemetry }
+function playerInventorySlot(value) {
+  const slot = Number(value)
+  if (!Number.isInteger(slot) || slot < 9 || slot > 45) throw new Error('Invalid player inventory slot.')
+  return slot
+}
+
+function buildWindowSnapshot(window, resourcePack = null) {
+  const limit = Math.max(0, Math.min(Number(window?.inventoryStart) || window?.slots?.length || 0, 256))
+  const slots = (window?.slots || []).slice(0, limit).map((item, slot) => item ? {
+    slot,
+    name: String(item.name || '').slice(0, 80),
+    displayName: String(item.displayName || item.name || 'Unknown item').slice(0, 100),
+    count: Math.max(1, Math.min(Number(item.count) || 1, 127)),
+    ...resourcePack?.itemAppearance?.(item)
+  } : null).filter(Boolean)
+  const titleSource = window?.title?.json ?? window?.title
+  const resourceTitle = resourcePack?.titleAppearance?.(titleSource)
+  const title = resourceTitle ? 'Custom server menu' : String(extractText(window?.title) || 'Server menu').slice(0, 100)
+  return { open: true, title, ...(resourceTitle ? { resourceTitle } : {}), size: limit, slots }
+}
+
+function safeUrlHost(value) {
+  try { return new URL(String(value)).host.slice(0, 120) || 'server' } catch { return 'server' }
+}
+
+function rejectResourcePack(bot, first, second, hash) {
+  try {
+    if (bot?.supportFeature?.('resourcePackUsesUUID')) {
+      const uuid = [first, second].find((value) => value && typeof value === 'object')
+      if (uuid) return bot._client?.write?.('resource_pack_receive', { uuid, result: 1 })
+    }
+    if (bot?.supportFeature?.('resourcePackUsesHash')) return bot._client?.write?.('resource_pack_receive', { hash: hash || '', result: 1 })
+    return bot?._client?.write?.('resource_pack_receive', { result: 1 })
+  } catch {}
+}
+
+module.exports = { BotManager, normalizeLoginCode, extractText, shouldUseProxyCommandPacket, parseMinecraftFormatting, normalizeSkinUrl, findNearestChest, buildTelemetry, buildWindowSnapshot }

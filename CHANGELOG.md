@@ -2,6 +2,20 @@
 
 For the complete desktop history from 0.1.0 onward, including source tags, installers, and comparisons, see [HISTORY.md](HISTORY.md).
 
+## Android 0.8.3 — 2026-08-24
+
+### Added
+
+- Per-slot inventory drop controls with confirmation, including hotbar items and server keys.
+- Interactive custom server-menu rendering from downloaded resource-pack item models and bitmap-font GUI art.
+- A **Follow latest** chat control that preserves the reader's position when reviewing older messages.
+
+### Fixed
+
+- Android now loads, validates, caches, and applies server resource packs instead of ignoring resource-pack events.
+- Chat stays in a bounded internal scroller and no longer drags the entire account page while new messages arrive.
+- Inventory and server-window actions are serialized so drop, deposit, and menu clicks do not conflict.
+
 ## Desktop and Android 0.8.2 — 2026-08-22
 
 ### Added

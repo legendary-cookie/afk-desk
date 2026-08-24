@@ -1,6 +1,6 @@
 # Building AFK Desk Mobile
 
-These instructions build Android **0.8.2**.
+These instructions build Android **0.8.3**.
 
 ## Android
 

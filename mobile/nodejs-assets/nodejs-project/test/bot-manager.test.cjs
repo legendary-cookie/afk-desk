@@ -9,10 +9,14 @@ class FakeBot extends EventEmitter {
     this.username = 'Player'
     this.inventory = new EventEmitter()
     this.inventory.items = () => []
+    this.inventory.slots = []
     this.entity = null
     this._client = new EventEmitter()
   }
   quit() { this.emit('end', 'quit') }
+  async tossStack(item) { this.tossed = item }
+  async clickWindow(...args) { this.clickedWindow = args }
+  closeWindow(window) { this.closedWindow = window; this.currentWindow = null; this.emit('windowClose') }
 }
 
 test('mobile auto-deposit search enforces range and line of sight', () => {
@@ -35,6 +39,61 @@ test('mobile auto-deposit search enforces range and line of sight', () => {
   assert.equal(findNearestChest(bot, 100), visible)
   expectedRange = 1
   assert.equal(findNearestChest(bot, 0), visible)
+})
+
+test('mobile drops exactly the inventory stack selected by slot', async (t) => {
+  const events = []
+  const bot = new FakeBot()
+  const selected = { slot: 37, type: 264, metadata: 0, name: 'diamond', displayName: 'Dungeon Key', count: 3 }
+  bot.inventory.items = () => [selected]
+  bot.inventory.slots[37] = selected
+  const manager = new BotManager({ profilesPath: 'profiles', emit: (...event) => events.push(event), createBot: () => bot })
+  t.after(() => manager.disconnect('drop'))
+  manager.connect({ id: 'drop', username: 'user@example.com', host: 'localhost', antiAfk: false, autoReconnect: false })
+  bot.entity = { position: { x: 0, y: 64, z: 0 } }
+
+  await manager.dropStack('drop', 37)
+
+  assert.equal(bot.tossed, selected)
+  assert.match(events.find(([type]) => type === 'log')?.[2].message, /Dropped 3 × Dungeon Key/)
+  await assert.rejects(manager.dropStack('drop', 38), /no longer available/i)
+})
+
+test('mobile loads resource-pack art and exposes clickable server menus', async (t) => {
+  const events = []
+  const bot = new FakeBot()
+  let accepted = 0
+  let loaded
+  bot.acceptResourcePack = () => { accepted++ }
+  const resourcePack = {
+    source: 'https://packs.example/menu.zip',
+    sha1: 'abc',
+    itemAppearance: (item) => item.name === 'gold_nugget' ? { resourceIcon: 'data:image/png;base64,custom', resourceModel: 'veridian:item/mission' } : {},
+    titleAppearance: () => ({ text: '\ue001', glyphs: [{ character: '\ue001', image: 'data:image/png;base64,custom', advance: 16 }] })
+  }
+  const manager = new BotManager({
+    profilesPath: 'profiles', emit: (...event) => events.push(event), createBot: () => bot,
+    resourcePackLoader: { load: async (...args) => { loaded = args; return resourcePack } }
+  })
+  t.after(() => manager.disconnect('pack'))
+  manager.connect({ id: 'pack', username: 'user@example.com', host: 'localhost', antiAfk: false, autoReconnect: false })
+  bot.entity = { position: { x: 0, y: 64, z: 0 } }
+  const menu = { title: '\ue001', inventoryStart: 9, slots: [{ name: 'gold_nugget', displayName: 'Mission', count: 1 }] }
+  bot.currentWindow = menu
+  bot.emit('windowOpen', menu)
+  bot.emit('resourcePack', '0123456789012345678901234567890123456789', 'https://packs.example/menu.zip?token=private')
+  await new Promise((resolve) => setImmediate(resolve))
+
+  assert.deepEqual(loaded, ['https://packs.example/menu.zip?token=private', '0123456789012345678901234567890123456789'])
+  assert.equal(accepted, 1)
+  const snapshot = events.filter(([type]) => type === 'window').at(-1)[2]
+  assert.equal(snapshot.title, 'Custom server menu')
+  assert.equal(snapshot.resourceTitle.text, '\ue001')
+  assert.equal(snapshot.slots[0].resourceModel, 'veridian:item/mission')
+  await manager.clickWindowSlot('pack', 0)
+  assert.deepEqual(bot.clickedWindow, [0, 0, 0])
+  manager.closeWindow('pack')
+  assert.equal(bot.closedWindow, menu)
 })
 
 test('mobile auto-deposit stops queued stacks immediately when toggled off', async (t) => {

@@ -1,9 +1,10 @@
 {
   "name": "afkdesk-mobile-engine",
-  "version": "0.8.2",
+  "version": "0.8.3",
   "private": true,
   "main": "main.js",
   "dependencies": {
+    "adm-zip": "^0.6.0",
     "mineflayer": "^4.37.1",
     "socks": "2.8.9"
   }

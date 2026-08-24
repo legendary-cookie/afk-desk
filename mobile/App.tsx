@@ -16,8 +16,11 @@ type Account = {
 };
 type Segment = {text: string; color?: string; bold?: boolean; italic?: boolean; underlined?: boolean; strikethrough?: boolean};
 type Log = {id: string; kind: string; message: string; at: number; segments?: Segment[]};
-type Telemetry = {health: number; food: number; position: null | {x: number; y: number; z: number}; dimension: string; nearestChest?: null | {type: string; x: number; y: number; z: number; distance: number}; inventory: Array<{slot: number; displayName: string; count: number}>};
-type Session = {status: string; detail: string; logs: Log[]; telemetry?: Telemetry};
+type Item = {slot: number; name?: string; displayName: string; count: number; resourceIcon?: string; resourceModel?: string};
+type ResourceGlyph = {image?: string; sourceX?: number; sourceY?: number; sourceWidth?: number; sourceHeight?: number; imageWidth?: number; imageHeight?: number; renderHeight?: number; ascent?: number; advance?: number};
+type ServerMenu = {open: boolean; title: string; size: number; slots: Item[]; resourceTitle?: {text: string; glyphs: ResourceGlyph[]}};
+type Telemetry = {health: number; food: number; position: null | {x: number; y: number; z: number}; dimension: string; nearestChest?: null | {type: string; x: number; y: number; z: number; distance: number}; inventory: Item[]};
+type Session = {status: string; detail: string; logs: Log[]; telemetry?: Telemetry; serverWindow?: ServerMenu | null};
 
 const STORAGE_KEY = 'afkdesk.mobile.accounts.v1';
 const EMPTY_PROXY: ProxyConfig = {enabled: false, type: 'socks5', host: '', port: '1080', username: '', password: ''};
@@ -60,8 +63,10 @@ function App(): React.JSX.Element {
   const [editing, setEditing] = useState<Account | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [chat, setChat] = useState('');
+  const [followLatest, setFollowLatest] = useState(true);
   const [loginCode, setLoginCode] = useState<{code: string; verificationUri?: string} | null>(null);
   const accountsRef = useRef(accounts);
+  const logListRef = useRef<ScrollView>(null);
   accountsRef.current = accounts;
 
   const selected = accounts.find(account => account.id === selectedId) || accounts[0];
@@ -88,9 +93,10 @@ function App(): React.JSX.Element {
       ok ? waiter.resolve() : waiter.reject(new Error(error));
     };
     const onEvent = ({type, accountId, payload}: any) => {
-      if (type === 'status') updateSession(accountId, old => ({...old, status: payload.status, detail: payload.detail}));
+      if (type === 'status') updateSession(accountId, old => ({...old, status: payload.status, detail: payload.detail, ...(!['online', 'connected'].includes(payload.status) ? {serverWindow: null} : {})}));
       if (type === 'log') updateSession(accountId, old => ({...old, logs: [...old.logs.slice(-499), {...payload, id: `${payload.at}-${Math.random()}`}]}));
       if (type === 'telemetry') updateSession(accountId, old => ({...old, telemetry: payload}));
+      if (type === 'window') updateSession(accountId, old => ({...old, serverWindow: payload.open ? payload : null}));
       if (type === 'login-code') setLoginCode(payload);
       if (type === 'identity') {
         setAccounts(old => old.map(item => item.id === accountId ? {...item, username: payload.username || item.username, skinUrl: payload.skinUrl || item.skinUrl} : item));
@@ -122,6 +128,15 @@ function App(): React.JSX.Element {
       engineCommand({action: 'connect', account}).catch(error => Alert.alert('Auto-connect failed', error.message));
     });
   }, [accounts, engineReady]);
+
+  useEffect(() => {
+    setFollowLatest(true);
+  }, [selectedId]);
+
+  useEffect(() => {
+    if (!followLatest) return;
+    requestAnimationFrame(() => logListRef.current?.scrollToEnd({animated: true}));
+  }, [followLatest, selectedId, session?.logs.length]);
 
   const saveAccount = (input: Account) => {
     const account = normalizeAccount(input);
@@ -166,6 +181,16 @@ function App(): React.JSX.Element {
       Alert.alert('Auto-deposit update failed', error.message);
     }
   };
+  const dropItem = (item: Item) => {
+    if (!selected) return;
+    Alert.alert('Drop this stack?', `${item.count} × ${item.displayName} will be dropped on the ground.`, [
+      {text: 'Cancel', style: 'cancel'},
+      {text: 'Drop', style: 'destructive', onPress: () => {
+        engineCommand({action: 'drop-stack', accountId: selected.id, slot: item.slot})
+          .catch((error: Error) => Alert.alert('Drop failed', error.message));
+      }},
+    ]);
+  };
   const reorder = (id: string, delta: number) => setAccounts(old => {
     const index = old.findIndex(item => item.id === id);
     const next = index + delta;
@@ -178,7 +203,7 @@ function App(): React.JSX.Element {
   return <SafeAreaView style={styles.safe}>
     <StatusBar barStyle="light-content" backgroundColor="#090c10" />
     <View style={styles.header}>
-      <View><Text style={styles.brand}>AFK Desk 0.8.2</Text><Text style={styles.muted}>{engineReady ? 'On-device Minecraft client' : 'Starting engine…'}</Text></View>
+      <View><Text style={styles.brand}>AFK Desk 0.8.3</Text><Text style={styles.muted}>{engineReady ? 'On-device Minecraft client' : 'Starting engine…'}</Text></View>
       <Pressable style={styles.smallButton} onPress={() => setSettingsOpen(true)}><Text style={styles.buttonText}>Settings</Text></Pressable>
     </View>
 
@@ -199,19 +224,24 @@ function App(): React.JSX.Element {
     </View>
 
     {!selected ? <View style={styles.empty}><Text style={styles.title}>Add your first account</Text><Text style={styles.muted}>Microsoft sign-in opens in your browser and returns here.</Text><Pressable style={styles.primary} onPress={() => setEditing(blankAccount())}><Text style={styles.primaryText}>Add account</Text></Pressable></View> :
-    <ScrollView style={styles.page} contentContainerStyle={styles.pageContent} keyboardShouldPersistTaps="handled">
+    <ScrollView style={styles.page} contentContainerStyle={styles.pageContent} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
       <View style={styles.titleRow}><View style={styles.flex}><Text style={styles.title}>{selected.username}</Text><Text style={styles.status}>{session?.status} · {session?.detail}</Text></View>
         <Pressable style={styles.smallButton} onPress={() => setEditing({...selected, proxy: {...selected.proxy}})}><Text style={styles.buttonText}>Edit</Text></Pressable>
         {session?.status === 'offline' ? <Pressable style={styles.primarySmall} onPress={connect}><Text style={styles.primaryText}>Connect</Text></Pressable> : <Pressable style={styles.dangerSmall} onPress={disconnect}><Text style={styles.dangerText}>Disconnect</Text></Pressable>}
       </View>
 
       <View style={styles.console}>
-        <View style={styles.panelHeader}><Text style={styles.panelTitle}>Console</Text><Text style={styles.muted}>{selected.host}:{selected.port}</Text></View>
-        <FlatList style={styles.logList} data={session?.logs || []} keyExtractor={item => item.id} initialNumToRender={30} maxToRenderPerBatch={30}
-          ListEmptyComponent={<Text style={styles.emptyLog}>Messages will appear here.</Text>}
-          renderItem={({item}) => <View style={styles.logLine}><Text style={styles.time}>{new Date(item.at).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}</Text>
+        <View style={styles.panelHeader}><Text style={styles.panelTitle}>Console</Text><View style={styles.consoleHeaderActions}>{!followLatest && <Pressable style={styles.followButton} onPress={() => setFollowLatest(true)}><Text style={styles.link}>Follow latest</Text></Pressable>}<Text style={styles.muted}>{selected.host}:{selected.port}</Text></View></View>
+        <ScrollView ref={logListRef} style={styles.logList} nestedScrollEnabled
+          onContentSizeChange={() => { if (followLatest) logListRef.current?.scrollToEnd({animated: false}); }}
+          onScroll={({nativeEvent}) => {
+            const distance = nativeEvent.contentSize.height - nativeEvent.layoutMeasurement.height - nativeEvent.contentOffset.y;
+            setFollowLatest(distance < 32);
+          }} scrollEventThrottle={80}>
+          {session?.logs.length ? session.logs.map(item => <View key={item.id} style={styles.logLine}><Text style={styles.time}>{new Date(item.at).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}</Text>
             <Text style={[styles.logText, item.kind === 'error' && styles.error, item.kind === 'sent' && styles.sent]}>{item.segments?.length ? item.segments.map((segment, i) => <Text key={i} style={{color: segment.color, fontWeight: segment.bold ? '800' : undefined, fontStyle: segment.italic ? 'italic' : undefined, textDecorationLine: segment.underlined ? 'underline' : segment.strikethrough ? 'line-through' : undefined}}>{segment.text}</Text>) : item.message}</Text>
-          </View>} />
+          </View>) : <Text style={styles.emptyLog}>Messages will appear here.</Text>}
+        </ScrollView>
         <View style={styles.chatRow}><TextInput value={chat} onChangeText={setChat} onSubmitEditing={sendChat} placeholder="Message or /command" placeholderTextColor="#626d7b" style={styles.chatInput} /><Pressable style={styles.send} onPress={sendChat}><Text style={styles.buttonText}>Send</Text></Pressable></View>
       </View>
 
@@ -229,7 +259,7 @@ function App(): React.JSX.Element {
 
       <View style={styles.panel}><View style={styles.panelHeader}><Text style={styles.panelTitle}>Inventory</Text><Text style={styles.muted}>{session?.telemetry?.inventory?.length || 0} occupied slots</Text></View>
         <View style={styles.inventoryAutomation}><Toggle label="Auto-deposit inventory" value={selected.autoDepositToChest === true} onChange={toggleAutoDeposit} /><Text style={styles.help}>Visible chests and barrels within {selected.autoDepositRange || '5'} blocks.</Text></View>
-        <View style={styles.inventory}>{session?.telemetry?.inventory?.length ? session.telemetry.inventory.map(item => <View key={item.slot} style={styles.item}><Text numberOfLines={1} style={styles.itemName}>{item.displayName}</Text><Text style={styles.muted}>Slot {item.slot} · ×{item.count}</Text></View>) : <Text style={styles.emptyLog}>Connect to inspect inventory.</Text>}</View>
+        <View style={styles.inventory}>{session?.telemetry?.inventory?.length ? session.telemetry.inventory.map(item => <View key={item.slot} style={styles.item}>{item.resourceIcon && <Image source={{uri: item.resourceIcon}} resizeMode="contain" style={styles.itemIcon} />}<View style={styles.itemCopy}><Text numberOfLines={1} style={styles.itemName}>{item.displayName}</Text><Text style={styles.muted}>Slot {item.slot} · ×{item.count}</Text></View><Pressable accessibilityLabel={`Drop ${item.displayName}`} style={styles.dropButton} onPress={() => dropItem(item)}><Text style={styles.dangerText}>Drop</Text></Pressable></View>) : <Text style={styles.emptyLog}>Connect to inspect inventory.</Text>}</View>
       </View>
     </ScrollView>}
 
@@ -238,6 +268,7 @@ function App(): React.JSX.Element {
       setAccounts(old => old.filter(item => item.id !== account.id)); setSelectedId(accounts.find(item => item.id !== account.id)?.id || ''); setEditing(null);
     }} />
     <SettingsModal visible={settingsOpen} accounts={accounts} onClose={() => setSettingsOpen(false)} onChange={setAccounts} />
+    <ServerMenuModal value={session?.serverWindow || null} onClick={slot => selected && engineCommand({action: 'window-click', accountId: selected.id, slot}).catch((error: Error) => Alert.alert('Menu action failed', error.message))} onClose={() => selected && engineCommand({action: 'window-close', accountId: selected.id}).catch((error: Error) => Alert.alert('Close menu failed', error.message))} />
     <Modal transparent visible={Boolean(loginCode)} animationType="fade"><View style={styles.backdrop}><View style={styles.modalCard}><Text style={styles.title}>Microsoft sign-in</Text><Text style={styles.modalHelp}>Open Microsoft, switch to the account you want, then enter this code:</Text><Text selectable style={styles.deviceCode}>{loginCode?.code}</Text><Pressable style={styles.primary} onPress={() => Linking.openURL(loginCode?.verificationUri || 'https://microsoft.com/link')}><Text style={styles.primaryText}>Open Microsoft sign-in</Text></Pressable><Pressable style={styles.modalButton} onPress={() => setLoginCode(null)}><Text style={styles.buttonText}>Close</Text></Pressable></View></View></Modal>
   </SafeAreaView>;
 }
@@ -247,6 +278,75 @@ function Move({label, onPress}: {label: string; onPress: () => void}) { return <
 
 function Field({label, value, onChange, secret, keyboardType}: any) { return <View style={styles.field}><Text style={styles.fieldLabel}>{label}</Text><TextInput value={value} onChangeText={onChange} secureTextEntry={secret} keyboardType={keyboardType} placeholderTextColor="#626d7b" style={styles.input} /></View>; }
 function Toggle({label, value, onChange}: {label: string; value: boolean; onChange: (value: boolean) => void}) { return <View style={styles.toggleRow}><Text style={styles.toggleLabel}>{label}</Text><Switch value={value} onValueChange={onChange} trackColor={{false: '#364150', true: '#48bc7c'}} /></View>; }
+
+function resourceArtLayout(resourceTitle?: ServerMenu['resourceTitle']) {
+  const glyphs = (resourceTitle?.glyphs || []).slice(0, 160);
+  const drawable: Array<ResourceGlyph & {x: number; width: number; height: number; ascentValue: number}> = [];
+  let cursor = 0;
+  let minX = 0;
+  let maxX = 1;
+  let baseline = 0;
+  let belowBaseline = 0;
+  glyphs.forEach(glyph => {
+    const height = Math.max(1, Math.min(Number(glyph.renderHeight) || 8, 512));
+    const ascentValue = Math.max(-512, Math.min(Number(glyph.ascent) || height, 512));
+    const sourceWidth = Math.max(1, Number(glyph.sourceWidth) || 1);
+    const sourceHeight = Math.max(1, Number(glyph.sourceHeight) || 1);
+    const width = Math.max(1, Math.round(sourceWidth * (height / sourceHeight)));
+    if (glyph.image) drawable.push({...glyph, x: cursor, width, height, ascentValue});
+    minX = Math.min(minX, cursor);
+    maxX = Math.max(maxX, cursor + width);
+    baseline = Math.max(baseline, ascentValue);
+    belowBaseline = Math.max(belowBaseline, height - ascentValue);
+    cursor += Number.isFinite(Number(glyph.advance)) ? Number(glyph.advance) : width;
+  });
+  const width = Math.max(1, Math.min(Math.ceil(maxX - minX), 2048));
+  const height = Math.max(1, Math.min(Math.ceil(baseline + belowBaseline), 1024));
+  const scale = Math.min(2, 340 / width);
+  return {drawable, minX, baseline, width, height, scale};
+}
+
+function ResourceTitleArt({resourceTitle}: {resourceTitle: NonNullable<ServerMenu['resourceTitle']>}) {
+  const layout = resourceArtLayout(resourceTitle);
+  return <View pointerEvents="none" style={[styles.resourceArt, {width: layout.width * layout.scale, height: layout.height * layout.scale}]}>
+    {layout.drawable.map((glyph, index) => {
+      const sourceWidth = Math.max(1, Number(glyph.sourceWidth) || 1);
+      const sourceHeight = Math.max(1, Number(glyph.sourceHeight) || 1);
+      const pixelScale = (glyph.height / sourceHeight) * layout.scale;
+      return <View key={index} style={{position: 'absolute', overflow: 'hidden', left: (glyph.x - layout.minX) * layout.scale, top: (layout.baseline - glyph.ascentValue) * layout.scale, width: glyph.width * layout.scale, height: glyph.height * layout.scale}}>
+        <Image source={{uri: glyph.image}} resizeMode="stretch" style={{position: 'absolute', left: -(Number(glyph.sourceX) || 0) * pixelScale, top: -(Number(glyph.sourceY) || 0) * pixelScale, width: Math.max(sourceWidth, Number(glyph.imageWidth) || sourceWidth) * pixelScale, height: Math.max(sourceHeight, Number(glyph.imageHeight) || sourceHeight) * pixelScale}} />
+      </View>;
+    })}
+  </View>;
+}
+
+function ServerMenuModal({value, onClick, onClose}: {value: ServerMenu | null; onClick: (slot: number) => void; onClose: () => void}) {
+  const slots = new Map((value?.slots || []).map(item => [item.slot, item]));
+  const size = Math.max(0, Math.min(Number(value?.size) || 0, 256));
+  const art = value?.resourceTitle && resourceArtLayout(value.resourceTitle);
+  const custom = Boolean(art?.drawable.length && size >= 9 && art.width >= 100 && art.height >= 100);
+  const slotSize = custom ? 16 * art!.scale : 34;
+  const gap = custom ? 2 * art!.scale : 4;
+  const gridWidth = (slotSize * 9) + (gap * 8);
+  const grid = <View style={[styles.serverGrid, {width: gridWidth, gap}, custom && {position: 'absolute', left: 8 * art!.scale, top: 18 * art!.scale}]}>
+    {Array.from({length: size}, (_, slot) => {
+      const item = slots.get(slot);
+      return <Pressable key={slot} disabled={!item} onPress={() => item && onClick(slot)} style={[styles.serverSlot, {width: slotSize, height: slotSize}, custom && styles.serverSlotCustom]}>
+        {item?.resourceIcon ? <Image source={{uri: item.resourceIcon}} resizeMode="contain" style={styles.serverIcon} /> : item ? <Text numberOfLines={1} style={styles.serverFallback}>{item.displayName.slice(0, 1)}</Text> : null}
+        {item && item.count > 1 && <Text style={styles.serverCount}>{item.count}</Text>}
+      </Pressable>;
+    })}
+  </View>;
+  return <Modal transparent visible={Boolean(value?.open)} animationType="fade" onRequestClose={onClose}>
+    <View style={styles.backdrop}><View style={styles.serverModal}>
+      <View style={styles.panelHeader}><View><Text style={styles.panelTitle}>{value?.title || 'Server menu'}</Text><Text style={styles.muted}>{value?.resourceTitle ? 'Server resource-pack artwork' : 'Interactive server menu'}</Text></View><Pressable style={styles.smallButton} onPress={onClose}><Text style={styles.buttonText}>Close</Text></Pressable></View>
+      <ScrollView horizontal contentContainerStyle={styles.serverScroller}>
+        {custom && value?.resourceTitle ? <View style={{width: art!.width * art!.scale, height: art!.height * art!.scale}}><ResourceTitleArt resourceTitle={value.resourceTitle} />{grid}</View> : grid}
+      </ScrollView>
+      <Text style={styles.serverHelp}>Tap an item to activate that server slot.</Text>
+    </View></View>
+  </Modal>;
+}
 
 function AccountModal({value, onClose, onSave, onDelete}: {value: Account | null; onClose: () => void; onSave: (value: Account) => void; onDelete: (value: Account) => void}) {
   const [draft, setDraft] = useState<Account | null>(value);
@@ -297,9 +397,9 @@ const styles = StyleSheet.create({
   safe: {flex: 1, backgroundColor: '#090c10'}, flex: {flex: 1}, header: {height: 66, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderColor: '#252d38'}, brand: {fontSize: 20, fontWeight: '800', color: '#f4f6f8'}, muted: {fontSize: 11, color: '#8f9baa'},
   accountStrip: {height: 84, flexDirection: 'row', borderBottomWidth: 1, borderColor: '#252d38'}, accountStripContent: {padding: 8, gap: 7}, accountCard: {width: 190, flexDirection: 'row', borderRadius: 8, borderWidth: 1, borderColor: '#252d38', backgroundColor: '#11161e'}, accountCardSelected: {borderColor: '#60d394', backgroundColor: '#161c25'}, accountSelect: {flex: 1, minWidth: 0, padding: 8, flexDirection: 'row', alignItems: 'center', gap: 8}, accountCopy: {flex: 1, minWidth: 0}, accountName: {fontWeight: '700', fontSize: 12, color: '#f4f6f8'}, avatar: {width: 36, height: 36, borderRadius: 6}, avatarFallback: {width: 36, height: 36, borderRadius: 6, backgroundColor: '#202833', alignItems: 'center', justifyContent: 'center'}, avatarLetter: {fontWeight: '800', color: '#f4f6f8'}, dot: {width: 7, height: 7, borderRadius: 4, backgroundColor: '#626d7b'}, dotOnline: {backgroundColor: '#60d394'}, orderRow: {width: 24, justifyContent: 'space-evenly', alignItems: 'center', borderLeftWidth: 1, borderColor: '#252d38'}, order: {fontSize: 22, color: '#8f9baa'}, addCard: {width: 52, margin: 8, marginLeft: 0, borderRadius: 8, borderWidth: 1, borderStyle: 'dashed', borderColor: '#364150', alignItems: 'center', justifyContent: 'center'}, addText: {fontSize: 26, color: '#60d394'},
   page: {flex: 1}, pageContent: {padding: 14, gap: 14, paddingBottom: 36}, empty: {flex: 1, alignItems: 'center', justifyContent: 'center', padding: 30, gap: 14}, titleRow: {flexDirection: 'row', alignItems: 'center', gap: 8}, title: {fontSize: 23, fontWeight: '800', color: '#f4f6f8'}, status: {marginTop: 3, color: '#8f9baa', fontSize: 11, textTransform: 'capitalize'}, smallButton: {height: 38, paddingHorizontal: 13, borderRadius: 7, backgroundColor: '#161c25', borderWidth: 1, borderColor: '#364150', alignItems: 'center', justifyContent: 'center'}, primarySmall: {height: 38, paddingHorizontal: 13, borderRadius: 7, backgroundColor: '#60d394', alignItems: 'center', justifyContent: 'center'}, dangerSmall: {height: 38, paddingHorizontal: 13, borderRadius: 7, borderWidth: 1, borderColor: '#7a4045', alignItems: 'center', justifyContent: 'center'}, buttonText: {color: '#f4f6f8', fontWeight: '700', fontSize: 12}, primaryText: {color: '#06120c', fontWeight: '800'}, dangerText: {color: '#f16e74', fontWeight: '700'},
-  panel: {borderWidth: 1, borderColor: '#252d38', borderRadius: 10, overflow: 'hidden', backgroundColor: '#11161e'}, console: {height: 440, borderWidth: 1, borderColor: '#252d38', borderRadius: 10, overflow: 'hidden', backgroundColor: '#11161e'}, panelHeader: {minHeight: 52, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderColor: '#252d38'}, panelTitle: {fontSize: 14, fontWeight: '800', color: '#f4f6f8'}, logList: {flex: 1, paddingHorizontal: 12}, emptyLog: {padding: 18, color: '#626d7b', textAlign: 'center'}, logLine: {flexDirection: 'row', gap: 8, paddingVertical: 4}, time: {width: 54, color: '#626d7b', fontSize: 10}, logText: {flex: 1, color: '#c5cbd3', fontSize: 11, fontFamily: 'monospace'}, error: {color: '#ff9da2'}, sent: {color: '#8ee7b5'}, chatRow: {height: 56, padding: 8, gap: 8, flexDirection: 'row', borderTopWidth: 1, borderColor: '#252d38'}, chatInput: {flex: 1, paddingHorizontal: 11, borderWidth: 1, borderColor: '#364150', borderRadius: 7, backgroundColor: '#0c1016', color: '#f4f6f8'}, send: {width: 62, borderRadius: 7, backgroundColor: '#161c25', alignItems: 'center', justifyContent: 'center'},
-  statsRow: {flexDirection: 'row', flexWrap: 'wrap', gap: 8}, stat: {minWidth: 90, flexGrow: 1, padding: 12, borderRadius: 8, borderWidth: 1, borderColor: '#252d38', backgroundColor: '#11161e'}, statWide: {minWidth: 180}, statValue: {marginTop: 4, color: '#f4f6f8', fontSize: 13, fontWeight: '700'}, moveGrid: {width: 176, alignSelf: 'center', paddingVertical: 18, flexDirection: 'row', flexWrap: 'wrap', gap: 6}, move: {width: 54, height: 46, borderRadius: 7, borderWidth: 1, borderColor: '#364150', backgroundColor: '#161c25', alignItems: 'center', justifyContent: 'center'}, moveActions: {padding: 12, paddingTop: 0, flexDirection: 'row', justifyContent: 'center', gap: 7}, inventoryAutomation: {paddingHorizontal: 12, paddingVertical: 8, borderBottomWidth: 1, borderColor: '#252d38'}, inventory: {padding: 10, flexDirection: 'row', flexWrap: 'wrap', gap: 7}, item: {width: '48%', padding: 9, borderRadius: 7, backgroundColor: '#0c1016', borderWidth: 1, borderColor: '#252d38'}, itemName: {fontSize: 11, color: '#f4f6f8', fontWeight: '700'},
-  backdrop: {flex: 1, padding: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(3,5,8,.82)'}, modalCard: {width: '100%', maxWidth: 440, padding: 22, gap: 14, borderRadius: 12, backgroundColor: '#11161e', borderWidth: 1, borderColor: '#364150'}, modalHelp: {color: '#8f9baa', lineHeight: 20}, deviceCode: {padding: 16, borderRadius: 8, backgroundColor: '#090c10', color: '#f4f6f8', fontSize: 28, fontWeight: '800', letterSpacing: 3, textAlign: 'center'}, primary: {minHeight: 46, paddingHorizontal: 16, borderRadius: 7, backgroundColor: '#60d394', alignItems: 'center', justifyContent: 'center'}, modalButton: {minHeight: 44, borderRadius: 7, backgroundColor: '#161c25', alignItems: 'center', justifyContent: 'center'}, modalHeader: {height: 58, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderColor: '#252d38'}, link: {color: '#60d394', fontWeight: '700'},
+  panel: {borderWidth: 1, borderColor: '#252d38', borderRadius: 10, overflow: 'hidden', backgroundColor: '#11161e'}, console: {height: 440, borderWidth: 1, borderColor: '#252d38', borderRadius: 10, overflow: 'hidden', backgroundColor: '#11161e'}, panelHeader: {minHeight: 52, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderColor: '#252d38'}, panelTitle: {fontSize: 14, fontWeight: '800', color: '#f4f6f8'}, consoleHeaderActions: {flexDirection: 'row', alignItems: 'center', gap: 10}, followButton: {paddingVertical: 8, paddingHorizontal: 4}, logList: {flex: 1, paddingHorizontal: 12}, emptyLog: {padding: 18, color: '#626d7b', textAlign: 'center'}, logLine: {flexDirection: 'row', gap: 8, paddingVertical: 4}, time: {width: 54, color: '#626d7b', fontSize: 10}, logText: {flex: 1, color: '#c5cbd3', fontSize: 11, fontFamily: 'monospace'}, error: {color: '#ff9da2'}, sent: {color: '#8ee7b5'}, chatRow: {height: 56, padding: 8, gap: 8, flexDirection: 'row', borderTopWidth: 1, borderColor: '#252d38'}, chatInput: {flex: 1, paddingHorizontal: 11, borderWidth: 1, borderColor: '#364150', borderRadius: 7, backgroundColor: '#0c1016', color: '#f4f6f8'}, send: {width: 62, borderRadius: 7, backgroundColor: '#161c25', alignItems: 'center', justifyContent: 'center'},
+  statsRow: {flexDirection: 'row', flexWrap: 'wrap', gap: 8}, stat: {minWidth: 90, flexGrow: 1, padding: 12, borderRadius: 8, borderWidth: 1, borderColor: '#252d38', backgroundColor: '#11161e'}, statWide: {minWidth: 180}, statValue: {marginTop: 4, color: '#f4f6f8', fontSize: 13, fontWeight: '700'}, moveGrid: {width: 176, alignSelf: 'center', paddingVertical: 18, flexDirection: 'row', flexWrap: 'wrap', gap: 6}, move: {width: 54, height: 46, borderRadius: 7, borderWidth: 1, borderColor: '#364150', backgroundColor: '#161c25', alignItems: 'center', justifyContent: 'center'}, moveActions: {padding: 12, paddingTop: 0, flexDirection: 'row', justifyContent: 'center', gap: 7}, inventoryAutomation: {paddingHorizontal: 12, paddingVertical: 8, borderBottomWidth: 1, borderColor: '#252d38'}, inventory: {padding: 10, flexDirection: 'row', flexWrap: 'wrap', gap: 7}, item: {width: '100%', minHeight: 58, padding: 8, gap: 8, flexDirection: 'row', alignItems: 'center', borderRadius: 7, backgroundColor: '#0c1016', borderWidth: 1, borderColor: '#252d38'}, itemIcon: {width: 36, height: 36}, itemCopy: {flex: 1, minWidth: 0}, itemName: {fontSize: 11, color: '#f4f6f8', fontWeight: '700'}, dropButton: {minWidth: 54, height: 38, paddingHorizontal: 8, borderRadius: 6, borderWidth: 1, borderColor: '#7a4045', alignItems: 'center', justifyContent: 'center'},
+  backdrop: {flex: 1, padding: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(3,5,8,.82)'}, modalCard: {width: '100%', maxWidth: 440, padding: 22, gap: 14, borderRadius: 12, backgroundColor: '#11161e', borderWidth: 1, borderColor: '#364150'}, modalHelp: {color: '#8f9baa', lineHeight: 20}, deviceCode: {padding: 16, borderRadius: 8, backgroundColor: '#090c10', color: '#f4f6f8', fontSize: 28, fontWeight: '800', letterSpacing: 3, textAlign: 'center'}, primary: {minHeight: 46, paddingHorizontal: 16, borderRadius: 7, backgroundColor: '#60d394', alignItems: 'center', justifyContent: 'center'}, modalButton: {minHeight: 44, borderRadius: 7, backgroundColor: '#161c25', alignItems: 'center', justifyContent: 'center'}, modalHeader: {height: 58, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderColor: '#252d38'}, link: {color: '#60d394', fontWeight: '700'}, serverModal: {width: '100%', maxWidth: 420, maxHeight: '90%', overflow: 'hidden', borderRadius: 12, backgroundColor: '#11161e', borderWidth: 1, borderColor: '#364150'}, serverScroller: {minWidth: '100%', minHeight: 150, padding: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: '#c6c6c6'}, resourceArt: {position: 'absolute', left: 0, top: 0}, serverGrid: {flexDirection: 'row', flexWrap: 'wrap'}, serverSlot: {position: 'relative', overflow: 'hidden', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderTopColor: '#ffffff', borderLeftColor: '#ffffff', borderRightColor: '#555555', borderBottomColor: '#555555', backgroundColor: '#8b8b8b'}, serverSlotCustom: {borderWidth: 0, backgroundColor: 'transparent'}, serverIcon: {width: '88%', height: '88%'}, serverFallback: {color: '#202020', fontWeight: '800'}, serverCount: {position: 'absolute', right: 1, bottom: 0, color: '#ffffff', fontSize: 9, fontWeight: '800', textShadowColor: '#000000', textShadowRadius: 2}, serverHelp: {padding: 12, color: '#8f9baa', fontSize: 11},
   form: {padding: 18, gap: 12}, sectionTitle: {marginTop: 8, paddingBottom: 6, borderBottomWidth: 1, borderColor: '#252d38', color: '#f4f6f8', fontSize: 14, fontWeight: '800'}, field: {gap: 6}, fieldLabel: {fontSize: 11, fontWeight: '700', color: '#c8cdd4'}, input: {height: 44, paddingHorizontal: 11, borderRadius: 7, borderWidth: 1, borderColor: '#364150', backgroundColor: '#0c1016', color: '#f4f6f8'}, help: {color: '#8f9baa', fontSize: 11, lineHeight: 17}, toggleRow: {minHeight: 46, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between'}, toggleLabel: {flex: 1, color: '#f4f6f8', fontWeight: '600'}, segmented: {height: 42, flexDirection: 'row', padding: 3, borderRadius: 8, backgroundColor: '#0c1016'}, segment: {flex: 1, alignItems: 'center', justifyContent: 'center', borderRadius: 6}, segmentSelected: {backgroundColor: '#364150'}, deleteButton: {height: 46, marginTop: 14, borderRadius: 7, borderWidth: 1, borderColor: '#7a4045', alignItems: 'center', justifyContent: 'center'},
 });
 
