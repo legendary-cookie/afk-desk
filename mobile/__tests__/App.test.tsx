@@ -11,7 +11,7 @@ it('ships usable Android inventory, resource-pack menu, and follow-latest chat c
   expect(source).toContain('Auto-deposit inventory');
   expect(source).toContain('Auto-deposit range (1–16 blocks)');
   expect(source).toContain('Nearest container');
-  expect(source).toContain('AFK Desk 0.8.3');
+  expect(source).toContain('AFK Desk 0.9.0');
   expect(source).toContain('console: {height: 440');
   expect(source).toContain('<ScrollView ref={logListRef} style={styles.logList} nestedScrollEnabled');
   expect(source).not.toContain('<FlatList ref={logListRef}');
@@ -22,4 +22,12 @@ it('ships usable Android inventory, resource-pack menu, and follow-latest chat c
   expect(source).toContain('resourceIcon');
   expect(source).toContain('Follow latest');
   expect(source).toContain('nestedScrollEnabled');
+  expect(source).toContain('SUPPORTED_GAME_VERSIONS');
+  expect(source).toContain('Automatic (detect from server)');
+  expect(source).toContain('<VersionField');
+  expect(source).toContain("action: 'complete-chat'");
+  expect(source).toContain('chatSuggestions');
+  expect(source).toContain('activateChatClick');
+  expect(source).toContain("click.action === 'run_command'");
+  expect(source).toContain("click.action === 'open_url'");
 });

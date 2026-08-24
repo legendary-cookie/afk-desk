@@ -2,7 +2,7 @@
 
 AFK Desk Mobile is the standalone React Native client. It embeds Node.js and Mineflayer on the device, so it does not require the Windows app to stay online.
 
-Current Android version: **0.8.3**.
+Current Android development version: **0.9.0**.
 
 ## Features
 
@@ -19,6 +19,9 @@ Current Android version: **0.8.3**.
 - Confirmed per-stack dropping for keys and other inventory items
 - Interactive server menus with bounded resource-pack bitmap and custom item-model rendering
 - Follow-latest chat that pauses when you scroll up and resumes on demand
+- Automatic or explicit selection of every Minecraft version supported by the embedded protocol engine
+- Server-backed command and player-name completion while typing
+- Tappable Minecraft chat links and server click actions
 - Android foreground service for background operation
 
 See [BUILDING.md](BUILDING.md) for platform instructions and iOS limitations.

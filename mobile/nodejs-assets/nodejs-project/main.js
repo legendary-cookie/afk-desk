@@ -13,10 +13,12 @@ function reply(requestId, ok, value) {
 
 bridge.channel.on('engine-command', async ({ requestId, action, account, accountId, value, duration, enabled, range, slot }) => {
   try {
+    let result = null
     switch (action) {
       case 'connect': manager.connect(account); break
       case 'disconnect': manager.disconnect(accountId); break
       case 'chat': manager.sendChat(accountId, value); break
+      case 'complete-chat': result = await manager.completeChat(accountId, value); break
       case 'move': manager.control(accountId, value, duration); break
       case 'look': manager.look(accountId, value); break
       case 'drop-stack': await manager.dropStack(accountId, slot); break
@@ -28,13 +30,13 @@ bridge.channel.on('engine-command', async ({ requestId, action, account, account
         break
       default: throw new Error(`Unknown engine action: ${action}`)
     }
-    reply(requestId, true, null)
+    reply(requestId, true, result)
   } catch (error) {
     reply(requestId, false, error)
   }
 })
 
-bridge.channel.post('engine-ready', { version: '0.8.3' })
+bridge.channel.post('engine-ready', { version: '0.9.0' })
 
 bridge.app.on('pause', (pauseLock) => {
   // Android keeps the runtime alive through AFK Desk's foreground service.

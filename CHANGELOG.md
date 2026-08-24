@@ -2,6 +2,23 @@
 
 For the complete desktop history from 0.1.0 onward, including source tags, installers, and comparisons, see [HISTORY.md](HISTORY.md).
 
+## Desktop and Android 0.9.0 — In development
+
+### Added
+
+- An explicit game-version picker containing every protocol supported by the installed Mineflayer engine, while retaining Automatic detection.
+- Server-backed chat completion for commands and online player names on Windows and Android.
+- Minecraft chat click actions for command suggestions, runnable server buttons, links, and copyable text.
+
+### Fixed
+
+- Automatic mode now discards unsupported remembered versions and retries fresh detection once when a stale proven version fails, even if general auto-reconnect is off.
+- Command completions replace the active token correctly across legacy and modern tab-completion packet formats.
+
+### Verified
+
+- Automatic version detection against matching local protocol servers for every engine-advertised version from 1.7 through 1.21.11.
+
 ## Android 0.8.3 — 2026-08-24
 
 ### Added

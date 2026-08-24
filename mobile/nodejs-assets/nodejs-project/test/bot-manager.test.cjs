@@ -1,7 +1,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const { EventEmitter } = require('node:events')
-const { BotManager, findNearestChest } = require('../bot-manager.cjs')
+const { BotManager, findNearestChest, parseInteractiveChat } = require('../bot-manager.cjs')
 
 class FakeBot extends EventEmitter {
   constructor() {
@@ -11,13 +11,29 @@ class FakeBot extends EventEmitter {
     this.inventory.items = () => []
     this.inventory.slots = []
     this.entity = null
+    this.players = {}
     this._client = new EventEmitter()
   }
   quit() { this.emit('end', 'quit') }
   async tossStack(item) { this.tossed = item }
   async clickWindow(...args) { this.clickedWindow = args }
+  tabComplete() { return Promise.resolve([{ match: 'server', tooltip: 'Switch server' }]) }
   closeWindow(window) { this.closedWindow = window; this.currentWindow = null; this.emit('windowClose') }
 }
+
+test('mobile completes commands and player names and preserves clickable chat actions', async (t) => {
+  const bot = new FakeBot()
+  bot.players = { StarrySea: { username: 'StarrySea' } }
+  const manager = new BotManager({ profilesPath: 'profiles', emit: () => {}, createBot: () => bot })
+  t.after(() => manager.disconnect('chat'))
+  manager.connect({ id: 'chat', username: 'user@example.com', host: 'localhost', antiAfk: false, autoReconnect: false })
+  bot.entity = { position: { x: 0, y: 64, z: 0 } }
+  assert.equal((await manager.completeChat('chat', '/ser'))[0].value, '/server')
+  assert.equal((await manager.completeChat('chat', 'Sta'))[0].value, 'StarrySea')
+  const segments = parseInteractiveChat({ text: '[Spawn]', clickEvent: { action: 'run_command', value: '/spawn' } }, '[Spawn]')
+  assert.deepEqual(segments[0].click, { action: 'run_command', value: '/spawn' })
+  assert.deepEqual(parseInteractiveChat(null, 'https://example.com').at(-1).click, { action: 'open_url', value: 'https://example.com' })
+})
 
 test('mobile auto-deposit search enforces range and line of sight', () => {
   const bot = new FakeBot()

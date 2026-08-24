@@ -9,6 +9,7 @@ const KEY_CONTROLS = {
 }
 
 const activeManualInputs = new Map()
+let chatCompletionTimer = null
 
 const ENCHANTMENT_DETAILS = {
   aqua_affinity: [1, 'Speeds up underwater mining.'],
@@ -68,6 +69,10 @@ const state = {
   telemetry: new Map(),
   serverWindows: new Map(),
   chatHistory: new Map(),
+  chatSuggestions: [],
+  chatSuggestionIndex: 0,
+  chatCompletionRequest: 0,
+  supportedVersions: [],
   settings: { uiScale: 100, sidePanelWidth: 300, inventoryHeight: 220, macros: [] },
   inventoryCollapsed: false,
   resolvedVersions: new Map(),
@@ -78,16 +83,18 @@ const el = Object.fromEntries([
   'account-list', 'account-count', 'add-account', 'open-settings', 'toggle-sidebar', 'quick-scale', 'quick-scale-number', 'reset-scale', 'quick-scale-value', 'display-menu', 'console-menu', 'macro-menu', 'settings-dialog', 'close-settings', 'start-with-windows', 'stagger-startup-connections', 'startup-connection-delay', 'save-settings', 'empty-state', 'dashboard', 'account-title', 'app-version', 'settings-app-version',
   'edit-account', 'connection-button', 'status-banner', 'status-name', 'status-detail', 'server-address',
   'detail-username', 'detail-server', 'detail-version', 'detail-antiafk', 'detail-environment', 'detail-water', 'detail-health', 'detail-hunger', 'detail-coordinates', 'detail-chest', 'detail-dimension', 'inventory-count', 'inventory-grid', 'auto-deposit-toggle', 'hold-selected', 'equip-destination', 'equip-selected', 'lock-selected', 'drop-selected', 'toggle-inventory', 'console-log', 'clear-console',
-  'chat-form', 'chat-message', 'macro-pad', 'manage-macros', 'macro-dialog', 'close-macro-dialog', 'macro-editor', 'macro-rows', 'add-macro', 'cancel-macros', 'save-macros', 'account-dialog', 'account-form', 'dialog-title', 'account-id', 'label',
+  'chat-form', 'chat-message', 'chat-suggestions', 'macro-pad', 'manage-macros', 'macro-dialog', 'close-macro-dialog', 'macro-editor', 'macro-rows', 'add-macro', 'cancel-macros', 'save-macros', 'account-dialog', 'account-form', 'dialog-title', 'account-id', 'label',
   'username', 'host', 'port', 'version', 'connect-on-startup', 'proxy-enabled', 'proxy-fields', 'proxy-type', 'proxy-host', 'proxy-port', 'proxy-username', 'proxy-password', 'proxy-password-help', 'proxy-clear-password', 'anti-afk', 'anti-afk-min-delay', 'anti-afk-max-delay', 'anti-afk-duration', 'anti-afk-look-degrees', 'anti-afk-walk-distance', 'anti-afk-jump', 'anti-afk-look', 'anti-afk-sneak', 'anti-afk-swing', 'anti-afk-walk', 'environmental-movement', 'auto-reconnect', 'auto-reconnect-delay', 'auto-reconnect-max', 'auto-deposit-setting', 'auto-deposit-range', 'join-message', 'server-change-message',
   'message-delay', 'form-error', 'delete-account', 'login-dialog', 'login-code', 'open-login-private', 'open-login',
   'close-login', 'ui-scale', 'ui-scale-value', 'column-resizer', 'inventory-resizer', 'server-window-dialog', 'server-window-title', 'server-window-stage', 'server-window-art', 'server-window-grid', 'close-server-window', 'item-tooltip', 'toast-region'
 ].map((id) => [id, document.getElementById(id)]))
 
 async function init() {
-  const [accounts, settings, appVersion] = await Promise.all([api.listAccounts(), api.getSettings(), api.getAppVersion()])
+  const [accounts, settings, appVersion, versions] = await Promise.all([api.listAccounts(), api.getSettings(), api.getAppVersion(), api.getSupportedVersions()])
   state.accounts = accounts
   state.settings = settings
+  state.supportedVersions = versions
+  populateVersionOptions(versions)
   el['app-version'].textContent = `v${appVersion}`
   el['settings-app-version'].textContent = `Version ${appVersion}`
   state.selectedId = state.accounts[0]?.id || null
@@ -126,7 +133,9 @@ function bindEvents() {
     el['proxy-port'].value = el['proxy-type'].value === 'http' ? 8080 : 1080
   })
   el['chat-form'].addEventListener('submit', sendChat)
-  el['chat-message'].addEventListener('keydown', navigateChatHistory)
+  el['chat-message'].addEventListener('keydown', handleChatKeyDown)
+  el['chat-message'].addEventListener('input', scheduleChatCompletion)
+  el['chat-message'].addEventListener('blur', () => setTimeout(closeChatSuggestions, 120))
   el['manage-macros'].addEventListener('click', openMacroEditor)
   el['add-macro'].addEventListener('click', () => addMacroRow())
   el['cancel-macros'].addEventListener('click', closeMacroEditor)
@@ -163,6 +172,19 @@ function bindEvents() {
   el['open-login'].addEventListener('click', () => run(() => api.openExternal(state.login.url)))
   el['open-login-private'].addEventListener('click', () => run(() => api.openIsolatedLogin(state.login.accountId, state.login.url, state.login.code)))
   el['close-login'].addEventListener('click', () => el['login-dialog'].close())
+}
+
+function populateVersionOptions(versions) {
+  const automatic = document.createElement('option')
+  automatic.value = ''
+  automatic.textContent = 'Automatic (detect from server)'
+  const options = (Array.isArray(versions) ? versions : []).map((version) => {
+    const option = document.createElement('option')
+    option.value = version
+    option.textContent = `Minecraft ${version}`
+    return option
+  })
+  el.version.replaceChildren(automatic, ...options)
 }
 
 function render() {
@@ -317,6 +339,7 @@ function renderStatus({ status, detail }) {
   el['connection-button'].className = `button ${active ? 'secondary' : 'primary'}`
   el['chat-message'].disabled = !canInteract
   el['chat-form'].querySelector('button').disabled = !canInteract
+  if (!canInteract) closeChatSuggestions()
   renderMacroPad(canInteract)
   document.querySelectorAll('[data-control], [data-look]').forEach((button) => { button.disabled = !canInteract })
   updateInventoryActions(canInteract)
@@ -810,7 +833,94 @@ async function sendChat(event) {
   event.preventDefault()
   const message = el['chat-message'].value.trim()
   if (!message) return
+  closeChatSuggestions()
   await sendChatMessage(message)
+}
+
+function scheduleChatCompletion() {
+  clearTimeout(chatCompletionTimer)
+  chatCompletionTimer = setTimeout(requestChatSuggestions, 140)
+}
+
+async function requestChatSuggestions() {
+  const text = el['chat-message'].value
+  const status = getStatus(state.selectedId).status
+  if (!text || !['online', 'connected'].includes(status)) return closeChatSuggestions()
+  const request = ++state.chatCompletionRequest
+  try {
+    const suggestions = await api.completeChat(state.selectedId, text)
+    if (request !== state.chatCompletionRequest || text !== el['chat-message'].value) return
+    state.chatSuggestions = Array.isArray(suggestions) ? suggestions.slice(0, 40) : []
+    state.chatSuggestionIndex = 0
+    renderChatSuggestions()
+  } catch { closeChatSuggestions() }
+}
+
+function renderChatSuggestions() {
+  const suggestions = state.chatSuggestions
+  el['chat-suggestions'].hidden = suggestions.length === 0
+  el['chat-message'].setAttribute('aria-expanded', String(suggestions.length > 0))
+  el['chat-suggestions'].replaceChildren(...suggestions.map((suggestion, index) => {
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.className = `chat-suggestion${index === state.chatSuggestionIndex ? ' selected' : ''}`
+    button.role = 'option'
+    button.setAttribute('aria-selected', String(index === state.chatSuggestionIndex))
+    const label = document.createElement('span')
+    label.textContent = suggestion.label || suggestion.value
+    const detail = document.createElement('small')
+    detail.textContent = suggestion.tooltip || suggestion.source || ''
+    button.append(label, detail)
+    button.addEventListener('pointerdown', (event) => event.preventDefault())
+    button.addEventListener('click', () => applyChatSuggestion(index))
+    return button
+  }))
+}
+
+function closeChatSuggestions() {
+  state.chatCompletionRequest += 1
+  state.chatSuggestions = []
+  state.chatSuggestionIndex = 0
+  el['chat-suggestions'].hidden = true
+  el['chat-suggestions'].replaceChildren()
+  el['chat-message'].setAttribute('aria-expanded', 'false')
+}
+
+function applyChatSuggestion(index = state.chatSuggestionIndex) {
+  const suggestion = state.chatSuggestions[index]
+  if (!suggestion) return
+  el['chat-message'].value = suggestion.value
+  closeChatSuggestions()
+  el['chat-message'].focus()
+  el['chat-message'].setSelectionRange(el['chat-message'].value.length, el['chat-message'].value.length)
+}
+
+function handleChatKeyDown(event) {
+  if (state.chatSuggestions.length) {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault()
+      const delta = event.key === 'ArrowDown' ? 1 : -1
+      state.chatSuggestionIndex = (state.chatSuggestionIndex + delta + state.chatSuggestions.length) % state.chatSuggestions.length
+      renderChatSuggestions()
+      return
+    }
+    if (event.key === 'Tab' || event.key === 'Enter') {
+      event.preventDefault()
+      applyChatSuggestion()
+      return
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      closeChatSuggestions()
+      return
+    }
+  }
+  if (event.key === 'Tab') {
+    event.preventDefault()
+    void requestChatSuggestions()
+    return
+  }
+  navigateChatHistory(event)
 }
 
 function bindManualMovement() {
@@ -881,6 +991,7 @@ async function sendChatMessage(message) {
   try {
     await api.sendChat(state.selectedId, text)
     el['chat-message'].value = ''
+    closeChatSuggestions()
   } catch (error) { toast(cleanError(error), 'error') }
 }
 
@@ -1459,7 +1570,42 @@ function appendLogMessage(container, entry) {
     if (segment.italic) part.classList.add('chat-italic')
     if (segment.underlined) part.classList.add('chat-underlined')
     if (segment.strikethrough) part.classList.add('chat-strikethrough')
+    if (segment.hover) part.title = segment.hover
+    if (segment.click) {
+      part.classList.add('clickable-chat')
+      part.tabIndex = 0
+      part.role = 'button'
+      part.addEventListener('click', (event) => activateChatClick(segment.click, event))
+      part.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); activateChatClick(segment.click, event) }
+      })
+    }
     container.append(part)
+  }
+}
+
+async function activateChatClick(click, event = {}) {
+  const action = String(click?.action || '')
+  const value = String(click?.value || '').slice(0, 2048)
+  if (!value) return
+  if (action === 'suggest_command') {
+    el['chat-message'].value = value
+    el['chat-message'].focus()
+    el['chat-message'].setSelectionRange(value.length, value.length)
+    scheduleChatCompletion()
+    return
+  }
+  if (action === 'run_command') {
+    await sendChatMessage(value)
+    return
+  }
+  if (action === 'open_url' && (event.ctrlKey || event.metaKey)) {
+    await run(() => api.openExternal(value))
+    return
+  }
+  if (action === 'open_url' || action === 'copy_to_clipboard') {
+    await navigator.clipboard.writeText(value)
+    toast(action === 'open_url' ? 'Link copied. Ctrl-click it to open.' : 'Text copied.')
   }
 }
 

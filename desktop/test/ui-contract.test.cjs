@@ -121,6 +121,25 @@ test('chat exposes history navigation, editable macros, and interface scaling', 
   assert.match(preload, /setUiScale:.*setZoomFactor/)
 })
 
+test('desktop exposes supported version selection, chat completion, and Minecraft click actions', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'src', 'index.html'), 'utf8')
+  const script = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer.js'), 'utf8')
+  const preload = fs.readFileSync(path.join(__dirname, '..', 'electron', 'preload.cjs'), 'utf8')
+  const main = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
+  assert.match(html, /<select id="version"/)
+  assert.match(html, /id="chat-suggestions"/)
+  assert.match(preload, /getSupportedVersions:.*app:supported-versions/)
+  assert.match(preload, /completeChat:.*bot:complete-chat/)
+  assert.match(main, /app:supported-versions/)
+  assert.match(main, /bot:complete-chat/)
+  assert.match(script, /function renderChatSuggestions/)
+  assert.match(script, /function activateChatClick/)
+  assert.match(script, /suggest_command/)
+  assert.match(script, /run_command/)
+  assert.match(script, /copy_to_clipboard/)
+  assert.match(script, /open_url/)
+})
+
 test('dashboard exposes quick scaling, whole-page scrolling, and collapsible regions', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'src', 'index.html'), 'utf8')
   const css = fs.readFileSync(path.join(__dirname, '..', 'src', 'styles.css'), 'utf8')

@@ -2,6 +2,7 @@ const path = require('node:path')
 const { applyProtocolFixes } = require('./protocol-fixes.cjs')
 const { createProxyConnect } = require('./proxy-connect.cjs')
 const { ResourcePackLoader, normalizePackEvent } = require('./resource-pack.cjs')
+const { normalizeVersionSelection } = require('./version-support.cjs')
 applyProtocolFixes()
 const mineflayer = require('mineflayer')
 
@@ -32,12 +33,13 @@ class BotManager {
     reconnectState.account = account
     this.reconnects.set(account.id, reconnectState)
 
+    const selectedVersion = normalizeVersionSelection(account.version)
     const bot = this.createBot({
       host: account.host,
       port: Number(account.port) || 25565,
       username: account.username,
       auth: 'microsoft',
-      version: account.version || false,
+      version: selectedVersion || false,
       profilesFolder: path.join(this.profilesPath, account.id),
       connect: createProxyConnect(account.proxy, { host: account.host, port: Number(account.port) || 25565 }),
       hideErrors: true,
@@ -162,7 +164,7 @@ class BotManager {
     bot.on('messagestr', (message, _position, originalMessage) => {
       markReady()
       const formatted = originalMessage?.toMotd?.() || message
-      this.emit('log', account.id, { kind: 'chat', message, segments: parseMinecraftFormatting(formatted), at: Date.now() })
+      this.emit('log', account.id, { kind: 'chat', message, segments: parseInteractiveChat(originalMessage, message, formatted), at: Date.now() })
     })
     bot.on('kicked', (reason) => {
       session.lastKickReason = formatReason(reason)
@@ -234,6 +236,18 @@ class BotManager {
       bot.chat(trimmed)
     }
     this.emit('log', id, { kind: 'sent', message: trimmed, at: Date.now() })
+  }
+
+  async completeChat(id, input) {
+    const bot = this.requireOnline(id)
+    const text = String(input || '').slice(0, 256)
+    if (!text) return []
+    if (!text.startsWith('/')) return playerNameSuggestions(bot, text)
+    try {
+      return normalizeChatSuggestions(await bot.tabComplete(text, true, false, 2500), text)
+    } catch {
+      return playerNameSuggestions(bot, text)
+    }
   }
 
   control(id, control, duration = 350) {
@@ -591,6 +605,94 @@ function buildTelemetry(bot, nearestChest = null, resourcePack = null) {
   }
 }
 
+const CHAT_NAMED_COLORS = {
+  black: '#000000', dark_blue: '#0000aa', dark_green: '#00aa00', dark_aqua: '#00aaaa', dark_red: '#aa0000', dark_purple: '#aa00aa', gold: '#ffaa00', gray: '#aaaaaa', dark_gray: '#555555', blue: '#5555ff', green: '#55ff55', aqua: '#55ffff', red: '#ff5555', light_purple: '#ff55ff', yellow: '#ffff55', white: '#ffffff'
+}
+const CHAT_CLICK_ACTIONS = new Set(['open_url', 'run_command', 'suggest_command', 'copy_to_clipboard'])
+const CHAT_URL = /https?:\/\/[^\s<>"']+/gi
+
+function parseInteractiveChat(originalMessage, fallbackMessage = '', formattedMessage = '') {
+  const source = originalMessage?.json || originalMessage
+  const segments = []
+  if (source && typeof source === 'object') appendInteractiveComponent(segments, source, {})
+  if (!segments.length || (fallbackMessage && segments.map((segment) => segment.text).join('') !== String(fallbackMessage))) {
+    const formatted = parseMinecraftFormatting(formattedMessage)
+    return linkifyChatSegments(formatted.length ? formatted : [{ text: String(fallbackMessage || '').slice(0, 8192) }])
+  }
+  return linkifyChatSegments(segments).slice(0, 256)
+}
+
+function appendInteractiveComponent(segments, component, inherited) {
+  if (typeof component === 'string') { if (component) segments.push({ text: component, ...inherited }); return }
+  if (!component || typeof component !== 'object' || segments.length >= 256) return
+  const source = component.json && typeof component.json === 'object' ? component.json : component
+  const colorName = String(component.color ?? source.color ?? '')
+  const color = /^#[0-9a-f]{6}$/i.test(colorName) ? colorName.toLowerCase() : CHAT_NAMED_COLORS[colorName]
+  const style = { ...inherited, ...(color ? { color } : {}) }
+  for (const name of ['bold', 'italic', 'underlined', 'strikethrough']) {
+    const value = component[name] ?? source[name]
+    if (typeof value === 'boolean') style[name] = value
+  }
+  const click = normalizeChatClick(component.clickEvent || component.click_event || source.clickEvent || source.click_event)
+  const hoverEvent = component.hoverEvent || component.hover_event || source.hoverEvent || source.hover_event
+  const hover = String(hoverEvent?.action === 'show_text' ? extractText(hoverEvent.value ?? hoverEvent.contents) : '').slice(0, 500)
+  const actionStyle = { ...style, ...(click ? { click } : {}), ...(hover ? { hover } : {}) }
+  const text = component.text ?? source.text
+  if (typeof text === 'string' && text) segments.push({ text: text.slice(0, 8192), ...actionStyle })
+  const children = component.extra || source.extra || component.with || source.with
+  if (Array.isArray(children)) for (const child of children) appendInteractiveComponent(segments, child, actionStyle)
+}
+
+function normalizeChatClick(event) {
+  if (!event || typeof event !== 'object') return null
+  const action = String(event.action || '').toLowerCase()
+  const value = String(event.value ?? event.command ?? event.url ?? '').slice(0, 2048)
+  if (!CHAT_CLICK_ACTIONS.has(action) || !value) return null
+  if (action === 'open_url') {
+    try { if (!['http:', 'https:'].includes(new URL(value).protocol)) return null } catch { return null }
+  }
+  return { action, value }
+}
+
+function linkifyChatSegments(segments) {
+  return segments.flatMap((segment) => {
+    if (segment.click || typeof segment.text !== 'string') return [segment]
+    const parts = []
+    let cursor = 0
+    for (const match of segment.text.matchAll(CHAT_URL)) {
+      if (match.index > cursor) parts.push({ ...segment, text: segment.text.slice(cursor, match.index) })
+      parts.push({ ...segment, text: match[0], underlined: true, click: { action: 'open_url', value: match[0] }, hover: 'Tap to open link' })
+      cursor = match.index + match[0].length
+    }
+    if (cursor < segment.text.length) parts.push({ ...segment, text: segment.text.slice(cursor) })
+    return parts.length ? parts : [segment]
+  }).slice(0, 256)
+}
+
+function normalizeChatSuggestions(matches, input) {
+  const seen = new Set()
+  return (Array.isArray(matches) ? matches : []).flatMap((match) => {
+    const matchValue = String(typeof match === 'string' ? match : match?.match || '').slice(0, 256)
+    if (!matchValue) return []
+    const boundary = Math.max(input.lastIndexOf(' '), input.lastIndexOf('\t')) + 1
+    const prefix = input.slice(0, boundary)
+    const current = input.slice(boundary)
+    const value = matchValue.startsWith(input) ? matchValue : matchValue.startsWith(current) ? `${prefix}${matchValue}` : input.startsWith('/') && !matchValue.startsWith('/') && boundary === 0 ? `/${matchValue}` : `${prefix}${matchValue}`
+    if (seen.has(value)) return []
+    seen.add(value)
+    return [{ value, label: value, tooltip: String(typeof match === 'object' ? extractText(match.tooltip) : '').slice(0, 180), source: 'server' }]
+  }).filter((match) => match.value.toLowerCase().startsWith(input.toLowerCase()) || input.startsWith('/')).slice(0, 40)
+}
+
+function playerNameSuggestions(bot, input) {
+  const text = String(input || '').slice(0, 256)
+  const boundary = Math.max(text.lastIndexOf(' '), text.lastIndexOf('\t')) + 1
+  const prefix = text.slice(0, boundary)
+  const query = text.slice(boundary).toLowerCase()
+  const self = String(bot?.username || '').toLowerCase()
+  return Object.values(bot?.players || {}).map((player) => String(player?.username || '')).filter((name) => name && name.toLowerCase() !== self && name.toLowerCase().startsWith(query)).sort((a, b) => a.localeCompare(b)).slice(0, 40).map((name) => ({ value: `${prefix}${name}`, label: name, tooltip: '', source: 'player' }))
+}
+
 function playerInventorySlot(value) {
   const slot = Number(value)
   if (!Number.isInteger(slot) || slot < 9 || slot > 45) throw new Error('Invalid player inventory slot.')
@@ -627,4 +729,4 @@ function rejectResourcePack(bot, first, second, hash) {
   } catch {}
 }
 
-module.exports = { BotManager, normalizeLoginCode, extractText, shouldUseProxyCommandPacket, parseMinecraftFormatting, normalizeSkinUrl, findNearestChest, buildTelemetry, buildWindowSnapshot }
+module.exports = { BotManager, normalizeLoginCode, extractText, shouldUseProxyCommandPacket, parseMinecraftFormatting, parseInteractiveChat, normalizeSkinUrl, findNearestChest, buildTelemetry, buildWindowSnapshot }

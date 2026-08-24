@@ -4,7 +4,7 @@ const { EventEmitter } = require('node:events')
 const fs = require('node:fs')
 const path = require('node:path')
 const { Vec3 } = require('vec3')
-const { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, normalizeSkinUrl, findNearestChest, buildTelemetry, describeNetworkError, reconnectDelaySeconds, inspectFluidCurrent, recordFluidCorrection, installMovementPacketCompatibility, installModernPlayerInputCompatibility } = require('../electron/bot-manager.cjs')
+const { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, parseInteractiveChat, normalizeSkinUrl, findNearestChest, buildTelemetry, describeNetworkError, reconnectDelaySeconds, inspectFluidCurrent, recordFluidCorrection, installMovementPacketCompatibility, installModernPlayerInputCompatibility } = require('../electron/bot-manager.cjs')
 const { computeSignedChatChecksum } = require('../electron/protocol-fixes.cjs')
 const { snapshotNearbyEntities } = require('../electron/movement-compatibility.cjs')
 
@@ -30,6 +30,7 @@ class FakeBot extends EventEmitter {
     this._client.write = (name, payload) => this.writes.push([name, payload])
   }
   chat(message) { this.messages.push(message) }
+  tabComplete(text) { this.completed = text; return Promise.resolve([{ match: 'server', tooltip: 'Switch servers' }, '/spawn']) }
   setSettings(settings) { this.writes.push(['settings', settings]) }
   setControlState(control, value) { this.controls.push([control, value]) }
   look() { return Promise.resolve() }
@@ -80,6 +81,39 @@ test('connects, emits status, sends chat, and disconnects', () => {
 
   manager.disconnect('one')
   assert.equal(events.at(-1)[2].status, 'offline')
+})
+
+test('chat completion returns bounded server suggestions and online player names', async () => {
+  const bot = new FakeBot()
+  bot.entity = { yaw: 0, pitch: 0 }
+  bot.players = { Player: { username: 'Player' }, StarrySea: { username: 'StarrySea' } }
+  const manager = new BotManager({ profilesPath: 'profiles', emit: () => {}, createBot: () => bot })
+  manager.connect({ id: 'complete', username: 'user@example.com', host: 'localhost', antiAfk: false, autoReconnect: false })
+  bot.emit('spawn')
+  assert.deepEqual(await manager.completeChat('complete', '/ser'), [
+    { value: '/server', label: '/server', tooltip: 'Switch servers', source: 'server' },
+    { value: '/spawn', label: '/spawn', tooltip: '', source: 'server' }
+  ])
+  assert.equal(bot.completed, '/ser')
+  assert.deepEqual(await manager.completeChat('complete', 'Sta'), [
+    { value: 'StarrySea', label: 'StarrySea', tooltip: '', source: 'player' }
+  ])
+  manager.disconnect('complete')
+})
+
+test('interactive chat preserves Minecraft click actions and detects plain links', () => {
+  const segments = parseInteractiveChat({
+    text: 'Visit ',
+    extra: [
+      { text: 'website', color: 'aqua', clickEvent: { action: 'open_url', value: 'https://example.com' }, hoverEvent: { action: 'show_text', value: { text: 'Open site' } } },
+      { text: ' or ', color: 'white' },
+      { text: '[Teleport]', clickEvent: { action: 'run_command', value: '/spawn' } }
+    ]
+  }, 'Visit website or [Teleport]')
+  assert.deepEqual(segments[1].click, { action: 'open_url', value: 'https://example.com' })
+  assert.equal(segments[1].hover, 'Open site')
+  assert.deepEqual(segments[3].click, { action: 'run_command', value: '/spawn' })
+  assert.deepEqual(parseInteractiveChat(null, 'Docs: https://example.com/help').at(-1).click, { action: 'open_url', value: 'https://example.com/help' })
 })
 
 test('sends separate join and server-change messages', async (t) => {
@@ -164,6 +198,22 @@ test('a remembered auto version falls back to fresh detection if it fails before
   scheduled()
   assert.deepEqual(versions, ['1.21.1', false])
   manager.disconnect('stale-version')
+})
+
+test('Auto retries stale remembered versions once even when general reconnect is off', () => {
+  const bots = [new FakeBot(), new FakeBot()]
+  const versions = []
+  let scheduled
+  const manager = new BotManager({
+    profilesPath: 'profiles', emit: () => {},
+    createBot: (input) => { versions.push(input.version); return bots[versions.length - 1] },
+    scheduleReconnectTimer: (callback) => { scheduled = callback; return 'retry' }
+  })
+  manager.connect({ id: 'one-shot-auto', username: 'user@example.com', host: 'localhost', version: '', lastSuccessfulVersion: '1.21.1', antiAfk: false, autoReconnect: false })
+  bots[0].emit('end', 'unsupported protocol')
+  scheduled()
+  assert.deepEqual(versions, ['1.21.1', false])
+  manager.disconnect('one-shot-auto')
 })
 
 test('nearby entity diagnostics are bounded and contain no account credentials', () => {

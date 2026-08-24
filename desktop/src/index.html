@@ -86,7 +86,10 @@
               </div>
               <form id="chat-form" class="chat-form">
                 <label class="sr-only" for="chat-message">Message or command</label>
-                <input id="chat-message" autocomplete="off" placeholder="Message or /command" disabled />
+                <div class="chat-input-wrap">
+                  <input id="chat-message" autocomplete="off" placeholder="Message or /command" aria-autocomplete="list" aria-controls="chat-suggestions" aria-expanded="false" disabled />
+                  <div id="chat-suggestions" class="chat-suggestions" role="listbox" aria-label="Chat completions" hidden></div>
+                </div>
                 <button class="send-button" type="submit" disabled aria-label="Send message">Send</button>
               </form>
               <section id="macro-section" class="macro-section collapsible" aria-labelledby="macro-title">
@@ -177,7 +180,7 @@
           <label class="field full"><span>Microsoft account email</span><input id="username" type="email" required autocomplete="username" placeholder="name@example.com" /></label>
           <label class="field server-field"><span>Server address</span><input id="host" required placeholder="play.example.com" /></label>
           <label class="field port-field"><span>Port</span><input id="port" type="number" min="1" max="65535" value="25565" required /></label>
-          <label class="field full"><span>Minecraft version</span><input id="version" placeholder="Auto-detect (recommended)" /><small>Leave blank unless the server needs a specific version.</small></label>
+          <label class="field full"><span>Minecraft version</span><select id="version"><option value="">Automatic (detect from server)</option></select><small>Automatic retries fresh detection if a remembered version fails. Choose an exact engine-supported version when a proxy hides the backend version.</small></label>
           <label class="toggle-row full">
             <input id="connect-on-startup" type="checkbox" />
             <span class="toggle" aria-hidden="true"></span>

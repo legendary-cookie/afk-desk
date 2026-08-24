@@ -6,6 +6,7 @@ const { BotManager, normalizeSkinUrl } = require('./bot-manager.cjs')
 const { sendToWindow } = require('./window-events.cjs')
 const { DiagnosticLog } = require('./diagnostic-log.cjs')
 const { preferredVersionForAccount, rememberedVersionState } = require('./version-compatibility.cjs')
+const { supportedVersions, normalizeVersionSelection } = require('./version-support.cjs')
 const movementDiagnosticsEnabled = process.env.AFK_DESK_MOVEMENT_DIAGNOSTICS === '1'
 
 let mainWindow
@@ -82,6 +83,7 @@ function registerIpc() {
   ipcMain.handle('bot:connect', (_event, id) => bots.connect(requireAccount(id)))
   ipcMain.handle('bot:disconnect', (_event, id) => bots.disconnect(id))
   ipcMain.handle('bot:chat', (_event, { id, message }) => bots.sendChat(id, message))
+  ipcMain.handle('bot:complete-chat', (_event, { id, text }) => bots.completeChat(id, text))
   ipcMain.handle('bot:control', (_event, { id, control, duration }) => bots.control(id, control, duration))
   ipcMain.handle('bot:control-state', (_event, { id, control, active }) => bots.setControlState(id, control, active))
   ipcMain.handle('bot:look', (_event, { id, direction }) => bots.look(id, direction))
@@ -132,6 +134,7 @@ function registerIpc() {
     ...settingsStore.get()
   }))
   ipcMain.handle('app:version', () => app.getVersion())
+  ipcMain.handle('app:supported-versions', () => supportedVersions())
   ipcMain.handle('settings:save', (_event, input) => {
     const startWithWindows = input?.startWithWindows === true
     app.setLoginItemSettings({ openAtLogin: startWithWindows })
@@ -253,8 +256,7 @@ function validateAccount(input, existing) {
   const port = Number(input?.port) || 25565
   if (port < 1 || port > 65535) throw new Error('Port must be between 1 and 65535.')
   const minecraftName = normalizeMinecraftName(input?.minecraftName)
-  const version = String(input?.version || '').trim()
-  if (version && !/^\d+\.\d+(?:\.\d+)?$/.test(version)) throw new Error('Minecraft version must look like 1.21.1, or be blank for Auto-detect.')
+  const version = normalizeVersionSelection(input?.version)
   const rememberedVersion = rememberedVersionState(version, input, existing)
   const antiAfk = input?.antiAfk !== false
   const antiAfkJump = input?.antiAfkJump !== false

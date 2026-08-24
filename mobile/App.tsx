@@ -1,6 +1,6 @@
 import React, {useCallback, useEffect, useRef, useState} from 'react';
 import {
-  Alert, FlatList, Image, Linking, Modal, Pressable, SafeAreaView, ScrollView,
+  Alert, FlatList, Image, Linking, Modal, Pressable, SafeAreaView, ScrollView, Share,
   StatusBar, StyleSheet, Switch, Text, TextInput, View,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -14,7 +14,9 @@ type Account = {
   serverChangeMessage: string; messageDelay: string; autoDepositToChest: boolean;
   autoDepositRange: string; proxy: ProxyConfig;
 };
-type Segment = {text: string; color?: string; bold?: boolean; italic?: boolean; underlined?: boolean; strikethrough?: boolean};
+type ChatClick = {action: 'open_url' | 'run_command' | 'suggest_command' | 'copy_to_clipboard'; value: string};
+type Segment = {text: string; color?: string; bold?: boolean; italic?: boolean; underlined?: boolean; strikethrough?: boolean; hover?: string; click?: ChatClick};
+type ChatSuggestion = {value: string; label: string; tooltip?: string; source: 'server' | 'player'};
 type Log = {id: string; kind: string; message: string; at: number; segments?: Segment[]};
 type Item = {slot: number; name?: string; displayName: string; count: number; resourceIcon?: string; resourceModel?: string};
 type ResourceGlyph = {image?: string; sourceX?: number; sourceY?: number; sourceWidth?: number; sourceHeight?: number; imageWidth?: number; imageHeight?: number; renderHeight?: number; ascent?: number; advance?: number};
@@ -23,6 +25,7 @@ type Telemetry = {health: number; food: number; position: null | {x: number; y: 
 type Session = {status: string; detail: string; logs: Log[]; telemetry?: Telemetry; serverWindow?: ServerMenu | null};
 
 const STORAGE_KEY = 'afkdesk.mobile.accounts.v1';
+const SUPPORTED_GAME_VERSIONS = ['1.21.11', '1.21.9', '1.21.8', '1.21.6', '1.21.5', '1.21.4', '1.21.3', '1.21.1', '1.20.6', '1.20.4', '1.20.2', '1.20.1', '1.20', '1.19.4', '1.19.3', '1.19.2', '1.19', '1.18.2', '1.17.1', '1.16.5', '1.15.2', '1.14.4', '1.13.2', '1.12.2', '1.11.2', '1.10.2', '1.9.4', '1.8.8', '1.7'];
 const EMPTY_PROXY: ProxyConfig = {enabled: false, type: 'socks5', host: '', port: '1080', username: '', password: ''};
 const blankAccount = (): Account => ({
   id: `${Date.now()}-${Math.random().toString(16).slice(2)}`, username: '', host: '', port: '25565', version: '',
@@ -40,11 +43,11 @@ const normalizeAccount = (account: Partial<Account>): Account => ({
 
 let engineStarted = false;
 let requestSequence = 0;
-const pending = new Map<number, {resolve: () => void; reject: (error: Error) => void}>();
+const pending = new Map<number, {resolve: (value: any) => void; reject: (error: Error) => void}>();
 
-function engineCommand(command: Record<string, unknown>) {
+function engineCommand<T = void>(command: Record<string, unknown>): Promise<T> {
   const requestId = ++requestSequence;
-  return new Promise<void>((resolve, reject) => {
+  return new Promise<T>((resolve, reject) => {
     pending.set(requestId, {resolve, reject});
     nodejs.channel.post('engine-command', {requestId, ...command});
     setTimeout(() => {
@@ -63,10 +66,12 @@ function App(): React.JSX.Element {
   const [editing, setEditing] = useState<Account | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [chat, setChat] = useState('');
+  const [chatSuggestions, setChatSuggestions] = useState<ChatSuggestion[]>([]);
   const [followLatest, setFollowLatest] = useState(true);
   const [loginCode, setLoginCode] = useState<{code: string; verificationUri?: string} | null>(null);
   const accountsRef = useRef(accounts);
   const logListRef = useRef<ScrollView>(null);
+  const completionRequest = useRef(0);
   accountsRef.current = accounts;
 
   const selected = accounts.find(account => account.id === selectedId) || accounts[0];
@@ -86,11 +91,11 @@ function App(): React.JSX.Element {
 
   useEffect(() => {
     const onReady = () => setEngineReady(true);
-    const onReply = ({requestId, ok, error}: any) => {
+    const onReply = ({requestId, ok, value, error}: any) => {
       const waiter = pending.get(requestId);
       if (!waiter) return;
       pending.delete(requestId);
-      ok ? waiter.resolve() : waiter.reject(new Error(error));
+      ok ? waiter.resolve(value) : waiter.reject(new Error(error));
     };
     const onEvent = ({type, accountId, payload}: any) => {
       if (type === 'status') updateSession(accountId, old => ({...old, status: payload.status, detail: payload.detail, ...(!['online', 'connected'].includes(payload.status) ? {serverWindow: null} : {})}));
@@ -131,7 +136,22 @@ function App(): React.JSX.Element {
 
   useEffect(() => {
     setFollowLatest(true);
+    setChatSuggestions([]);
   }, [selectedId]);
+
+  useEffect(() => {
+    const request = ++completionRequest.current;
+    if (!selected || !chat || !['online', 'connected'].includes(session?.status || '')) {
+      setChatSuggestions([]);
+      return;
+    }
+    const timer = setTimeout(() => {
+      engineCommand<ChatSuggestion[]>({action: 'complete-chat', accountId: selected.id, value: chat})
+        .then(matches => { if (request === completionRequest.current) setChatSuggestions((matches || []).slice(0, 20)); })
+        .catch(() => { if (request === completionRequest.current) setChatSuggestions([]); });
+    }, 180);
+    return () => clearTimeout(timer);
+  }, [chat, selected, session?.status]);
 
   useEffect(() => {
     if (!followLatest) return;
@@ -167,6 +187,7 @@ function App(): React.JSX.Element {
     const value = chat.trim();
     if (!selected || !value) return;
     setChat('');
+    setChatSuggestions([]);
     try { await engineCommand({action: 'chat', accountId: selected.id, value}); }
     catch (error: any) { Alert.alert('Cannot send', error.message); }
   };
@@ -180,6 +201,24 @@ function App(): React.JSX.Element {
       setAccounts(old => old.map(item => item.id === selected.id ? {...item, autoDepositToChest: previous} : item));
       Alert.alert('Auto-deposit update failed', error.message);
     }
+  };
+  const activateChatClick = async (click?: ChatClick) => {
+    if (!selected || !click?.value) return;
+    if (click.action === 'suggest_command') {
+      setChat(click.value);
+      return;
+    }
+    if (click.action === 'run_command') {
+      try { await engineCommand({action: 'chat', accountId: selected.id, value: click.value}); }
+      catch (error: any) { Alert.alert('Command failed', error.message); }
+      return;
+    }
+    if (click.action === 'open_url') {
+      try { await Linking.openURL(click.value); }
+      catch { await Share.share({message: click.value}); }
+      return;
+    }
+    await Share.share({message: click.value});
   };
   const dropItem = (item: Item) => {
     if (!selected) return;
@@ -203,7 +242,7 @@ function App(): React.JSX.Element {
   return <SafeAreaView style={styles.safe}>
     <StatusBar barStyle="light-content" backgroundColor="#090c10" />
     <View style={styles.header}>
-      <View><Text style={styles.brand}>AFK Desk 0.8.3</Text><Text style={styles.muted}>{engineReady ? 'On-device Minecraft client' : 'Starting engine…'}</Text></View>
+      <View><Text style={styles.brand}>AFK Desk 0.9.0</Text><Text style={styles.muted}>{engineReady ? 'On-device Minecraft client' : 'Starting engine…'}</Text></View>
       <Pressable style={styles.smallButton} onPress={() => setSettingsOpen(true)}><Text style={styles.buttonText}>Settings</Text></Pressable>
     </View>
 
@@ -239,9 +278,10 @@ function App(): React.JSX.Element {
             setFollowLatest(distance < 32);
           }} scrollEventThrottle={80}>
           {session?.logs.length ? session.logs.map(item => <View key={item.id} style={styles.logLine}><Text style={styles.time}>{new Date(item.at).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}</Text>
-            <Text style={[styles.logText, item.kind === 'error' && styles.error, item.kind === 'sent' && styles.sent]}>{item.segments?.length ? item.segments.map((segment, i) => <Text key={i} style={{color: segment.color, fontWeight: segment.bold ? '800' : undefined, fontStyle: segment.italic ? 'italic' : undefined, textDecorationLine: segment.underlined ? 'underline' : segment.strikethrough ? 'line-through' : undefined}}>{segment.text}</Text>) : item.message}</Text>
+            <Text style={[styles.logText, item.kind === 'error' && styles.error, item.kind === 'sent' && styles.sent]}>{item.segments?.length ? item.segments.map((segment, i) => <Text key={i} accessibilityRole={segment.click ? 'link' : undefined} onPress={segment.click ? () => activateChatClick(segment.click) : undefined} onLongPress={segment.click ? () => Share.share({message: segment.click!.value}) : undefined} style={{color: segment.color, fontWeight: segment.bold ? '800' : undefined, fontStyle: segment.italic ? 'italic' : undefined, textDecorationLine: segment.click || segment.underlined ? 'underline' : segment.strikethrough ? 'line-through' : undefined}}>{segment.text}</Text>) : item.message}</Text>
           </View>) : <Text style={styles.emptyLog}>Messages will appear here.</Text>}
         </ScrollView>
+        {chatSuggestions.length > 0 && <ScrollView horizontal keyboardShouldPersistTaps="handled" contentContainerStyle={styles.chatSuggestions}>{chatSuggestions.map((suggestion, index) => <Pressable key={`${suggestion.value}-${index}`} style={styles.chatSuggestion} onPress={() => {setChat(suggestion.value); setChatSuggestions([]);}}><Text numberOfLines={1} style={styles.chatSuggestionText}>{suggestion.label || suggestion.value}</Text>{Boolean(suggestion.tooltip) && <Text numberOfLines={1} style={styles.muted}>{suggestion.tooltip}</Text>}</Pressable>)}</ScrollView>}
         <View style={styles.chatRow}><TextInput value={chat} onChangeText={setChat} onSubmitEditing={sendChat} placeholder="Message or /command" placeholderTextColor="#626d7b" style={styles.chatInput} /><Pressable style={styles.send} onPress={sendChat}><Text style={styles.buttonText}>Send</Text></Pressable></View>
       </View>
 
@@ -277,6 +317,17 @@ function Stat({label, value, wide}: {label: string; value: string; wide?: boolea
 function Move({label, onPress}: {label: string; onPress: () => void}) { return <Pressable style={styles.move} onPress={onPress}><Text style={styles.buttonText}>{label}</Text></Pressable>; }
 
 function Field({label, value, onChange, secret, keyboardType}: any) { return <View style={styles.field}><Text style={styles.fieldLabel}>{label}</Text><TextInput value={value} onChangeText={onChange} secureTextEntry={secret} keyboardType={keyboardType} placeholderTextColor="#626d7b" style={styles.input} /></View>; }
+function VersionField({value, onChange}: {value: string; onChange: (value: string) => void}) {
+  const [open, setOpen] = useState(false);
+  return <View style={styles.field}><Text style={styles.fieldLabel}>Minecraft version</Text>
+    <Pressable accessibilityRole="button" style={styles.versionButton} onPress={() => setOpen(true)}><Text style={styles.inputText}>{value ? `Minecraft ${value}` : 'Automatic (detect from server)'}</Text><Text style={styles.muted}>Change</Text></Pressable>
+    <Text style={styles.help}>Choose Automatic, or select an exact version when a proxy hides the backend version.</Text>
+    <Modal transparent visible={open} animationType="fade" onRequestClose={() => setOpen(false)}><View style={styles.backdrop}><View style={styles.versionModal}><View style={styles.panelHeader}><Text style={styles.panelTitle}>Game version</Text><Pressable onPress={() => setOpen(false)}><Text style={styles.link}>Close</Text></Pressable></View><FlatList
+      data={['', ...SUPPORTED_GAME_VERSIONS]} keyExtractor={item => item || 'auto'}
+      renderItem={({item}) => <Pressable style={[styles.versionOption, value === item && styles.versionOptionSelected]} onPress={() => {onChange(item); setOpen(false);}}><Text style={styles.buttonText}>{item ? `Minecraft ${item}` : 'Automatic (detect from server)'}</Text>{value === item && <Text style={styles.link}>Selected</Text>}</Pressable>}
+    /></View></View></Modal>
+  </View>;
+}
 function Toggle({label, value, onChange}: {label: string; value: boolean; onChange: (value: boolean) => void}) { return <View style={styles.toggleRow}><Text style={styles.toggleLabel}>{label}</Text><Switch value={value} onValueChange={onChange} trackColor={{false: '#364150', true: '#48bc7c'}} /></View>; }
 
 function resourceArtLayout(resourceTitle?: ServerMenu['resourceTitle']) {
@@ -361,7 +412,7 @@ function AccountModal({value, onClose, onSave, onDelete}: {value: Account | null
         <Text style={styles.help}>After sign-in, the app automatically replaces this with the Minecraft IGN and head.</Text>
         <Field label="Server" value={draft.host} onChange={(v: string) => set('host', v)} />
         <Field label="Port" value={draft.port} onChange={(v: string) => set('port', v)} keyboardType="number-pad" />
-        <Field label="Minecraft version (blank = auto)" value={draft.version} onChange={(v: string) => set('version', v)} />
+        <VersionField value={draft.version} onChange={(v: string) => set('version', v)} />
         <Text style={styles.sectionTitle}>Automation</Text>
         <Toggle label="Join when the app starts" value={draft.connectOnStartup} onChange={v => set('connectOnStartup', v)} />
         <Toggle label="Auto reconnect" value={draft.autoReconnect} onChange={v => set('autoReconnect', v)} />
@@ -397,10 +448,10 @@ const styles = StyleSheet.create({
   safe: {flex: 1, backgroundColor: '#090c10'}, flex: {flex: 1}, header: {height: 66, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderColor: '#252d38'}, brand: {fontSize: 20, fontWeight: '800', color: '#f4f6f8'}, muted: {fontSize: 11, color: '#8f9baa'},
   accountStrip: {height: 84, flexDirection: 'row', borderBottomWidth: 1, borderColor: '#252d38'}, accountStripContent: {padding: 8, gap: 7}, accountCard: {width: 190, flexDirection: 'row', borderRadius: 8, borderWidth: 1, borderColor: '#252d38', backgroundColor: '#11161e'}, accountCardSelected: {borderColor: '#60d394', backgroundColor: '#161c25'}, accountSelect: {flex: 1, minWidth: 0, padding: 8, flexDirection: 'row', alignItems: 'center', gap: 8}, accountCopy: {flex: 1, minWidth: 0}, accountName: {fontWeight: '700', fontSize: 12, color: '#f4f6f8'}, avatar: {width: 36, height: 36, borderRadius: 6}, avatarFallback: {width: 36, height: 36, borderRadius: 6, backgroundColor: '#202833', alignItems: 'center', justifyContent: 'center'}, avatarLetter: {fontWeight: '800', color: '#f4f6f8'}, dot: {width: 7, height: 7, borderRadius: 4, backgroundColor: '#626d7b'}, dotOnline: {backgroundColor: '#60d394'}, orderRow: {width: 24, justifyContent: 'space-evenly', alignItems: 'center', borderLeftWidth: 1, borderColor: '#252d38'}, order: {fontSize: 22, color: '#8f9baa'}, addCard: {width: 52, margin: 8, marginLeft: 0, borderRadius: 8, borderWidth: 1, borderStyle: 'dashed', borderColor: '#364150', alignItems: 'center', justifyContent: 'center'}, addText: {fontSize: 26, color: '#60d394'},
   page: {flex: 1}, pageContent: {padding: 14, gap: 14, paddingBottom: 36}, empty: {flex: 1, alignItems: 'center', justifyContent: 'center', padding: 30, gap: 14}, titleRow: {flexDirection: 'row', alignItems: 'center', gap: 8}, title: {fontSize: 23, fontWeight: '800', color: '#f4f6f8'}, status: {marginTop: 3, color: '#8f9baa', fontSize: 11, textTransform: 'capitalize'}, smallButton: {height: 38, paddingHorizontal: 13, borderRadius: 7, backgroundColor: '#161c25', borderWidth: 1, borderColor: '#364150', alignItems: 'center', justifyContent: 'center'}, primarySmall: {height: 38, paddingHorizontal: 13, borderRadius: 7, backgroundColor: '#60d394', alignItems: 'center', justifyContent: 'center'}, dangerSmall: {height: 38, paddingHorizontal: 13, borderRadius: 7, borderWidth: 1, borderColor: '#7a4045', alignItems: 'center', justifyContent: 'center'}, buttonText: {color: '#f4f6f8', fontWeight: '700', fontSize: 12}, primaryText: {color: '#06120c', fontWeight: '800'}, dangerText: {color: '#f16e74', fontWeight: '700'},
-  panel: {borderWidth: 1, borderColor: '#252d38', borderRadius: 10, overflow: 'hidden', backgroundColor: '#11161e'}, console: {height: 440, borderWidth: 1, borderColor: '#252d38', borderRadius: 10, overflow: 'hidden', backgroundColor: '#11161e'}, panelHeader: {minHeight: 52, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderColor: '#252d38'}, panelTitle: {fontSize: 14, fontWeight: '800', color: '#f4f6f8'}, consoleHeaderActions: {flexDirection: 'row', alignItems: 'center', gap: 10}, followButton: {paddingVertical: 8, paddingHorizontal: 4}, logList: {flex: 1, paddingHorizontal: 12}, emptyLog: {padding: 18, color: '#626d7b', textAlign: 'center'}, logLine: {flexDirection: 'row', gap: 8, paddingVertical: 4}, time: {width: 54, color: '#626d7b', fontSize: 10}, logText: {flex: 1, color: '#c5cbd3', fontSize: 11, fontFamily: 'monospace'}, error: {color: '#ff9da2'}, sent: {color: '#8ee7b5'}, chatRow: {height: 56, padding: 8, gap: 8, flexDirection: 'row', borderTopWidth: 1, borderColor: '#252d38'}, chatInput: {flex: 1, paddingHorizontal: 11, borderWidth: 1, borderColor: '#364150', borderRadius: 7, backgroundColor: '#0c1016', color: '#f4f6f8'}, send: {width: 62, borderRadius: 7, backgroundColor: '#161c25', alignItems: 'center', justifyContent: 'center'},
+  panel: {borderWidth: 1, borderColor: '#252d38', borderRadius: 10, overflow: 'hidden', backgroundColor: '#11161e'}, console: {height: 440, borderWidth: 1, borderColor: '#252d38', borderRadius: 10, overflow: 'hidden', backgroundColor: '#11161e'}, panelHeader: {minHeight: 52, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderColor: '#252d38'}, panelTitle: {fontSize: 14, fontWeight: '800', color: '#f4f6f8'}, consoleHeaderActions: {flexDirection: 'row', alignItems: 'center', gap: 10}, followButton: {paddingVertical: 8, paddingHorizontal: 4}, logList: {flex: 1, paddingHorizontal: 12}, emptyLog: {padding: 18, color: '#626d7b', textAlign: 'center'}, logLine: {flexDirection: 'row', gap: 8, paddingVertical: 4}, time: {width: 54, color: '#626d7b', fontSize: 10}, logText: {flex: 1, color: '#c5cbd3', fontSize: 11, fontFamily: 'monospace'}, error: {color: '#ff9da2'}, sent: {color: '#8ee7b5'}, chatSuggestions: {paddingHorizontal: 8, paddingVertical: 6, gap: 6, borderTopWidth: 1, borderColor: '#252d38'}, chatSuggestion: {maxWidth: 240, minHeight: 38, paddingHorizontal: 10, justifyContent: 'center', borderRadius: 7, borderWidth: 1, borderColor: '#364150', backgroundColor: '#161c25'}, chatSuggestionText: {color: '#f4f6f8', fontFamily: 'monospace', fontSize: 11}, chatRow: {height: 56, padding: 8, gap: 8, flexDirection: 'row', borderTopWidth: 1, borderColor: '#252d38'}, chatInput: {flex: 1, paddingHorizontal: 11, borderWidth: 1, borderColor: '#364150', borderRadius: 7, backgroundColor: '#0c1016', color: '#f4f6f8'}, send: {width: 62, borderRadius: 7, backgroundColor: '#161c25', alignItems: 'center', justifyContent: 'center'},
   statsRow: {flexDirection: 'row', flexWrap: 'wrap', gap: 8}, stat: {minWidth: 90, flexGrow: 1, padding: 12, borderRadius: 8, borderWidth: 1, borderColor: '#252d38', backgroundColor: '#11161e'}, statWide: {minWidth: 180}, statValue: {marginTop: 4, color: '#f4f6f8', fontSize: 13, fontWeight: '700'}, moveGrid: {width: 176, alignSelf: 'center', paddingVertical: 18, flexDirection: 'row', flexWrap: 'wrap', gap: 6}, move: {width: 54, height: 46, borderRadius: 7, borderWidth: 1, borderColor: '#364150', backgroundColor: '#161c25', alignItems: 'center', justifyContent: 'center'}, moveActions: {padding: 12, paddingTop: 0, flexDirection: 'row', justifyContent: 'center', gap: 7}, inventoryAutomation: {paddingHorizontal: 12, paddingVertical: 8, borderBottomWidth: 1, borderColor: '#252d38'}, inventory: {padding: 10, flexDirection: 'row', flexWrap: 'wrap', gap: 7}, item: {width: '100%', minHeight: 58, padding: 8, gap: 8, flexDirection: 'row', alignItems: 'center', borderRadius: 7, backgroundColor: '#0c1016', borderWidth: 1, borderColor: '#252d38'}, itemIcon: {width: 36, height: 36}, itemCopy: {flex: 1, minWidth: 0}, itemName: {fontSize: 11, color: '#f4f6f8', fontWeight: '700'}, dropButton: {minWidth: 54, height: 38, paddingHorizontal: 8, borderRadius: 6, borderWidth: 1, borderColor: '#7a4045', alignItems: 'center', justifyContent: 'center'},
   backdrop: {flex: 1, padding: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(3,5,8,.82)'}, modalCard: {width: '100%', maxWidth: 440, padding: 22, gap: 14, borderRadius: 12, backgroundColor: '#11161e', borderWidth: 1, borderColor: '#364150'}, modalHelp: {color: '#8f9baa', lineHeight: 20}, deviceCode: {padding: 16, borderRadius: 8, backgroundColor: '#090c10', color: '#f4f6f8', fontSize: 28, fontWeight: '800', letterSpacing: 3, textAlign: 'center'}, primary: {minHeight: 46, paddingHorizontal: 16, borderRadius: 7, backgroundColor: '#60d394', alignItems: 'center', justifyContent: 'center'}, modalButton: {minHeight: 44, borderRadius: 7, backgroundColor: '#161c25', alignItems: 'center', justifyContent: 'center'}, modalHeader: {height: 58, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderColor: '#252d38'}, link: {color: '#60d394', fontWeight: '700'}, serverModal: {width: '100%', maxWidth: 420, maxHeight: '90%', overflow: 'hidden', borderRadius: 12, backgroundColor: '#11161e', borderWidth: 1, borderColor: '#364150'}, serverScroller: {minWidth: '100%', minHeight: 150, padding: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: '#c6c6c6'}, resourceArt: {position: 'absolute', left: 0, top: 0}, serverGrid: {flexDirection: 'row', flexWrap: 'wrap'}, serverSlot: {position: 'relative', overflow: 'hidden', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderTopColor: '#ffffff', borderLeftColor: '#ffffff', borderRightColor: '#555555', borderBottomColor: '#555555', backgroundColor: '#8b8b8b'}, serverSlotCustom: {borderWidth: 0, backgroundColor: 'transparent'}, serverIcon: {width: '88%', height: '88%'}, serverFallback: {color: '#202020', fontWeight: '800'}, serverCount: {position: 'absolute', right: 1, bottom: 0, color: '#ffffff', fontSize: 9, fontWeight: '800', textShadowColor: '#000000', textShadowRadius: 2}, serverHelp: {padding: 12, color: '#8f9baa', fontSize: 11},
-  form: {padding: 18, gap: 12}, sectionTitle: {marginTop: 8, paddingBottom: 6, borderBottomWidth: 1, borderColor: '#252d38', color: '#f4f6f8', fontSize: 14, fontWeight: '800'}, field: {gap: 6}, fieldLabel: {fontSize: 11, fontWeight: '700', color: '#c8cdd4'}, input: {height: 44, paddingHorizontal: 11, borderRadius: 7, borderWidth: 1, borderColor: '#364150', backgroundColor: '#0c1016', color: '#f4f6f8'}, help: {color: '#8f9baa', fontSize: 11, lineHeight: 17}, toggleRow: {minHeight: 46, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between'}, toggleLabel: {flex: 1, color: '#f4f6f8', fontWeight: '600'}, segmented: {height: 42, flexDirection: 'row', padding: 3, borderRadius: 8, backgroundColor: '#0c1016'}, segment: {flex: 1, alignItems: 'center', justifyContent: 'center', borderRadius: 6}, segmentSelected: {backgroundColor: '#364150'}, deleteButton: {height: 46, marginTop: 14, borderRadius: 7, borderWidth: 1, borderColor: '#7a4045', alignItems: 'center', justifyContent: 'center'},
+  form: {padding: 18, gap: 12}, sectionTitle: {marginTop: 8, paddingBottom: 6, borderBottomWidth: 1, borderColor: '#252d38', color: '#f4f6f8', fontSize: 14, fontWeight: '800'}, field: {gap: 6}, fieldLabel: {fontSize: 11, fontWeight: '700', color: '#c8cdd4'}, input: {height: 44, paddingHorizontal: 11, borderRadius: 7, borderWidth: 1, borderColor: '#364150', backgroundColor: '#0c1016', color: '#f4f6f8'}, inputText: {color: '#f4f6f8', fontWeight: '600'}, versionButton: {height: 46, paddingHorizontal: 11, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderRadius: 7, borderWidth: 1, borderColor: '#364150', backgroundColor: '#0c1016'}, versionModal: {width: '100%', maxWidth: 420, maxHeight: '84%', overflow: 'hidden', borderRadius: 12, backgroundColor: '#11161e', borderWidth: 1, borderColor: '#364150'}, versionOption: {minHeight: 46, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderColor: '#252d38'}, versionOptionSelected: {backgroundColor: '#1a2633'}, help: {color: '#8f9baa', fontSize: 11, lineHeight: 17}, toggleRow: {minHeight: 46, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between'}, toggleLabel: {flex: 1, color: '#f4f6f8', fontWeight: '600'}, segmented: {height: 42, flexDirection: 'row', padding: 3, borderRadius: 8, backgroundColor: '#0c1016'}, segment: {flex: 1, alignItems: 'center', justifyContent: 'center', borderRadius: 6}, segmentSelected: {backgroundColor: '#364150'}, deleteButton: {height: 46, marginTop: 14, borderRadius: 7, borderWidth: 1, borderColor: '#7a4045', alignItems: 'center', justifyContent: 'center'},
 });
 
 export default App;

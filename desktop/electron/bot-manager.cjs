@@ -15,6 +15,7 @@ const {
 } = require('./movement-compatibility.cjs')
 applyProtocolFixes()
 const mineflayer = require('mineflayer')
+const { normalizeVersionSelection, supportedVersionOrEmpty } = require('./version-support.cjs')
 
 const CHEST_NAMES = new Set(['chest', 'trapped_chest', 'barrel'])
 const ARMOR_SLOT_TYPES = new Map([[5, 'helmet'], [6, 'chestplate'], [7, 'leggings'], [8, 'boots'], [45, 'off-hand']])
@@ -67,22 +68,25 @@ class BotManager {
     reconnectState.account = account
     this.reconnects.set(account.id, reconnectState)
 
+    const explicitVersion = normalizeVersionSelection(account.version)
+    const rememberedVersion = explicitVersion ? '' : supportedVersionOrEmpty(account.lastSuccessfulVersion)
+    const connectionVersion = explicitVersion || rememberedVersion
     const bot = this.createBot({
       host: account.host,
       port: Number(account.port) || 25565,
       username: account.username,
       auth: 'microsoft',
-      version: account.version || account.lastSuccessfulVersion || false,
+      version: connectionVersion || false,
       profilesFolder: path.join(this.profilesPath, account.id),
       connect: createProxyConnect(account.proxy, { host: account.host, port: Number(account.port) || 25565 }),
       hideErrors: true,
       checkTimeoutInterval: 45_000,
       onMsaCode: (code) => this.emit('login-code', account.id, normalizeLoginCode(code))
     })
-    if (!account.version && account.lastSuccessfulVersion) {
+    if (!explicitVersion && rememberedVersion) {
       this.emit('log', account.id, {
         kind: 'system',
-        message: `Auto version: using proven Minecraft ${account.lastSuccessfulVersion} for this server.`,
+        message: `Auto version: using proven Minecraft ${rememberedVersion} for this server.`,
         at: Date.now()
       })
     }
@@ -320,7 +324,7 @@ class BotManager {
       markWorldReady()
       markReady()
       const formatted = originalMessage?.toMotd?.() || message
-      this.emit('log', account.id, { kind: 'chat', message, segments: parseMinecraftFormatting(formatted), at: Date.now() })
+      this.emit('log', account.id, { kind: 'chat', message, segments: parseInteractiveChat(originalMessage, message, formatted), at: Date.now() })
     })
     bot.on('kicked', (reason) => {
       session.lastKickReason = formatReason(reason)
@@ -348,16 +352,16 @@ class BotManager {
       }
     })
     bot.on('end', (reason) => {
-      const retryWithoutRememberedVersion = !session.ready && !account.version && Boolean(account.lastSuccessfulVersion)
+      const retryWithoutRememberedVersion = !session.ready && !explicitVersion && Boolean(rememberedVersion)
       this.clearSession(account.id)
-      if (account.autoReconnect !== false && !reconnectState.manual) {
-        if (retryWithoutRememberedVersion) {
-          this.emit('log', account.id, { kind: 'error', message: `Minecraft ${account.lastSuccessfulVersion} did not reach the world. Retrying with fresh version detection.`, at: Date.now() })
-        }
+      if (retryWithoutRememberedVersion && !reconnectState.manual) {
+        this.emit('log', account.id, { kind: 'error', message: `Minecraft ${rememberedVersion} did not reach the world. Retrying once with fresh version detection.`, at: Date.now() })
         this.scheduleReconnect(
-          retryWithoutRememberedVersion ? { ...account, lastSuccessfulVersion: '' } : account,
+          { ...account, lastSuccessfulVersion: '' },
           session.lastKickReason || session.lastNetworkReason || reason
         )
+      } else if (account.autoReconnect !== false && !reconnectState.manual) {
+        this.scheduleReconnect(account, session.lastKickReason || session.lastNetworkReason || reason)
       } else {
         this.reconnects.delete(account.id)
         this.status(account.id, 'offline', reason ? `Disconnected: ${reason}` : 'Disconnected')
@@ -417,6 +421,19 @@ class BotManager {
     // Velocity backends. A hand-written command-only packet is incomplete.
     bot.chat(trimmed)
     this.emit('log', id, { kind: 'sent', message: trimmed, at: Date.now() })
+  }
+
+  async completeChat(id, input) {
+    const bot = this.requireOnline(id)
+    const text = String(input || '').slice(0, 256)
+    if (!text) return []
+    if (!text.startsWith('/')) return playerNameSuggestions(bot, text)
+    try {
+      const matches = await bot.tabComplete(text, true, false, 2500)
+      return normalizeChatSuggestions(matches, text)
+    } catch {
+      return playerNameSuggestions(bot, text)
+    }
   }
 
   control(id, control, duration = 350) {
@@ -986,6 +1003,126 @@ function parseMinecraftFormatting(input) {
   return segments.slice(0, 256)
 }
 
+const CHAT_NAMED_COLORS = {
+  black: '#000000', dark_blue: '#0000aa', dark_green: '#00aa00', dark_aqua: '#00aaaa', dark_red: '#aa0000',
+  dark_purple: '#aa00aa', gold: '#ffaa00', gray: '#aaaaaa', dark_gray: '#555555', blue: '#5555ff', green: '#55ff55',
+  aqua: '#55ffff', red: '#ff5555', light_purple: '#ff55ff', yellow: '#ffff55', white: '#ffffff'
+}
+const CHAT_CLICK_ACTIONS = new Set(['open_url', 'run_command', 'suggest_command', 'copy_to_clipboard'])
+const CHAT_URL = /https?:\/\/[^\s<>"']+/gi
+
+function parseInteractiveChat(originalMessage, fallbackMessage = '', formattedMessage = '') {
+  const source = originalMessage?.json || originalMessage
+  const segments = []
+  if (source && typeof source === 'object') appendInteractiveComponent(segments, source, {})
+  const visible = segments.map((segment) => segment.text).join('')
+  if (!segments.length || (fallbackMessage && visible !== String(fallbackMessage))) {
+    const formatted = parseMinecraftFormatting(formattedMessage)
+    return linkifyChatSegments(formatted.length ? formatted : [{ text: String(fallbackMessage || '').slice(0, 8192) }])
+  }
+  return linkifyChatSegments(segments).slice(0, 256)
+}
+
+function appendInteractiveComponent(segments, component, inherited) {
+  if (typeof component === 'string') {
+    if (component) segments.push({ text: component, ...inherited })
+    return
+  }
+  if (!component || typeof component !== 'object' || segments.length >= 256) return
+  const source = component.json && typeof component.json === 'object' ? component.json : component
+  const colorName = String(component.color ?? source.color ?? '')
+  const color = /^#[0-9a-f]{6}$/i.test(colorName) ? colorName.toLowerCase() : CHAT_NAMED_COLORS[colorName]
+  const style = {
+    ...inherited,
+    ...(color ? { color } : {}),
+    ...booleanChatStyle('bold', component, source),
+    ...booleanChatStyle('italic', component, source),
+    ...booleanChatStyle('underlined', component, source),
+    ...booleanChatStyle('strikethrough', component, source)
+  }
+  const click = normalizeChatClick(component.clickEvent || component.click_event || source.clickEvent || source.click_event)
+  const hover = normalizeChatHover(component.hoverEvent || component.hover_event || source.hoverEvent || source.hover_event)
+  const actionStyle = { ...style, ...(click ? { click } : {}), ...(hover ? { hover } : {}) }
+  const text = component.text ?? source.text
+  if (typeof text === 'string' && text) segments.push({ text: text.slice(0, 8192), ...actionStyle })
+  const children = component.extra || source.extra || component.with || source.with
+  if (Array.isArray(children)) for (const child of children) appendInteractiveComponent(segments, child, actionStyle)
+}
+
+function booleanChatStyle(name, component, source) {
+  const value = component[name] ?? source[name]
+  return value === true ? { [name]: true } : value === false ? { [name]: false } : {}
+}
+
+function normalizeChatClick(event) {
+  if (!event || typeof event !== 'object') return null
+  const action = String(event.action || '').toLowerCase()
+  const value = String(event.value ?? event.command ?? event.url ?? '').slice(0, 2048)
+  if (!CHAT_CLICK_ACTIONS.has(action) || !value) return null
+  if (action === 'open_url') {
+    try {
+      const url = new URL(value)
+      if (!['http:', 'https:'].includes(url.protocol)) return null
+      return { action, value }
+    } catch { return null }
+  }
+  return { action, value }
+}
+
+function normalizeChatHover(event) {
+  if (!event || typeof event !== 'object' || String(event.action || '') !== 'show_text') return ''
+  return String(extractText(event.value ?? event.contents) || '').slice(0, 500)
+}
+
+function linkifyChatSegments(segments) {
+  return segments.flatMap((segment) => {
+    if (segment.click || typeof segment.text !== 'string') return [segment]
+    const parts = []
+    let cursor = 0
+    for (const match of segment.text.matchAll(CHAT_URL)) {
+      if (match.index > cursor) parts.push({ ...segment, text: segment.text.slice(cursor, match.index) })
+      parts.push({ ...segment, text: match[0], underlined: true, click: { action: 'open_url', value: match[0] }, hover: 'Click to copy link' })
+      cursor = match.index + match[0].length
+    }
+    if (cursor < segment.text.length) parts.push({ ...segment, text: segment.text.slice(cursor) })
+    return parts.length ? parts : [segment]
+  }).slice(0, 256)
+}
+
+function normalizeChatSuggestions(matches, input) {
+  const seen = new Set()
+  return (Array.isArray(matches) ? matches : []).flatMap((match) => {
+    const matchValue = String(typeof match === 'string' ? match : match?.match || '').slice(0, 256)
+    if (!matchValue) return []
+    const boundary = Math.max(input.lastIndexOf(' '), input.lastIndexOf('\t')) + 1
+    const prefix = input.slice(0, boundary)
+    const current = input.slice(boundary)
+    const value = matchValue.startsWith(input) ? matchValue : matchValue.startsWith(current) ? `${prefix}${matchValue}` : input.startsWith('/') && !matchValue.startsWith('/') && boundary === 0 ? `/${matchValue}` : `${prefix}${matchValue}`
+    if (seen.has(value)) return []
+    seen.add(value)
+    return [{
+      value,
+      label: value,
+      tooltip: String(typeof match === 'object' ? extractText(match.tooltip) : '').slice(0, 180),
+      source: 'server'
+    }]
+  }).filter((match) => match.value.toLowerCase().startsWith(input.toLowerCase()) || input.startsWith('/')).slice(0, 40)
+}
+
+function playerNameSuggestions(bot, input) {
+  const text = String(input || '').slice(0, 256)
+  const boundary = Math.max(text.lastIndexOf(' '), text.lastIndexOf('\t')) + 1
+  const prefix = text.slice(0, boundary)
+  const query = text.slice(boundary).toLowerCase()
+  const self = String(bot?.username || '').toLowerCase()
+  return Object.values(bot?.players || {})
+    .map((player) => String(player?.username || ''))
+    .filter((name) => name && name.toLowerCase() !== self && name.toLowerCase().startsWith(query))
+    .sort((a, b) => a.localeCompare(b))
+    .slice(0, 40)
+    .map((name) => ({ value: `${prefix}${name}`, label: name, tooltip: '', source: 'player' }))
+}
+
 function normalizeSkinUrl(value) {
   try {
     const url = new URL(String(value || ''))
@@ -1484,4 +1621,4 @@ function rejectResourcePack(bot, first, second, hash) {
   } catch {}
 }
 
-module.exports = { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, normalizeSkinUrl, findNearestChest, buildTelemetry, buildWindowSnapshot, normalizeLockedSlots, describeNetworkError, reconnectDelaySeconds, normalizeAntiAfkSettings, inspectFluidCurrent, recordFluidCorrection, installMovementPacketCompatibility, installModernPlayerInputCompatibility }
+module.exports = { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, parseInteractiveChat, normalizeSkinUrl, findNearestChest, buildTelemetry, buildWindowSnapshot, normalizeLockedSlots, describeNetworkError, reconnectDelaySeconds, normalizeAntiAfkSettings, inspectFluidCurrent, recordFluidCorrection, installMovementPacketCompatibility, installModernPlayerInputCompatibility }
