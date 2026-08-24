@@ -22,6 +22,8 @@ jobs:
           cache: npm
           cache-dependency-path: desktop/package-lock.json
       - run: npm ci
+      - name: Install patched Android engine dependencies for cross-platform tests
+        run: npm ci --prefix ../mobile/nodejs-assets/nodejs-project
       - run: npm test
 
   mobile:
@@ -38,7 +40,8 @@ jobs:
           cache-dependency-path: mobile/package-lock.json
       - run: npm ci
       - run: npm test -- --runInBand
-      - run: npm ci --omit=dev --prefix nodejs-assets/nodejs-project
+      - name: Install and patch Android engine dependencies
+        run: npm ci --prefix nodejs-assets/nodejs-project
       - run: node --test
         working-directory: mobile/nodejs-assets/nodejs-project
       - run: npx tsc --noEmit
