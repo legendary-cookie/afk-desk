@@ -16,21 +16,21 @@
 
 <p align="center">
   <a href="https://github.com/legendary-cookie/afk-desk/releases/download/v0.8.2/AFK-Desk-Setup-0.8.2.exe"><strong>Download AFK Desk 0.8.2 for Windows</strong></a>
-  · <a href="https://github.com/legendary-cookie/afk-desk/releases/download/v0.8.2/AFK-Desk-Mobile-0.8.2.apk"><strong>Download Android 0.8.2</strong></a>
-  · <a href="https://github.com/legendary-cookie/afk-desk/releases/tag/v0.8.2">Release notes</a>
+  · <a href="https://github.com/legendary-cookie/afk-desk/releases/download/v0.8.3/AFK-Desk-Mobile-0.8.3.apk"><strong>Download Android 0.8.3</strong></a>
+  · <a href="https://github.com/legendary-cookie/afk-desk/releases/tag/v0.8.3">Release notes</a>
   · <a href="HISTORY.md">Version history</a>
 </p>
 
 AFK Desk supports multiple Microsoft-authenticated accounts, chat and commands, customizable anti-AFK behavior, live player state, inventory actions, proxies, startup connections, and automatic reconnect. It has no subscriptions, analytics, or account-count limits.
 
-## What is new in 0.8.2
+## Android 0.8.3 hotfix
 
-- Auto-deposit stops remaining queued stacks as soon as it is switched off.
-- Chests and barrels must pass Mineflayer's line-of-sight check before automatic deposit.
-- Every account has an editable 1–16 block search range, defaulting to 5.
-- Android is updated from the earlier 0.1.0 preview to a standalone 0.8.2 APK with the same deposit controls and current Mineflayer protocol support.
+- Inventory keys and other item stacks can be dropped from their exact selected slot after confirmation.
+- Android now downloads, validates, caches, and renders custom server menus from server resource packs.
+- Custom menu slots are interactive and support bitmap-font backgrounds and custom item-model icons.
+- Chat stays inside a bounded scroller, pauses automatic following while older messages are being read, and resumes with **Follow latest**.
 
-See the [complete 0.8.2 release notes](https://github.com/legendary-cookie/afk-desk/releases/tag/v0.8.2) for verification details and artifact checksums.
+See the [complete 0.8.3 hotfix notes](https://github.com/legendary-cookie/afk-desk/releases/tag/v0.8.3) for verification details and the APK checksum.
 
 ## Features
 
@@ -59,7 +59,7 @@ See the [complete 0.8.2 release notes](https://github.com/legendary-cookie/afk-d
 | Platform | Version | Download | Notes |
 | --- | --- | --- | --- |
 | Windows desktop | 0.8.2 | [Installer](https://github.com/legendary-cookie/afk-desk/releases/download/v0.8.2/AFK-Desk-Setup-0.8.2.exe) | Primary Electron + Mineflayer client |
-| Android | 0.8.2 | [APK](https://github.com/legendary-cookie/afk-desk/releases/download/v0.8.2/AFK-Desk-Mobile-0.8.2.apk) | Standalone on-device client with foreground service |
+| Android | 0.8.3 | [APK](https://github.com/legendary-cookie/afk-desk/releases/download/v0.8.3/AFK-Desk-Mobile-0.8.3.apk) | Standalone on-device client with foreground service |
 | iOS | 0.1.0 source | [Build instructions](mobile/BUILDING.md) | Requires macOS, Xcode, and personal signing |
 
 GitHub provides ZIP and TAR source archives on every [release page](https://github.com/legendary-cookie/afk-desk/releases). Published artifact hashes are recorded in [RELEASE_CHECKSUMS.txt](RELEASE_CHECKSUMS.txt).
@@ -69,7 +69,7 @@ GitHub provides ZIP and TAR source archives on every [release page](https://gith
 | Project | Stack | Current version | Notes |
 | --- | --- | --- | --- |
 | [`desktop/`](desktop/) | Electron + Mineflayer | 0.8.2 | Primary Windows desktop client |
-| [`mobile/`](mobile/) | React Native + embedded Node.js | 0.8.2 Android | Standalone Android client and iOS Xcode source |
+| [`mobile/`](mobile/) | React Native + embedded Node.js | 0.8.3 Android | Standalone Android client and iOS Xcode source |
 | [`fabric-movement-diagnostics/`](fabric-movement-diagnostics/) | Fabric | Reference utility | Compares vanilla movement diagnostics without account secrets |
 
 ## Run from source
