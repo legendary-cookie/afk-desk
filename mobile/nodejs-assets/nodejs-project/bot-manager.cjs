@@ -7,7 +7,6 @@ const { installMovementPacketCompatibility, installModernPlayerInputCompatibilit
 applyProtocolFixes()
 const mineflayer = require('mineflayer')
 
-const PROXY_COMMANDS = new Set(['server', 'hub', 'lobby', 'switch'])
 const CONTAINER_NAMES = new Set(['chest', 'trapped_chest', 'barrel'])
 const DEFAULT_AUTO_DEPOSIT_RANGE = 5
 const MAX_AUTO_DEPOSIT_RANGE = 16
@@ -241,11 +240,9 @@ class BotManager {
     const bot = this.requireOnline(id)
     const trimmed = String(message || '').trim()
     if (!trimmed) return
-    if (shouldUseProxyCommandPacket(bot, trimmed)) {
-      bot._client.write('chat_command', { command: trimmed.slice(1) })
-    } else {
-      bot.chat(trimmed)
-    }
+    // The protocol chat path supplies version-specific session and checksum
+    // fields that modern proxy commands also require.
+    bot.chat(trimmed)
     this.emit('log', id, { kind: 'sent', message: trimmed, at: Date.now() })
   }
 
@@ -476,14 +473,6 @@ function extractText(value) {
   const extrasValue = source.extra?.value?.value || source.extra?.value || source.extra
   const extras = Array.isArray(extrasValue) ? extrasValue.map(extractText).join('') : ''
   return `${text}${extras}`.trim()
-}
-
-function shouldUseProxyCommandPacket(bot, message) {
-  if (!message.startsWith('/') || !bot?._client?.write) return false
-  const command = message.slice(1).trim().split(/\s+/, 1)[0].toLowerCase()
-  if (!PROXY_COMMANDS.has(command)) return false
-  try { return bot.supportFeature?.('seperateSignedChatCommandPacket') === true }
-  catch { return false }
 }
 
 const CHAT_COLORS = {
@@ -751,4 +740,4 @@ function rejectResourcePack(bot, first, second, hash) {
   } catch {}
 }
 
-module.exports = { BotManager, normalizeLoginCode, extractText, shouldUseProxyCommandPacket, parseMinecraftFormatting, parseInteractiveChat, normalizeSkinUrl, findNearestChest, buildTelemetry, buildWindowSnapshot, installConfigurationPacketGuard }
+module.exports = { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, parseInteractiveChat, normalizeSkinUrl, findNearestChest, buildTelemetry, buildWindowSnapshot, installConfigurationPacketGuard }

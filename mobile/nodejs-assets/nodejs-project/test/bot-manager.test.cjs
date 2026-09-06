@@ -57,6 +57,26 @@ test('mobile auto-deposit search enforces range and line of sight', () => {
   assert.equal(findNearestChest(bot, 0), visible)
 })
 
+test('mobile routes modern proxy commands through protocol chat instead of incomplete raw packets', (t) => {
+  const bot = new FakeBot()
+  const messages = []
+  const writes = []
+  bot.chat = (message) => messages.push(message)
+  bot._client.write = (...args) => writes.push(args)
+  bot.supportFeature = (feature) => feature === 'seperateSignedChatCommandPacket'
+  const manager = new BotManager({ profilesPath: 'profiles', emit: () => {}, createBot: () => bot })
+  t.after(() => manager.disconnect('proxy'))
+  manager.connect({ id: 'proxy', username: 'user@example.com', host: 'localhost', antiAfk: false, autoReconnect: false })
+  bot.entity = { position: { x: 0, y: 64, z: 0 } }
+
+  for (const message of ['/server towny', '/hub', '/lobby', '/switch survival', '/home', 'hello']) {
+    manager.sendChat('proxy', message)
+  }
+
+  assert.deepEqual(messages, ['/server towny', '/hub', '/lobby', '/switch survival', '/home', 'hello'])
+  assert.deepEqual(writes, [])
+})
+
 test('mobile drops exactly the inventory stack selected by slot', async (t) => {
   const events = []
   const bot = new FakeBot()

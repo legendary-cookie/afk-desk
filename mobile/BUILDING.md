@@ -25,8 +25,15 @@ Apple builds require macOS, Xcode, CocoaPods, and an Apple development team:
 
 ```bash
 npm ci
-cd nodejs-assets/nodejs-project && npm ci --omit=dev && cd ../..
+cd nodejs-assets/nodejs-project
+npm ci
+npm prune --omit=dev --ignore-scripts
+cd ../..
 cd ios && pod install
 ```
 
 Open `ios/AFKDeskMobile.xcworkspace`, select your development team, and run on your device. Apple requires signing even for personal installations. iOS may suspend Minecraft sockets after the app is backgrounded, so reliable continuous background operation is Android-only.
+
+Install engine development dependencies before pruning: `patch-package` is needed
+by the install hook to apply the compatibility patches. These instructions have
+not been verified on macOS during the September light audit.
