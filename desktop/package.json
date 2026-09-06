@@ -24,7 +24,9 @@
   },
   "overrides": {
     "tar": "7.5.22",
-    "axios": "1.19.0"
+    "axios": "1.19.0",
+    "@azure/msal-node": { "uuid": "11.1.1" },
+    "yggdrasil": { "uuid": "11.1.1" }
   },
   "devDependencies": {
     "electron": "^43.2.0",
