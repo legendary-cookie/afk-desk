@@ -57,6 +57,15 @@ test('normalizes Microsoft device codes', () => {
   })
 })
 
+test('Forge auto matching performs a fresh ping even with a remembered version', (t) => {
+  const bot = new FakeBot()
+  let options
+  const manager = new BotManager({ profilesPath: 'profiles', emit: () => {}, createBot: input => { options = input; return bot } })
+  t.after(() => manager.disconnect('forge-auto'))
+  manager.connect({id: 'forge-auto', username: 'fixture', host: 'localhost', modLoader: 'forge', version: '', lastSuccessfulVersion: '1.12.2', antiAfk: false, autoReconnect: false})
+  assert.equal(options.version, false)
+})
+
 test('connects, emits status, sends chat, and disconnects', () => {
   const events = []
   const bot = new FakeBot()

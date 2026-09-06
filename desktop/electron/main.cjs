@@ -1,12 +1,19 @@
-const { app, BrowserWindow, ipcMain, shell, safeStorage } = require('electron')
+const { app, BrowserWindow, ipcMain, shell, safeStorage, Notification } = require('electron')
 const path = require('node:path')
 const crypto = require('node:crypto')
 const { AccountStore, SettingsStore, startupConnectionDelay } = require('./store.cjs')
 const { BotManager, normalizeSkinUrl } = require('./bot-manager.cjs')
+const { BedrockBotManager } = require('./bedrock-bot-manager.cjs')
+const { MultiEditionBotManager } = require('./multi-edition-manager.cjs')
 const { sendToWindow } = require('./window-events.cjs')
 const { DiagnosticLog } = require('./diagnostic-log.cjs')
 const { preferredVersionForAccount, rememberedVersionState } = require('./version-compatibility.cjs')
 const { supportedVersions, normalizeVersionSelection } = require('./version-support.cjs')
+const { normalizeModdedProfile } = require('./modded-compatibility.cjs')
+const {
+  AlertManager, MacroEngine, PersistentEventStore, SmartProxyManager,
+  identityIdFor, normalizeAutomations, normalizeEdition
+} = require('./beta-core.cjs')
 const movementDiagnosticsEnabled = process.env.AFK_DESK_MOVEMENT_DIAGNOSTICS === '1'
 
 let mainWindow
@@ -14,7 +21,12 @@ let store
 let settingsStore
 let bots
 let diagnosticLog
+let eventStore
+let alerts
+let macroEngine
+let smartProxies
 const runtime = new Map()
+const assignedProxies = new Map()
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -40,14 +52,34 @@ app.whenReady().then(async () => {
   store = new AccountStore(app.getPath('userData'))
   settingsStore = new SettingsStore(app.getPath('userData'))
   diagnosticLog = new DiagnosticLog(app.getPath('userData'))
-  bots = new BotManager({
+  eventStore = new PersistentEventStore(app.getPath('userData'))
+  alerts = new AlertManager(({ title, body }) => {
+    try {
+      if (settingsStore.get().notificationsEnabled === true && Notification.isSupported()) {
+        new Notification({ title, body, silent: false }).show()
+      }
+    } catch {}
+  })
+  smartProxies = new SmartProxyManager()
+  const managerOptions = {
     profilesPath: path.join(app.getPath('userData'), 'profiles'),
     emit: emitBotEvent,
     diagnose: (entry) => {
       diagnosticLog.write(entry)
       if (movementDiagnosticsEnabled) console.log(`[movement-diagnostic] ${JSON.stringify(entry)}`)
     }
+  }
+  bots = new MultiEditionBotManager({
+    java: new BotManager(managerOptions),
+    bedrock: new BedrockBotManager({ profilesPath: managerOptions.profilesPath, emit: emitBotEvent })
   })
+  macroEngine = new MacroEngine({
+    getAccount: (id) => store.list().find((item) => item.id === id),
+    getState: getRuntime,
+    execute: executeMacroStep,
+    emit: emitBotEvent
+  })
+  for (const account of store.list()) macroEngine.sync(account)
   registerIpc()
   createWindow()
   autoConnectConfiguredAccounts()
@@ -68,6 +100,7 @@ function registerIpc() {
     const existing = store.list().find((account) => account.id === input?.id)
     const account = validateAccount(input, existing)
     const saved = store.save(account)
+    macroEngine.sync(saved)
     if (existing && (existing.autoDepositToChest !== saved.autoDepositToChest || existing.autoDepositRange !== saved.autoDepositRange)) {
       bots.setAutoDeposit(saved.id, saved.autoDepositToChest, saved.autoDepositRange)
     }
@@ -77,17 +110,43 @@ function registerIpc() {
   })
   ipcMain.handle('accounts:delete', (_event, id) => {
     bots.disconnect(id)
+    macroEngine.stop(id)
+    macroEngine.cancelTimers(id)
     store.delete(id)
   })
+  ipcMain.handle('accounts:duplicate-profile', (_event, id) => {
+    const source = store.list().find((account) => account.id === id)
+    if (!source) throw new Error('Account profile not found.')
+    const copy = store.save({
+      ...source,
+      id: crypto.randomUUID(),
+      profileName: `${source.profileName || source.label || source.host} copy`.slice(0, 60),
+      connectOnStartup: false,
+      autoDepositToChest: false
+    })
+    macroEngine.sync(copy)
+    return publicAccount(copy)
+  })
   ipcMain.handle('accounts:reorder', (_event, orderedIds) => store.reorder(orderedIds).map(publicAccount))
-  ipcMain.handle('bot:connect', (_event, id) => bots.connect(requireAccount(id)))
-  ipcMain.handle('bot:disconnect', (_event, id) => bots.disconnect(id))
+  ipcMain.handle('bot:connect', (_event, id) => {
+    const account = requireAccount(id)
+    assignedProxies.set(id, account.proxy)
+    return bots.connect(account)
+  })
+  ipcMain.handle('bot:disconnect', (_event, id) => {
+    bots.disconnect(id)
+    smartProxies.release(assignedProxies.get(id))
+    assignedProxies.delete(id)
+  })
   ipcMain.handle('bot:chat', (_event, { id, message }) => bots.sendChat(id, message))
   ipcMain.handle('bot:complete-chat', (_event, { id, text }) => bots.completeChat(id, text))
   ipcMain.handle('bot:control', (_event, { id, control, duration }) => bots.control(id, control, duration))
   ipcMain.handle('bot:control-state', (_event, { id, control, active }) => bots.setControlState(id, control, active))
   ipcMain.handle('bot:look', (_event, { id, direction }) => bots.look(id, direction))
+  ipcMain.handle('bot:look-delta', (_event, { id, yawDelta, pitchDelta }) => bots.lookDelta(id, yawDelta, pitchDelta))
   ipcMain.handle('bot:drop-stack', (_event, { id, slot }) => bots.dropStack(id, slot))
+  ipcMain.handle('bot:drop-items', (_event, { id, slot, count }) => bots.dropItems(id, slot, count))
+  ipcMain.handle('bot:deposit-slot', (_event, { id, slot, count }) => bots.depositSlot(id, slot, count))
   ipcMain.handle('bot:item-lock', (_event, { id, slot, locked }) => {
     const account = store.list().find((item) => item.id === id)
     if (!account) throw new Error('Account not found.')
@@ -116,6 +175,13 @@ function registerIpc() {
   })
   ipcMain.handle('bot:window-click', (_event, { id, slot }) => bots.clickWindowSlot(id, slot))
   ipcMain.handle('bot:window-close', (_event, id) => bots.closeWindow(id))
+  ipcMain.handle('bot:world-snapshot', (_event, { id, radius, blockRefreshMs }) => bots.worldSnapshot(id, radius, blockRefreshMs))
+  ipcMain.handle('bot:world-action', (_event, { id, action, target }) => bots.worldAction(id, action, target))
+  ipcMain.handle('logs:list', (_event, { id, limit, kinds }) => eventStore.list(id, { limit, kinds }))
+  ipcMain.handle('logs:clear', (_event, id) => eventStore.clear(id))
+  ipcMain.handle('macro:run', (_event, { id, macroId }) => macroEngine.run(id, macroId))
+  ipcMain.handle('macro:stop', (_event, id) => macroEngine.stop(id))
+  ipcMain.handle('proxy:health', () => smartProxies.snapshot())
   ipcMain.handle('bot:auto-deposit', async (_event, { id, enabled }) => {
     const account = store.list().find((item) => item.id === id)
     if (!account) throw new Error('Account not found.')
@@ -199,6 +265,15 @@ function openIsolatedLogin(id, rawUrl, code) {
 }
 
 function emitBotEvent(type, id, payload) {
+  const accountForEvent = store?.list().find((item) => item.id === id)
+  if (eventStore && (type !== 'telemetry' || telemetryChanged(getRuntime(id).telemetry, payload))) eventStore.append(id, { type, ...payload })
+  alerts?.handle(accountForEvent, type, payload)
+  if (type === 'status' && payload.status === 'online') smartProxies?.report(assignedProxies.get(id), true)
+  if (type === 'status' && payload.status === 'offline') {
+    smartProxies?.release(assignedProxies.get(id))
+    assignedProxies.delete(id)
+  }
+  if (type === 'log' && payload.kind === 'error') smartProxies?.report(assignedProxies.get(id), false)
   if (type === 'status') diagnosticLog?.write({ event: 'status', at: payload.at, accountId: id, status: payload.status, detail: payload.detail })
   if (type === 'telemetry') diagnosticLog?.write({ event: 'telemetry', at: payload.at, accountId: id, position: payload.position, environment: payload.environment, health: payload.health })
   if (type === 'log' && payload.kind === 'error') diagnosticLog?.write({ event: 'error', at: payload.at, accountId: id, message: payload.message })
@@ -236,6 +311,9 @@ function emitBotEvent(type, id, payload) {
     }
   }
   sendToWindow(mainWindow, 'bot:event', { type, id, payload })
+  macroEngine?.handleEvent(id, type, payload).catch((error) => {
+    if (type !== 'macro') emitBotEvent('macro', id, { status: 'failed', error: String(error?.message || error).slice(0, 200), at: Date.now() })
+  })
 }
 
 function getRuntime(id) {
@@ -245,7 +323,16 @@ function getRuntime(id) {
 function requireAccount(id) {
   const account = store.list().find((item) => item.id === id)
   if (!account) throw new Error('Account not found.')
-  return withProxyPassword(account)
+  const resolved = withProxyPassword(account)
+  if (account.proxyMode !== 'smart') return resolved
+  const pool = store.list().map((candidate) => withProxyPassword(candidate))
+  return { ...resolved, proxy: smartProxies.select(resolved, pool) }
+}
+
+function telemetryChanged(before, after) {
+  if (!before) return true
+  return before.health !== after.health || before.food !== after.food || before.dimension !== after.dimension ||
+    JSON.stringify(before.position) !== JSON.stringify(after.position) || JSON.stringify(before.inventory) !== JSON.stringify(after.inventory)
 }
 
 function validateAccount(input, existing) {
@@ -253,11 +340,13 @@ function validateAccount(input, existing) {
   const username = String(input?.username || '').trim()
   if (!host) throw new Error('Server address is required.')
   if (!username) throw new Error('Microsoft account email is required.')
-  const port = Number(input?.port) || 25565
+  const edition = normalizeEdition(input?.edition ?? existing?.edition)
+  const port = Number(input?.port) || (edition === 'bedrock' ? 19132 : 25565)
   if (port < 1 || port > 65535) throw new Error('Port must be between 1 and 65535.')
   const minecraftName = normalizeMinecraftName(input?.minecraftName)
-  const version = normalizeVersionSelection(input?.version)
+  const version = edition === 'java' ? normalizeVersionSelection(input?.version) : ''
   const rememberedVersion = rememberedVersionState(version, input, existing)
+  const modded = edition === 'java' ? normalizeModdedProfile(input) : normalizeModdedProfile({ modLoader: 'vanilla', modHandshake: 'off' })
   const antiAfk = input?.antiAfk !== false
   const antiAfkJump = input?.antiAfkJump !== false
   const antiAfkLook = input?.antiAfkLook !== false
@@ -269,11 +358,19 @@ function validateAccount(input, existing) {
   }
   return {
     id: input?.id || crypto.randomUUID(),
+    identityId: String(input?.identityId || existing?.identityId || identityIdFor(edition, username)).slice(0, 100),
+    edition,
+    profileName: String(input?.profileName || existing?.profileName || host).trim().slice(0, 60),
     label: minecraftName || String(input?.label || username.split('@')[0] || 'Minecraft account').trim().slice(0, 50),
     username,
     host,
     port,
     version,
+    modLoader: modded.loader,
+    modHandshake: modded.handshake,
+    clientBrand: modded.brand,
+    mods: modded.mods,
+    modChannels: modded.channels,
     ...rememberedVersion,
     minecraftName,
     minecraftUuid: normalizeUuid(input?.minecraftUuid),
@@ -295,16 +392,31 @@ function validateAccount(input, existing) {
     antiAfkWalk,
     environmentalMovement: input?.environmentalMovement !== false,
     autoReconnect: input?.autoReconnect !== false,
-    autoReconnectDelay: Math.max(1, Math.min(Number(input?.autoReconnectDelay) || 5, 300)),
+    autoReconnectDelay: bounded(input?.autoReconnectDelay, 1, 3600, 5),
+    autoReconnectBackoffMultiplier: bounded(input?.autoReconnectBackoffMultiplier, 1, 10, 2),
+    autoReconnectMaxDelay: bounded(input?.autoReconnectMaxDelay, 1, 86400, 300),
+    autoReconnectRateLimitDelay: bounded(input?.autoReconnectRateLimitDelay, 1, 86400, 30),
     autoReconnectMaxAttempts: Math.max(0, Math.min(Number(input?.autoReconnectMaxAttempts) || 0, 1000)),
+    connectTimeoutSeconds: bounded(input?.connectTimeoutSeconds, 5, 300, 60),
+    reconnectResetDelay: bounded(input?.reconnectResetDelay, 5, 3600, 60),
     connectOnStartup: input?.connectOnStartup === true,
     autoDepositToChest: input?.autoDepositToChest === true,
     autoDepositRange: Math.round(bounded(input?.autoDepositRange ?? existing?.autoDepositRange, 1, 16, 5)),
     lockedInventorySlots: normalizeLockedSlots(input?.lockedInventorySlots ?? existing?.lockedInventorySlots),
     proxy: validateProxy(input?.proxy, existing?.proxy),
+    proxyMode: ['direct', 'manual', 'smart'].includes(input?.proxyMode) ? input.proxyMode : (input?.proxy?.enabled ? 'manual' : 'direct'),
+    shareProxyToPool: input?.shareProxyToPool === true,
+    proxyLabel: String(input?.proxyLabel || '').trim().slice(0, 60),
+    proxyMaxSessions: Math.max(1, Math.min(Number(input?.proxyMaxSessions) || 1, 100)),
+    alerts: {
+      disconnect: input?.alerts?.disconnect !== false,
+      errors: input?.alerts?.errors !== false,
+      healthBelow: Math.max(0, Math.min(Number(input?.alerts?.healthBelow) || 6, 20))
+    },
+    automations: normalizeAutomations(input?.automations ?? existing?.automations),
     joinMessage: String(input?.joinMessage || '').trim().slice(0, 256),
     serverChangeMessage: String(input?.serverChangeMessage || '').trim().slice(0, 256),
-    messageDelay: Math.max(0, Math.min(input?.messageDelay === '' || input?.messageDelay == null ? 6 : Number(input.messageDelay) || 0, 30))
+    messageDelay: Math.max(0, Math.min(input?.messageDelay === '' || input?.messageDelay == null ? 6 : Number(input.messageDelay) || 0, 600))
   }
 }
 
@@ -374,10 +486,31 @@ function withProxyPassword(account) {
     catch { throw new Error('Could not decrypt this account’s proxy password. Re-enter it in account settings.') }
   }
   const lastSuccessfulVersion = account.version ? account.lastSuccessfulVersion : preferredVersionForAccount(account, store.list())
-  return { ...account, lastSuccessfulVersion, proxy: { ...proxy, password } }
+  const enabled = account.proxyMode === 'manual' ? proxy.enabled === true : account.proxyMode === 'smart' ? true : false
+  return { ...account, lastSuccessfulVersion, proxy: { ...proxy, enabled, password } }
 }
 
 function publicAccount(account) {
   const { passwordEncrypted, password, ...proxy } = account.proxy || {}
   return { ...account, proxy: { ...proxy, hasPassword: Boolean(passwordEncrypted) } }
+}
+
+async function executeMacroStep(id, step) {
+  if (step.type === 'chat') return bots.sendChat(id, step.message)
+  if (step.type === 'move') return bots.control(id, step.control, step.duration)
+  if (step.type === 'look') return bots.look(id, step.direction)
+  if (step.type === 'drop') return bots.dropItems(id, step.slot, step.count)
+  if (step.type === 'deposit') return bots.depositSlot(id, step.slot, step.count)
+  if (step.type === 'equip') return bots.equipInventoryItem(id, step.slot, step.destination)
+  if (step.type === 'clickGui') return bots.clickWindowSlot(id, step.slot)
+  if (step.type === 'attackNearest') return bots.worldAction(id, 'attack-nearest')
+  if (step.type === 'useHeld') return bots.worldAction(id, 'use-held')
+  if (step.type === 'notify') {
+    const account = store.list().find((item) => item.id === id)
+    try {
+      if (settingsStore.get().notificationsEnabled === true && Notification.isSupported()) {
+        new Notification({ title: account?.profileName || 'AFK Desk automation', body: step.message || 'Automation notification' }).show()
+      }
+    } catch {}
+  }
 }

@@ -23,6 +23,9 @@ the user must correct that account's login field if authentication needs it.
 
 ## Beta check
 
+**Superseded by installed-app recovery:** see [BETA_RECOVERY.md](BETA_RECOVERY.md).
+The installed 0.10.0-beta.7 was found after the earlier GitHub/Codex-only search.
+
 Current GitHub heads/tags were rechecked on September 6. Main remains `861e9a7`;
 there is no newer beta branch/tag. Historical unpublished source `269f37e` declares
 0.9.0 and is an ancestor of 0.9.2: its version picker and interactive chat features

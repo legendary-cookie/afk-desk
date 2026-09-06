@@ -30,7 +30,7 @@
         </button>
         <button id="open-settings" class="button secondary sidebar-action browser-action" type="button">Settings</button>
         <p class="privacy-note">Credentials stay in Microsoft’s sign-in flow. AFK Desk never stores your password.</p>
-        <div class="sidebar-version">AFK Desk <span id="app-version">v…</span></div>
+        <div class="sidebar-version">AFK Desk <span id="app-version">v…</span> <span class="beta-badge">BETA</span></div>
       </aside>
 
       <main id="main-content" class="main-content">
@@ -50,6 +50,7 @@
               <h1 id="account-title">Account</h1>
             </div>
             <div class="topbar-actions">
+              <button id="open-command-center" class="button secondary command-center-trigger" type="button"><kbd>Ctrl K</kbd> Search / actions</button>
               <button id="display-menu-trigger" class="button secondary menu-trigger display-menu-trigger" type="button" popovertarget="display-menu">Display <span id="quick-scale-value">100%</span></button>
               <div id="display-menu" class="action-popover display-popover" popover>
                 <label for="quick-scale"><strong>Interface scale</strong><span>Fit more or make everything larger.</span></label>
@@ -57,9 +58,20 @@
                   <input id="quick-scale" type="range" min="75" max="125" step="5" value="100" />
                   <label class="scale-number-field"><input id="quick-scale-number" type="number" min="75" max="125" step="1" value="100" aria-label="Interface scale percentage" /><span>%</span></label>
                 </div>
+                <label for="quick-workspace-design"><strong>Workspace design</strong><span>Changes layout without changing features.</span></label>
+                <select id="quick-workspace-design" class="display-select">
+                  <option value="operations">Operations Console</option><option value="community">Community Chat</option><option value="command">Command Center</option><option value="hybrid">Recommended Hybrid</option><option value="studio">Studio</option><option value="telemetry">Telemetry</option>
+                </select>
+                <label for="quick-color-theme"><strong>Color theme</strong><span>Independent from workspace layout.</span></label>
+                <select id="quick-color-theme" class="display-select">
+                  <option value="obsidian">Obsidian Lime</option><option value="midnight">Midnight Blue</option><option value="graphite">Graphite Mono</option><option value="ember">Ember</option><option value="arctic">Arctic Light</option><option value="high-contrast">High Contrast</option>
+                </select>
                 <button id="reset-scale" class="menu-action" type="button">Reset to 100%</button>
               </div>
               <button id="edit-account" class="button secondary" type="button">Edit</button>
+              <button id="open-logs" class="button secondary" type="button">Logs</button>
+              <button id="open-automations" class="button secondary" type="button">Automations</button>
+              <button id="open-pov" class="button secondary" type="button">POV</button>
               <button id="connection-button" class="button primary" type="button">Connect</button>
             </div>
           </header>
@@ -68,6 +80,15 @@
             <span class="status-dot" aria-hidden="true"></span>
             <div><strong id="status-name">Offline</strong><span id="status-detail">Ready to connect</span></div>
           </div>
+
+          <nav class="workspace-tabs" aria-label="Account workspace">
+            <button class="workspace-tab active" data-workspace-view="overview" type="button">Overview</button>
+            <button class="workspace-tab" data-workspace-view="chat" type="button">Chat</button>
+            <button class="workspace-tab" data-workspace-view="inventory" type="button">Inventory</button>
+            <button class="workspace-tab" data-workspace-dialog="pov" type="button">POV</button>
+            <button class="workspace-tab" data-workspace-dialog="automations" type="button">Automations</button>
+            <button class="workspace-tab" data-workspace-dialog="logs" type="button">Logs</button>
+          </nav>
 
           <div class="workspace-grid">
             <section id="console-panel" class="panel console-panel collapsible" aria-labelledby="console-title">
@@ -151,6 +172,9 @@
                 </select>
                 <button id="equip-selected" class="button secondary" type="button" disabled>Equip</button>
                 <button id="lock-selected" class="button secondary" type="button" disabled>Lock</button>
+                <input id="inventory-action-count" class="compact-number" type="number" min="1" max="64" value="1" aria-label="Item action count" title="Number of items to drop or deposit" />
+                <button id="deposit-selected" class="button secondary" type="button" disabled>Deposit</button>
+                <button id="drop-count-selected" class="button danger" type="button" disabled>Drop count</button>
                 <button id="drop-selected" class="button danger" type="button" disabled>Drop</button>
               </div>
             </header>
@@ -175,12 +199,26 @@
           <button class="icon-button" type="button" data-close-account aria-label="Close account editor">×</button>
         </header>
         <input id="account-id" type="hidden" />
+        <input id="identity-id" type="hidden" />
         <div class="form-grid">
+          <label class="field"><span>Profile name</span><input id="profile-name" maxlength="60" required placeholder="Towny AFK" /><small>One identity can have several server profiles.</small></label>
+          <label class="field"><span>Edition</span><select id="edition"><option value="java">Java Edition</option><option value="bedrock">Bedrock Edition (experimental)</option></select><small>Bedrock beta: authentication, connection, chat, logs and basic telemetry.</small></label>
           <label class="field full"><span>Minecraft username</span><input id="label" maxlength="16" readonly placeholder="Detected after connecting" /><small>Filled automatically from the authenticated Minecraft account.</small></label>
           <label class="field full"><span>Microsoft account email</span><input id="username" type="email" required autocomplete="username" placeholder="name@example.com" /></label>
           <label class="field server-field"><span>Server address</span><input id="host" required placeholder="play.example.com" /></label>
           <label class="field port-field"><span>Port</span><input id="port" type="number" min="1" max="65535" value="25565" required /></label>
           <label class="field full"><span>Minecraft version</span><select id="version"><option value="">Automatic (detect from server)</option></select><small>Automatic retries fresh detection if a remembered version fails. Choose an exact engine-supported version when a proxy hides the backend version.</small></label>
+          <details id="modded-fields" class="form-section full modded-fields">
+            <summary>Modded server compatibility</summary>
+            <p>Plugin servers work as vanilla. Automatic mode detects Forge FML1/FML2/FML3 and mirrors the server-advertised mod list. Fabric, Quilt and custom channels can be identified below.</p>
+            <div class="modded-grid">
+              <label class="field"><span>Server type</span><select id="mod-loader"><option value="auto">Automatic</option><option value="vanilla">Vanilla</option><option value="plugin">Bukkit / Spigot / Paper / Purpur / proxy</option><option value="fabric">Fabric</option><option value="quilt">Quilt</option><option value="forge">Forge</option><option value="neoforge">NeoForge</option><option value="sponge">Sponge</option><option value="custom">Custom protocol</option></select></label>
+              <label class="field"><span>Forge handshake</span><select id="mod-handshake"><option value="auto">Automatic generation</option><option value="off">Disabled</option><option value="fml1">FML1 (legacy)</option><option value="fml2">FML2</option><option value="fml3">FML3</option></select></label>
+              <label class="field full"><span>Client brand</span><input id="client-brand" maxlength="64" placeholder="vanilla" /><small>Defaults to vanilla, fabric, quilt, forge or neoforge from the selected server type.</small></label>
+              <label class="field full"><span>Manual mod list</span><textarea id="mod-list" spellcheck="false" placeholder="modid@version&#10;another_mod@1.2.3"></textarea><small>Leave empty with Automatic Minecraft version to copy Forge's advertised list. Manual entries are bounded to 512.</small></label>
+              <label class="field full"><span>Custom plugin channels</span><textarea id="mod-channels" spellcheck="false" placeholder="example:main&#10;example:sync"></textarea><small>Registers namespaced channels. Mod-specific packet behavior still needs a compatible protocol implementation.</small></label>
+            </div>
+          </details>
           <label class="toggle-row full">
             <input id="connect-on-startup" type="checkbox" />
             <span class="toggle" aria-hidden="true"></span>
@@ -188,8 +226,9 @@
           </label>
           <div class="form-section full">
             <h3>Proxy</h3>
-            <p>Optionally route only this Minecraft account through a SOCKS5 or HTTP CONNECT proxy.</p>
+            <p>Use a direct connection, a manual Java proxy, or automatic assignment from shared profile proxies.</p>
           </div>
+          <label class="field full"><span>Proxy assignment</span><select id="proxy-mode"><option value="direct">Direct connection</option><option value="manual">Manual proxy below</option><option value="smart">Smart proxy pool</option></select></label>
           <label class="toggle-row full">
             <input id="proxy-enabled" type="checkbox" />
             <span class="toggle" aria-hidden="true"></span>
@@ -202,7 +241,14 @@
             <label class="field"><span>Username (optional)</span><input id="proxy-username" maxlength="128" autocomplete="off" /></label>
             <label class="field"><span>Password (optional)</span><input id="proxy-password" type="password" maxlength="512" autocomplete="new-password" placeholder="Not saved yet" /><small id="proxy-password-help">Encrypted with Windows protection.</small></label>
             <label class="check-row full"><input id="proxy-clear-password" type="checkbox" /> Clear the previously saved proxy password</label>
+            <label class="check-row full"><input id="share-proxy-pool" type="checkbox" /> Share this manual proxy with the smart pool</label>
+            <label class="field"><span>Pool label</span><input id="proxy-label" maxlength="60" placeholder="Singapore 1" /></label>
+            <label class="field"><span>Maximum sessions</span><input id="proxy-max-sessions" type="number" min="1" max="100" value="1" /></label>
           </div>
+          <div class="form-section full"><h3>Alerts</h3><p>Desktop alerts are throttled; persistent events stay in this profile's log.</p></div>
+          <label class="check-row"><input id="alert-disconnect" type="checkbox" checked /> Disconnect/reconnect alerts</label>
+          <label class="check-row"><input id="alert-errors" type="checkbox" checked /> Error alerts</label>
+          <label class="field"><span>Low-health alert threshold</span><input id="alert-health" type="number" min="0" max="20" value="6" /></label>
           <label class="toggle-row full">
             <input id="anti-afk" type="checkbox" checked />
             <span class="toggle" aria-hidden="true"></span>
@@ -232,6 +278,11 @@
           </label>
           <label class="field"><span>First retry (seconds)</span><input id="auto-reconnect-delay" type="number" min="1" max="300" value="5" /></label>
           <label class="field"><span>Maximum retries</span><input id="auto-reconnect-max" type="number" min="0" max="1000" value="0" /><small>Use 0 to keep retrying.</small></label>
+          <label class="field"><span>Backoff multiplier</span><input id="auto-reconnect-backoff" type="number" min="1" max="10" step="0.1" value="2" /><small>Multiplies the delay after each failed attempt.</small></label>
+          <label class="field"><span>Maximum reconnect delay (seconds)</span><input id="auto-reconnect-max-delay" type="number" min="1" max="86400" value="300" /></label>
+          <label class="field"><span>Rate-limit minimum (seconds)</span><input id="auto-reconnect-rate-limit-delay" type="number" min="1" max="86400" value="30" /><small>Used for “logging in too fast” and rate-limit kicks. This replaces the old fixed 30-second delay.</small></label>
+          <label class="field"><span>Connection timeout (seconds)</span><input id="connect-timeout" type="number" min="5" max="300" value="60" /></label>
+          <label class="field"><span>Stable connection reset (seconds)</span><input id="reconnect-reset-delay" type="number" min="5" max="3600" value="60" /><small>After this long online, retry attempts reset to zero.</small></label>
           <label class="toggle-row full">
             <input id="auto-deposit-setting" type="checkbox" />
             <span class="toggle" aria-hidden="true"></span>
@@ -244,11 +295,12 @@
           </div>
           <label class="field full"><span>On server join</span><textarea id="join-message" maxlength="256" rows="2" placeholder="Example: /login password or Hello!"></textarea></label>
           <label class="field full"><span>On server/world change</span><textarea id="server-change-message" maxlength="256" rows="2" placeholder="Example: /server survival"></textarea></label>
-          <label class="field full"><span>Wait after the server is ready (seconds)</span><input id="message-delay" type="number" min="0" max="30" value="6" /><small>Applies to automatic join and server/world-change messages.</small></label>
+          <label class="field full"><span>Wait after the server is ready (seconds)</span><input id="message-delay" type="number" min="0" max="600" value="6" /><small>Applies to automatic join and server/world-change messages.</small></label>
         </div>
         <p id="form-error" class="form-error" role="alert" hidden></p>
         <footer class="dialog-footer">
           <button id="delete-account" class="button danger" type="button" hidden>Delete</button>
+          <button id="duplicate-profile" class="button secondary" type="button" hidden>Duplicate profile</button>
           <span class="footer-spacer"></span>
           <button class="button secondary" type="button" data-close-account>Cancel</button>
           <button id="save-account" class="button primary" type="submit">Save account</button>
@@ -282,12 +334,31 @@
             <span><strong>Start AFK Desk when Windows signs in</strong><small>Accounts with “Connect when AFK Desk starts” enabled will then join automatically.</small></span>
           </label>
           <label class="toggle-row">
+            <input id="notifications-enabled" type="checkbox" />
+            <span class="toggle" aria-hidden="true"></span>
+            <span><strong>Desktop notifications</strong><small>Show account alerts and automation notifications. Off by default.</small></span>
+          </label>
+          <label class="toggle-row">
             <input id="stagger-startup-connections" type="checkbox" checked />
             <span class="toggle" aria-hidden="true"></span>
             <span><strong>Stagger startup account logins</strong><small>Connect startup accounts one at a time to reduce network and authentication spikes.</small></span>
           </label>
           <label class="field settings-delay"><span>Delay between accounts (seconds)</span><input id="startup-connection-delay" type="number" min="1" max="300" value="3" /></label>
           <label class="field settings-delay"><span>Interface scale</span><input id="ui-scale" type="range" min="75" max="125" step="5" value="100" /><small><output id="ui-scale-value" for="ui-scale">100%</output> — smaller values fit more controls on screen.</small></label>
+          <div class="form-section"><h3>POV performance</h3><p>Views are rendered only while the POV dashboard is open.</p></div>
+          <div class="settings-visual-grid">
+            <label class="field"><span>Refresh interval</span><select id="pov-settings-refresh"><option value="250">0.25 seconds</option><option value="500">0.5 seconds</option><option value="1000">1 second</option><option value="1500">1.5 seconds</option><option value="3000">3 seconds</option><option value="5000">5 seconds</option></select></label>
+            <label class="field"><span>Display frame rate</span><select id="pov-settings-fps"><option value="30">30 FPS (lightweight)</option><option value="60">60 FPS (focused view)</option></select><small>Grid view is capped at 15 FPS to protect CPU; focused view uses this rate.</small></label>
+            <label class="field"><span>Render radius</span><input id="pov-settings-radius" type="number" min="2" max="12" value="6" /></label>
+            <label class="field"><span>Grid columns</span><input id="pov-settings-columns" type="number" min="1" max="4" value="3" /></label>
+            <label class="field"><span>Maximum live feeds</span><input id="pov-max-feeds" type="number" min="1" max="12" value="9" /></label>
+            <label class="field"><span>Default view</span><select id="pov-settings-view-mode"><option value="perspective">Perspective</option><option value="map">Top-down map</option></select></label>
+            <label class="check-row"><input id="pov-show-hud" type="checkbox" checked /> Show health, hunger and hotbar</label>
+          </div>
+          <div class="settings-visual-grid">
+            <label class="field"><span>Workspace design</span><select id="workspace-design"><option value="operations">Operations Console</option><option value="community">Community Chat</option><option value="command">Command Center</option><option value="hybrid">Recommended Hybrid</option><option value="studio">Studio</option><option value="telemetry">Telemetry</option></select><small>Rearranges density and emphasis. Every function stays available.</small></label>
+            <label class="field"><span>Color theme</span><select id="color-theme"><option value="obsidian">Obsidian Lime</option><option value="midnight">Midnight Blue</option><option value="graphite">Graphite Mono</option><option value="ember">Ember</option><option value="arctic">Arctic Light</option><option value="high-contrast">High Contrast</option></select><small>CSS-token palettes add no runtime dependency.</small></label>
+          </div>
           <section class="settings-about" aria-label="About AFK Desk"><img src="../assets/afk-desk-icon.png" alt="" /><div><strong>AFK Desk</strong><span id="settings-app-version">Version …</span></div></section>
         </div>
         <footer class="dialog-footer">
@@ -329,9 +400,61 @@
       </div>
     </dialog>
 
+    <dialog id="command-dialog" class="command-dialog" aria-labelledby="command-title">
+      <div class="command-dialog-content">
+        <header class="command-search"><kbd>Ctrl K</kbd><input id="command-search" type="search" autocomplete="off" placeholder="Search actions, accounts, and workspaces" aria-labelledby="command-title" /><button id="close-command-center" class="icon-button" type="button" aria-label="Close command center">×</button></header>
+        <h2 id="command-title" class="sr-only">Command center</h2>
+        <div id="command-results" class="command-results" role="listbox"></div>
+        <footer class="command-help">↑↓ Navigate · Enter Run · Esc Close</footer>
+      </div>
+    </dialog>
+
+    <dialog id="logs-dialog" class="wide-dialog" aria-labelledby="logs-title">
+      <div class="beta-dialog-content">
+        <header class="dialog-header"><div><div class="eyebrow">Persistent history</div><h2 id="logs-title">Account logs</h2></div><button id="close-logs" class="icon-button" type="button" aria-label="Close logs">×</button></header>
+        <div class="beta-toolbar"><select id="log-filter"><option value="">All events</option><option value="error">Errors</option><option value="chat">Chat</option><option value="sent">Sent actions</option><option value="status">Status</option><option value="macro">Automations</option></select><button id="refresh-logs" class="button secondary" type="button">Refresh</button><button id="clear-persistent-logs" class="button danger" type="button">Clear history</button></div>
+        <pre id="persistent-log-view" class="persistent-log-view">Loading…</pre>
+      </div>
+    </dialog>
+
+    <dialog id="automation-dialog" class="wide-dialog automation-dialog" aria-labelledby="automation-title">
+      <div class="beta-dialog-content automation-shell">
+        <header class="dialog-header"><div><div class="eyebrow">Visual event automation beta</div><h2 id="automation-title">Automations</h2></div><div class="dialog-header-actions"><select id="automation-scope" aria-label="Save automation to"><option value="selected">Selected profile</option><option value="all">All profiles</option></select><button id="close-automation" class="icon-button" type="button" aria-label="Close automations">×</button></div></header>
+        <div class="automation-toolbar"><div id="automation-list" class="automation-list"></div><button id="automation-add" class="button secondary" type="button">＋ New workflow</button><button id="automation-delete" class="button danger" type="button">Delete</button><label class="compact-toggle"><input id="automation-json-toggle" type="checkbox" /><span>Advanced JSON</span></label></div>
+        <div class="automation-workspace">
+          <main id="automation-flow" class="automation-flow" aria-label="Automation flow"></main>
+          <aside class="automation-side">
+            <section><h3>Steps</h3><div id="automation-palette" class="automation-palette"></div></section>
+            <section><h3>Inspector</h3><div id="automation-inspector" class="automation-inspector"></div></section>
+          </aside>
+        </div>
+        <textarea id="automation-json" class="automation-json" spellcheck="false" aria-label="Automation JSON" hidden></textarea>
+        <footer class="dialog-footer"><button id="stop-automation" class="button danger" type="button">Stop running</button><button id="automation-test" class="button secondary" type="button">Test run</button><span class="footer-spacer"></span><button id="save-automations" class="button primary" type="button">Validate &amp; save</button></footer>
+      </div>
+    </dialog>
+
+    <dialog id="pov-dialog" class="wide-dialog pov-dialog" aria-labelledby="pov-title">
+      <div class="beta-dialog-content pov-shell">
+        <header class="dialog-header"><div><div class="eyebrow">On-demand loaded-world dashboard</div><h2 id="pov-title">Bot POV</h2></div><button id="close-pov" class="icon-button" type="button" aria-label="Close POV">×</button></header>
+        <div class="pov-toolbar">
+          <button id="pov-back-grid" class="button secondary" type="button" hidden>← All bots</button>
+          <input id="pov-search" type="search" placeholder="Search bots or servers" aria-label="Search POV feeds" />
+          <label>Columns <input id="pov-columns" type="number" min="1" max="4" value="3" /></label>
+          <label>Refresh <select id="pov-refresh"><option value="250">0.25s</option><option value="500">0.5s</option><option value="1000">1s</option><option value="1500">1.5s</option><option value="3000">3s</option><option value="5000">5s</option></select></label>
+          <label>Display <select id="pov-fps"><option value="30">30 FPS</option><option value="60">60 FPS</option></select></label>
+          <label>View <select id="pov-view-mode"><option value="perspective">Perspective</option><option value="map">Map</option></select></label>
+          <button id="pov-pause" class="button secondary" type="button" aria-pressed="false">Pause</button>
+        </div>
+        <div id="pov-grid" class="pov-grid" aria-live="polite"></div>
+        <div class="beta-toolbar world-toolbar"><label>Radius <input id="pov-radius" type="number" min="2" max="12" value="6" /></label><label>X <input id="pov-x" type="number" step="1" /></label><label>Y <input id="pov-y" type="number" step="1" /></label><label>Z <input id="pov-z" type="number" step="1" /></label><button data-world-action="look-at" class="button secondary" type="button">Look</button><button data-world-action="walk-to" class="button secondary" type="button">Walk</button><button data-world-action="activate-block" class="button secondary" type="button">Use block</button><button data-world-action="dig-block" class="button danger" type="button">Dig</button><button data-world-action="attack-nearest" class="button danger" type="button">Attack nearest</button><button data-world-action="use-held" class="button secondary" type="button">Use held</button></div>
+        <p id="pov-detail" class="dialog-copy">Click a perspective feed to focus it. WASD moves, Space jumps, the mouse looks, and Esc releases the mouse.</p>
+      </div>
+    </dialog>
+
     <div id="item-tooltip" class="minecraft-tooltip" role="tooltip" hidden></div>
     <div id="toast-region" class="toast-region" aria-live="polite"></div>
     <script src="../assets/minecraft-items.js"></script>
+    <script src="../assets/pov-math.js"></script>
     <script src="renderer.js"></script>
   </body>
 </html>

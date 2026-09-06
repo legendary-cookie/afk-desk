@@ -78,12 +78,24 @@ class SettingsStore {
 }
 
 function normalizeSettings(input = {}) {
+  const workspaceDesigns = new Set(['operations', 'community', 'command', 'hybrid', 'studio', 'telemetry'])
+  const colorThemes = new Set(['obsidian', 'midnight', 'graphite', 'ember', 'arctic', 'high-contrast'])
   return {
+    notificationsEnabled: input?.notificationsEnabled === true,
     staggerStartupConnections: input?.staggerStartupConnections !== false,
     startupConnectionDelay: Math.max(1, Math.min(Number(input?.startupConnectionDelay) || 3, 300)),
     uiScale: Math.max(75, Math.min(Number(input?.uiScale) || 100, 125)),
+    workspaceDesign: workspaceDesigns.has(input?.workspaceDesign) ? input.workspaceDesign : 'hybrid',
+    colorTheme: colorThemes.has(input?.colorTheme) ? input.colorTheme : 'obsidian',
     sidePanelWidth: Math.max(240, Math.min(Number(input?.sidePanelWidth) || 300, 520)),
     inventoryHeight: Math.max(120, Math.min(Number(input?.inventoryHeight) || 220, 360)),
+    povRefreshMs: Math.max(250, Math.min(Number(input?.povRefreshMs) || 1500, 10000)),
+    povFrameRate: [30, 60].includes(Number(input?.povFrameRate)) ? Number(input.povFrameRate) : 30,
+    povRadius: Math.max(2, Math.min(Math.round(Number(input?.povRadius) || 6), 12)),
+    povColumns: Math.max(1, Math.min(Math.round(Number(input?.povColumns) || 3), 4)),
+    povMaxFeeds: Math.max(1, Math.min(Math.round(Number(input?.povMaxFeeds) || 9), 12)),
+    povViewMode: input?.povViewMode === 'map' ? 'map' : 'perspective',
+    povShowHud: input?.povShowHud !== false,
     macros: normalizeMacros(input?.macros)
   }
 }

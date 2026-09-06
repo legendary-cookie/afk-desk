@@ -1,6 +1,6 @@
 {
   "name": "afkdesk",
-  "version": "0.9.2",
+  "version": "0.10.0-beta.7",
   "description": "A simple, local-first Minecraft AFK desktop client",
   "main": "electron/main.cjs",
   "author": "AFK Desk contributors",
@@ -16,8 +16,15 @@
   },
   "dependencies": {
     "adm-zip": "^0.6.0",
+    "bedrock-protocol": "^3.58.3",
+    "minecraft-protocol-forge": "github:PrismarineJS/node-minecraft-protocol-forge#54fc6a2f",
     "mineflayer": "4.37.1",
+    "mineflayer-pathfinder": "^2.4.5",
     "socks": "^2.8.9"
+  },
+  "overrides": {
+    "tar": "7.5.22",
+    "axios": "1.19.0"
   },
   "devDependencies": {
     "electron": "^43.2.0",

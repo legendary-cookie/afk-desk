@@ -4,6 +4,11 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 const { AccountStore, SettingsStore, normalizeSettings, startupConnectionDelay } = require('../electron/store.cjs')
+const betaDefaults = {
+  notificationsEnabled: false, workspaceDesign: 'hybrid', colorTheme: 'obsidian',
+  povRefreshMs: 1500, povFrameRate: 30, povRadius: 6, povColumns: 3,
+  povMaxFeeds: 9, povViewMode: 'perspective', povShowHud: true
+}
 
 test('AccountStore saves, updates, and deletes profiles', (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'afkdesk-store-'))
@@ -35,8 +40,9 @@ test('SettingsStore persists safe startup connection staggering', (t) => {
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
   const store = new SettingsStore(directory)
 
-  assert.deepEqual(store.get(), { staggerStartupConnections: true, startupConnectionDelay: 3, uiScale: 100, sidePanelWidth: 300, inventoryHeight: 220, macros: [] })
+  assert.deepEqual(store.get(), { ...betaDefaults, staggerStartupConnections: true, startupConnectionDelay: 3, uiScale: 100, sidePanelWidth: 300, inventoryHeight: 220, macros: [] })
   assert.deepEqual(store.save({ staggerStartupConnections: false, startupConnectionDelay: 12 }), {
+    ...betaDefaults,
     staggerStartupConnections: false,
     startupConnectionDelay: 12,
     uiScale: 100,
@@ -44,8 +50,8 @@ test('SettingsStore persists safe startup connection staggering', (t) => {
     inventoryHeight: 220,
     macros: []
   })
-  assert.deepEqual(store.get(), { staggerStartupConnections: false, startupConnectionDelay: 12, uiScale: 100, sidePanelWidth: 300, inventoryHeight: 220, macros: [] })
-  assert.deepEqual(normalizeSettings({ startupConnectionDelay: 9999 }), { staggerStartupConnections: true, startupConnectionDelay: 300, uiScale: 100, sidePanelWidth: 300, inventoryHeight: 220, macros: [] })
+  assert.deepEqual(store.get(), { ...betaDefaults, staggerStartupConnections: false, startupConnectionDelay: 12, uiScale: 100, sidePanelWidth: 300, inventoryHeight: 220, macros: [] })
+  assert.deepEqual(normalizeSettings({ startupConnectionDelay: 9999 }), { ...betaDefaults, staggerStartupConnections: true, startupConnectionDelay: 300, uiScale: 100, sidePanelWidth: 300, inventoryHeight: 220, macros: [] })
   assert.equal(startupConnectionDelay({ staggerStartupConnections: true, startupConnectionDelay: 5 }, 2), 10_700)
   assert.equal(startupConnectionDelay({ staggerStartupConnections: false, startupConnectionDelay: 5 }, 2), 700)
 })

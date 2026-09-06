@@ -15,7 +15,10 @@ const {
 } = require('./movement-compatibility.cjs')
 applyProtocolFixes()
 const mineflayer = require('mineflayer')
+const { Vec3 } = require('vec3')
+const { pathfinder, Movements, goals } = require('mineflayer-pathfinder')
 const { normalizeVersionSelection, supportedVersionOrEmpty } = require('./version-support.cjs')
+const { moddedBotOptions, installModdedCompatibility, installCustomChannels, normalizeModdedProfile } = require('./modded-compatibility.cjs')
 
 const CHEST_NAMES = new Set(['chest', 'trapped_chest', 'barrel'])
 const ARMOR_SLOT_TYPES = new Map([[5, 'helmet'], [6, 'chestplate'], [7, 'leggings'], [8, 'boots'], [45, 'off-hand']])
@@ -69,20 +72,27 @@ class BotManager {
     this.reconnects.set(account.id, reconnectState)
 
     const explicitVersion = normalizeVersionSelection(account.version)
-    const rememberedVersion = explicitVersion ? '' : supportedVersionOrEmpty(account.lastSuccessfulVersion)
+    const moddedProfile = normalizeModdedProfile(account)
+    const needsForgeDetection = ['forge', 'neoforge'].includes(moddedProfile.loader) && moddedProfile.handshake !== 'off' && !moddedProfile.mods.length
+    const rememberedVersion = explicitVersion || needsForgeDetection ? '' : supportedVersionOrEmpty(account.lastSuccessfulVersion)
     const connectionVersion = explicitVersion || rememberedVersion
+    const modLog = (message) => this.emit('log', account.id, { kind: 'system', message, at: Date.now() })
     const bot = this.createBot({
       host: account.host,
       port: Number(account.port) || 25565,
       username: account.username,
       auth: 'microsoft',
       version: connectionVersion || false,
-      profilesFolder: path.join(this.profilesPath, account.id),
+      profilesFolder: path.join(this.profilesPath, account.identityId || account.id),
       connect: createProxyConnect(account.proxy, { host: account.host, port: Number(account.port) || 25565 }),
       hideErrors: true,
       checkTimeoutInterval: 45_000,
-      onMsaCode: (code) => this.emit('login-code', account.id, normalizeLoginCode(code))
+      onMsaCode: (code) => this.emit('login-code', account.id, normalizeLoginCode(code)),
+      ...moddedBotOptions(account, modLog)
     })
+    installModdedCompatibility(bot._client, { ...account, version: connectionVersion }, modLog)
+    installCustomChannels(bot._client, account, modLog)
+    bot.loadPlugin?.(pathfinder)
     if (!explicitVersion && rememberedVersion) {
       this.emit('log', account.id, {
         kind: 'system',
@@ -96,6 +106,7 @@ class BotManager {
     const session = {
       bot,
       account: { ...account },
+      moddedProfile: normalizeModdedProfile(account),
       antiAfkTimer: null,
       telemetryTimer: null,
       chestScanTimer: null,
@@ -114,6 +125,7 @@ class BotManager {
       depositRevision: 0,
       activeDepositContainer: null,
       inventoryAction: false,
+      inventoryQueue: Promise.resolve(),
       joinMessageSent: false,
       worldReadyAt: 0,
       nearestChest: null,
@@ -127,6 +139,7 @@ class BotManager {
       identityKey: '',
       telemetryKey: '',
       resourcePack: null,
+      worldBlockCache: null,
       versionReported: false,
       versionConfirmed: false
     }
@@ -148,10 +161,11 @@ class BotManager {
     session.connectionTimer = this.scheduleNetworkTimer(() => {
       session.connectionTimer = null
       if (!this.sessions.has(account.id) || session.ready) return
-      session.lastNetworkReason = 'ETIMEDOUT: The connection did not finish within 60 seconds.'
-      this.emit('log', account.id, { kind: 'error', message: 'Network error (ETIMEDOUT): The connection did not finish within 60 seconds. Auto-reconnect will retry.', at: Date.now() })
+      const seconds = boundedNumber(account.connectTimeoutSeconds, 5, 300, 60)
+      session.lastNetworkReason = `ETIMEDOUT: The connection did not finish within ${seconds} seconds.`
+      this.emit('log', account.id, { kind: 'error', message: `Network error (ETIMEDOUT): The connection did not finish within ${seconds} seconds. Auto-reconnect will retry.`, at: Date.now() })
       bot.end('connectTimeout')
-    }, 60_000)
+    }, boundedNumber(account.connectTimeoutSeconds, 5, 300, 60) * 1000)
 
     bot._client?.on?.('start_configuration', () => {
       session.switching = true
@@ -185,7 +199,7 @@ class BotManager {
             this.emit('version', account.id, { version: String(bot.version).slice(0, 32), automatic: !account.version, stable: true })
           }
         }
-      }, 60_000)
+      }, boundedNumber(account.reconnectResetDelay, 5, 3600, 60) * 1000)
       this.status(account.id, 'online', `Online as ${bot.username}`)
       if (!session.versionReported && bot.version) {
         session.versionReported = true
@@ -482,6 +496,15 @@ class BotManager {
     bot.look(bot.entity.yaw + delta, bot.entity.pitch, true)
   }
 
+  lookDelta(id, yawDelta = 0, pitchDelta = 0) {
+    const bot = this.requireOnline(id)
+    const yawChange = Math.max(-0.7, Math.min(0.7, Number(yawDelta) || 0))
+    const pitchChange = Math.max(-0.5, Math.min(0.5, Number(pitchDelta) || 0))
+    const yaw = bot.entity.yaw + yawChange
+    const pitch = Math.max(-1.45, Math.min(1.45, bot.entity.pitch + pitchChange))
+    return bot.look(yaw, pitch, true)
+  }
+
   async dropStack(id, slot) {
     return this.withInventoryAction(id, async (bot, session) => {
       const safeSlot = playerInventorySlot(slot)
@@ -490,6 +513,37 @@ class BotManager {
       if (!item) throw new Error('That inventory stack is no longer available.')
       await bot.tossStack(item)
       this.emit('log', id, { kind: 'sent', message: `Dropped ${item.count} × ${item.displayName || item.name}`, at: Date.now() })
+    })
+  }
+
+  async dropItems(id, slot, requestedCount = 1) {
+    return this.withInventoryAction(id, async (bot, session) => {
+      const safeSlot = playerInventorySlot(slot)
+      if (lockedSlotSet(session.account).has(safeSlot)) throw new Error('That inventory stack is locked.')
+      const item = bot.inventory?.slots?.[safeSlot]
+      if (!item) throw new Error('That inventory stack is no longer available.')
+      const count = Math.max(1, Math.min(Number(requestedCount) || 1, Number(item.count) || 1))
+      await bot.toss(item.type, item.metadata ?? null, count)
+      this.emit('log', id, { kind: 'sent', message: `Dropped ${count} × ${item.displayName || item.name}`, at: Date.now() })
+      return { slot: safeSlot, count }
+    })
+  }
+
+  async depositSlot(id, slot, requestedCount = 64) {
+    return this.withInventoryAction(id, async (bot, session) => {
+      const safeSlot = playerInventorySlot(slot)
+      if (lockedSlotSet(session.account).has(safeSlot)) throw new Error('That inventory stack is locked.')
+      const item = bot.inventory?.slots?.[safeSlot]
+      if (!item) throw new Error('That inventory stack is no longer available.')
+      const block = findNearestChest(bot, session.account.autoDepositRange)
+      if (!block) throw new Error('No visible chest or barrel is in range.')
+      const count = Math.max(1, Math.min(Number(requestedCount) || item.count, Number(item.count) || 1))
+      const container = await (bot.openContainer || bot.openChest).call(bot, block)
+      try { await container.deposit(item.type, item.metadata ?? null, count, item.nbt) }
+      finally { try { container.close() } catch {} }
+      const location = chestLocation(bot, block)
+      this.emit('log', id, { kind: 'sent', message: `Deposited ${count} × ${item.displayName || item.name} at ${location.x}, ${location.y}, ${location.z}.`, at: Date.now() })
+      return { slot: safeSlot, count, location }
     })
   }
 
@@ -523,13 +577,72 @@ class BotManager {
     const session = this.sessions.get(id)
     const bot = this.requireOnline(id)
     if (bot.currentWindow) throw new Error('Close the server menu before managing player inventory.')
-    if (session.depositing || session.inventoryAction) throw new Error('Another inventory action is still running.')
-    session.inventoryAction = true
-    try { return await action(bot, session) }
-    finally {
-      session.inventoryAction = false
-      this.emitTelemetry(id)
+    const execute = async () => {
+      if (!this.sessions.has(id)) throw new Error('This account is no longer online.')
+      while (session.depositing) await delay(50)
+      session.inventoryAction = true
+      try { return await action(bot, session) }
+      finally { session.inventoryAction = false; this.emitTelemetry(id) }
     }
+    const queued = session.inventoryQueue.then(execute, execute)
+    session.inventoryQueue = queued.catch(() => {})
+    return queued
+  }
+
+  worldSnapshot(id, radius = 6, blockRefreshMs = 1000) {
+    const session = this.sessions.get(id)
+    const bot = this.requireOnline(id)
+    const center = bot.entity?.position
+    if (!center) throw new Error('World position is not available yet.')
+    const safeRadius = Math.max(2, Math.min(Math.round(Number(radius) || 6), 12))
+    const anchor = { x: Math.floor(center.x), y: Math.floor(center.y), z: Math.floor(center.z) }
+    const cached = session?.worldBlockCache
+    const cacheLifetime = Math.max(100, Math.min(Number(blockRefreshMs) || 1000, 10000))
+    let blocks = cached && cached.radius === safeRadius && cached.x === anchor.x && cached.y === anchor.y && cached.z === anchor.z && Date.now() - cached.at < cacheLifetime ? cached.blocks : null
+    if (!blocks) {
+      blocks = []
+      for (let y = -4; y <= 4; y += 1) {
+        for (let x = -safeRadius; x <= safeRadius; x += 1) {
+          for (let z = -safeRadius; z <= safeRadius; z += 1) {
+            const block = bot.blockAt?.(new Vec3(anchor.x + x, anchor.y + y, anchor.z + z), false)
+            if (!block || block.name === 'air' || block.name === 'cave_air' || block.name === 'void_air') continue
+            blocks.push({ x: block.position.x, y: block.position.y, z: block.position.z, name: String(block.name).slice(0, 80), solid: block.boundingBox === 'block', water: WATER_NAMES.has(block.name) || WATERLIKE_NAMES.has(block.name) })
+          }
+        }
+      }
+      blocks = blocks.slice(0, 2500)
+      if (session) session.worldBlockCache = { ...anchor, radius: safeRadius, blocks, at: Date.now() }
+    }
+    const entities = Object.values(bot.entities || {}).filter((entity) => entity?.position && entity !== bot.entity && entity.position.distanceTo(center) <= safeRadius * 2).slice(0, 100).map((entity) => ({
+      id: Number(entity.id), name: String(entity.username || entity.displayName || entity.name || entity.type || 'entity').slice(0, 80), type: String(entity.type || ''),
+      x: roundDiagnostic(entity.position.x), y: roundDiagnostic(entity.position.y), z: roundDiagnostic(entity.position.z), distance: roundDiagnostic(entity.position.distanceTo(center))
+    }))
+    return { edition: 'java', radius: safeRadius, position: vectorSnapshot(center), yaw: Number(bot.entity.yaw) || 0, pitch: Number(bot.entity.pitch) || 0, blocks: blocks.slice(0, 2500), entities, at: Date.now() }
+  }
+
+  async worldAction(id, action, target = {}) {
+    const bot = this.requireOnline(id)
+    if (action === 'attack-nearest') {
+      const entity = Object.values(bot.entities || {}).filter((entry) => entry?.position && entry !== bot.entity).sort((a, b) => a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position))[0]
+      if (!entity || entity.position.distanceTo(bot.entity.position) > 6) throw new Error('No nearby entity is in attack range.')
+      await bot.lookAt(entity.position.offset(0, Number(entity.height || 1) / 2, 0), true)
+      bot.attack(entity)
+      return { entityId: entity.id }
+    }
+    if (action === 'use-held') { bot.activateItem(); return { used: true } }
+    const point = new Vec3(Math.floor(Number(target.x)), Math.floor(Number(target.y)), Math.floor(Number(target.z)))
+    if (![point.x, point.y, point.z].every(Number.isFinite)) throw new Error('Enter valid target coordinates.')
+    const block = bot.blockAt(point, false)
+    if (action === 'look-at') { await bot.lookAt(point.offset(0.5, 0.5, 0.5), true); return { position: point } }
+    if (action === 'activate-block') { if (!block) throw new Error('Target block is not loaded.'); await bot.activateBlock(block); return { position: point, block: block.name } }
+    if (action === 'dig-block') { if (!block || block.name === 'air') throw new Error('Target block is empty or unloaded.'); await bot.dig(block); return { position: point, block: block.name } }
+    if (action === 'walk-to') {
+      if (!bot.pathfinder) throw new Error('Pathfinder is not loaded.')
+      bot.pathfinder.setMovements(new Movements(bot))
+      await bot.pathfinder.goto(new goals.GoalNear(point.x, point.y, point.z, Math.max(0, Math.min(Number(target.range) || 1, 8))))
+      return { position: point }
+    }
+    throw new Error('Unknown world action.')
   }
 
   setItemLocks(id, slots) {
@@ -921,11 +1034,19 @@ function describeNetworkError(error) {
 }
 
 function reconnectDelaySeconds(account, reason, attempts) {
-  const base = Math.max(1, Math.min(Number(account?.autoReconnectDelay) || 5, 300))
-  const exponential = Math.min(base * (2 ** Math.min(Math.max(0, Number(attempts) - 1), 6)), 300)
+  const base = boundedNumber(account?.autoReconnectDelay, 1, 3600, 5)
+  const multiplier = boundedNumber(account?.autoReconnectBackoffMultiplier, 1, 10, 2)
+  const maximum = Math.max(base, boundedNumber(account?.autoReconnectMaxDelay, 1, 86400, 300))
+  const exponential = Math.min(base * (multiplier ** Math.min(Math.max(0, Number(attempts) - 1), 12)), maximum)
   const text = String(reason || '')
-  if (/logging in too fast|too many connection attempts|rate.?limit/i.test(text)) return Math.max(exponential, 30)
-  return exponential
+  const rateLimitMinimum = boundedNumber(account?.autoReconnectRateLimitDelay, 1, 86400, 30)
+  const result = /logging in too fast|too many connection attempts|rate.?limit/i.test(text) ? Math.max(exponential, rateLimitMinimum) : exponential
+  return Math.max(1, Math.round(result * 10) / 10)
+}
+
+function boundedNumber(value, minimum, maximum, fallback) {
+  const number = Number(value)
+  return Number.isFinite(number) ? Math.max(minimum, Math.min(number, maximum)) : fallback
 }
 
 function formatReason(reason) {
@@ -1561,6 +1682,8 @@ function playerInventorySlot(value) {
   if (!Number.isInteger(slot) || slot < 5 || slot > 45) throw new Error('Invalid player inventory slot.')
   return slot
 }
+
+function delay(milliseconds) { return new Promise((resolve) => setTimeout(resolve, milliseconds)) }
 
 function resolveEquipmentDestination(item, requested) {
   const allowed = new Set(['auto', 'hand', ...EQUIPMENT_DESTINATION_SLOTS.keys()])

@@ -1,9 +1,14 @@
 const protocol = require('minecraft-protocol')
 const minecraftData = require('minecraft-data')
+const { latestSupportedVersion, oldestSupportedVersion } = require('mineflayer')
 
 // node-minecraft-protocol can parse protocols that Mineflayer cannot run as a
 // complete bot. NMP advertises 1.7, but Mineflayer rejects it before login.
-const ENGINE_VERSIONS = Object.freeze(protocol.supportedVersions.filter(version => version !== '1.7'))
+const ENGINE_VERSIONS = Object.freeze(protocol.supportedVersions.filter((version) => {
+  if (version === '1.7') return false
+  const registry = minecraftData(version)
+  return registry?.version?.['>=']?.(oldestSupportedVersion) && registry.version['<='](latestSupportedVersion)
+}))
 const ENGINE_VERSION_SET = new Set(ENGINE_VERSIONS)
 
 function supportedVersions() {
