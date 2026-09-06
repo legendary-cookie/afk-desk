@@ -1,4 +1,5 @@
 const path = require('node:path')
+const { profilePath, validateProfileId } = require('./profile-path.cjs')
 const bedrock = require('bedrock-protocol')
 
 class BedrockBotManager {
@@ -12,6 +13,8 @@ class BedrockBotManager {
   }
 
   connect(account, { reconnecting = false } = {}) {
+    validateProfileId(account.id)
+    const profilesFolder = path.join(profilePath(this.profilesPath, account.identityId || account.id), 'bedrock')
     if (this.sessions.has(account.id)) throw new Error('This Bedrock profile is already connecting or online.')
     if (account.proxy?.enabled) throw new Error('Bedrock uses UDP/RakNet; the Java TCP proxy pool is not compatible in this beta.')
     const state = this.reconnects.get(account.id) || { attempts: 0, manual: false, timer: null }
@@ -26,7 +29,7 @@ class BedrockBotManager {
       username: account.username,
       version: account.version || undefined,
       offline: false,
-      profilesFolder: path.join(this.profilesPath, account.identityId || account.id, 'bedrock'),
+      profilesFolder,
       raknetBackend: 'jsp-raknet',
       connectTimeout: bound(account.connectTimeoutSeconds, 5, 300, 60) * 1000,
       conLog: null,

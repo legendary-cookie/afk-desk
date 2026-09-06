@@ -1,19 +1,50 @@
 const fs = require('node:fs')
 const path = require('node:path')
 
+function isObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function validAccounts(value) {
+  if (!Array.isArray(value)) return false
+  const ids = new Set()
+  return value.every((account) => {
+    if (!isObject(account) || typeof account.id !== 'string' || !account.id.trim() || ids.has(account.id)) return false
+    ids.add(account.id)
+    return true
+  })
+}
+
+function readStore(file, validate, initial) {
+  let raw
+  try {
+    raw = fs.readFileSync(file, 'utf8')
+  } catch (error) {
+    if (error.code === 'ENOENT') return initial
+    throw storageError(file, error)
+  }
+  try {
+    const parsed = JSON.parse(raw)
+    if (!validate(parsed)) throw new Error('Invalid storage schema')
+    return parsed
+  } catch (error) {
+    throw storageError(file, error)
+  }
+}
+
+function storageError(file, cause) {
+  const error = new Error(`Cannot safely read ${file}. Existing data is preserved; restore a valid backup or repair this file before saving.`, { cause })
+  error.code = 'AFKDESK_STORAGE_UNREADABLE'
+  return error
+}
+
 class AccountStore {
   constructor(userDataPath) {
     this.file = path.join(userDataPath, 'accounts.json')
   }
 
   list() {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(this.file, 'utf8'))
-      return Array.isArray(parsed) ? parsed : []
-    } catch (error) {
-      if (error.code !== 'ENOENT') console.error('Could not read accounts:', error)
-      return []
-    }
+    return readStore(this.file, validAccounts, [])
   }
 
   save(account) {
@@ -46,6 +77,9 @@ class AccountStore {
   }
 
   write(accounts) {
+    // Never turn a failed load into a destructive replacement, even for direct writes.
+    this.list()
+    if (!validAccounts(accounts)) throw new TypeError('Accounts must have unique, non-empty string IDs')
     fs.mkdirSync(path.dirname(this.file), { recursive: true })
     const temporaryFile = `${this.file}.tmp`
     fs.writeFileSync(temporaryFile, JSON.stringify(accounts, null, 2), 'utf8')
@@ -59,15 +93,12 @@ class SettingsStore {
   }
 
   get() {
-    try {
-      return normalizeSettings(JSON.parse(fs.readFileSync(this.file, 'utf8')))
-    } catch (error) {
-      if (error.code !== 'ENOENT') console.error('Could not read settings:', error)
-      return normalizeSettings()
-    }
+    return normalizeSettings(readStore(this.file, isObject, {}))
   }
 
   save(input) {
+    this.get()
+    if (!isObject(input)) throw new TypeError('Settings must be an object')
     const settings = normalizeSettings(input)
     fs.mkdirSync(path.dirname(this.file), { recursive: true })
     const temporaryFile = `${this.file}.tmp`

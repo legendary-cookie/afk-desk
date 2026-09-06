@@ -69,12 +69,41 @@ function installModdedCompatibility(client, account, report = () => {}, dependen
       client.autoVersionHooks.push((_response, negotiatedClient, options) => install(options.version || negotiatedClient.version))
     } else install(account?.version)
   } else {
+    const firstHook = client.autoVersionHooks?.length || 0
     autoVersionForge(client, {})
-    if (profile.loader !== 'auto') report(account?.version
-      ? 'Mod compatibility: automatic Forge matching needs Minecraft version set to Automatic; no manual mod list is configured.'
-      : 'Mod compatibility: Forge FML1/FML2/FML3 auto-detection is active and will mirror the server-advertised mod list.')
+    if (account?.version) {
+      // Fixed-version connections skip upstream autoVersionHooks. Fetch the
+      // Forge metadata separately without changing the selected game version.
+      detectFixedVersionMods(client, account, client.autoVersionHooks.slice(firstHook), dependencies)
+    }
+    if (profile.loader !== 'auto') report('Mod compatibility: Forge FML1/FML2/FML3 auto-detection is active and will mirror the server-advertised mod list.')
   }
   return true
+}
+
+function detectFixedVersionMods(client, account, hooks, dependencies) {
+  const ping = dependencies.ping || require('minecraft-protocol').ping
+  const createProxyConnect = dependencies.createProxyConnect || require('./proxy-connect.cjs').createProxyConnect
+  const destination = { host: account.host, port: Number(account.port) || 25565 }
+  const options = {
+    ...destination, version: account.version, closeTimeout: 10000, noPongTimeout: 1000,
+    connect: createProxyConnect(account.proxy, destination)
+  }
+  let ended = false
+  const onEnd = () => { ended = true }
+  client.once('end', onEnd)
+  client.wait_connect = true
+  Promise.resolve().then(() => ping(options)).then(response => {
+    if (ended) return
+    for (const hook of hooks) hook(response, client, options)
+    client.wait_connect = false
+    client.emit('connect_allowed')
+  }).catch(error => {
+    if (ended) return
+    // A metadata failure must not silently continue with a missing handshake.
+    try { client.emit('error', new Error(`Forge mod detection failed: ${error.message}`)) }
+    finally { client.end('modDetectionFailed') }
+  }).finally(() => client.removeListener('end', onEnd))
 }
 
 function installCustomChannels(client, account, report = () => {}) {

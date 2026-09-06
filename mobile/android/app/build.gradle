@@ -72,6 +72,16 @@ def enableProguardInReleaseBuilds = false
  */
 def jscFlavor = 'org.webkit:android-jsc:+'
 
+// Keep the original signing identity for updates. Never silently sign releases
+// with a newly generated debug key: uninstalling to resolve a mismatch loses data.
+def releaseSigning = [
+    store: System.getenv('AFKDESK_ANDROID_KEYSTORE'),
+    storePassword: System.getenv('AFKDESK_ANDROID_STORE_PASSWORD'),
+    alias: System.getenv('AFKDESK_ANDROID_KEY_ALIAS'),
+    keyPassword: System.getenv('AFKDESK_ANDROID_KEY_PASSWORD')
+]
+def hasReleaseSigning = releaseSigning.values().every { it != null && !it.isEmpty() }
+
 android {
     ndkVersion rootProject.ext.ndkVersion
     buildToolsVersion rootProject.ext.buildToolsVersion
@@ -95,17 +105,33 @@ android {
             keyAlias 'androiddebugkey'
             keyPassword 'android'
         }
+        release {
+            if (hasReleaseSigning) {
+                storeFile file(releaseSigning.store)
+                storePassword releaseSigning.storePassword
+                keyAlias releaseSigning.alias
+                keyPassword releaseSigning.keyPassword
+            }
+        }
     }
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
         }
         release {
-            // Caution! In production, you need to generate your own keystore file.
-            // see https://reactnative.dev/docs/signed-apk-android.
-            signingConfig signingConfigs.debug
+            signingConfig signingConfigs.release
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
+        }
+    }
+}
+
+tasks.configureEach { task ->
+    if (task.name == 'preReleaseBuild') {
+        task.doFirst {
+            if (!hasReleaseSigning || !file(releaseSigning.store).isFile()) {
+                throw new GradleException('Release signing is required. Set AFKDESK_ANDROID_KEYSTORE, AFKDESK_ANDROID_STORE_PASSWORD, AFKDESK_ANDROID_KEY_ALIAS and AFKDESK_ANDROID_KEY_PASSWORD to the ORIGINAL signing key. Do not uninstall the installed app to bypass a signature mismatch.')
+            }
         }
     }
 }

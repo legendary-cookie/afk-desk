@@ -1,4 +1,5 @@
 const path = require('node:path')
+const { profilePath, validateProfileId } = require('./profile-path.cjs')
 const { applyProtocolFixes } = require('./protocol-fixes.cjs')
 const { createProxyConnect } = require('./proxy-connect.cjs')
 const { ResourcePackLoader, normalizePackEvent } = require('./resource-pack.cjs')
@@ -63,6 +64,8 @@ class BotManager {
   }
 
   connect(account, { reconnecting = false } = {}) {
+    validateProfileId(account?.id)
+    const profilesFolder = profilePath(this.profilesPath, account.identityId || account.id)
     if (this.sessions.has(account.id)) throw new Error('This account is already connecting or online.')
     const reconnectState = this.reconnects.get(account.id) || { attempts: 0, timer: null, manual: false }
     if (reconnectState.timer) this.clearReconnectTimer(reconnectState.timer)
@@ -73,7 +76,7 @@ class BotManager {
 
     const explicitVersion = normalizeVersionSelection(account.version)
     const moddedProfile = normalizeModdedProfile(account)
-    const needsForgeDetection = ['forge', 'neoforge'].includes(moddedProfile.loader) && moddedProfile.handshake !== 'off' && !moddedProfile.mods.length
+    const needsForgeDetection = ['auto', 'forge', 'neoforge'].includes(moddedProfile.loader) && moddedProfile.handshake !== 'off' && !moddedProfile.mods.length
     const rememberedVersion = explicitVersion || needsForgeDetection ? '' : supportedVersionOrEmpty(account.lastSuccessfulVersion)
     const connectionVersion = explicitVersion || rememberedVersion
     const modLog = (message) => this.emit('log', account.id, { kind: 'system', message, at: Date.now() })
@@ -83,7 +86,7 @@ class BotManager {
       username: account.username,
       auth: 'microsoft',
       version: connectionVersion || false,
-      profilesFolder: path.join(this.profilesPath, account.identityId || account.id),
+      profilesFolder,
       connect: createProxyConnect(account.proxy, { host: account.host, port: Number(account.port) || 25565 }),
       hideErrors: true,
       checkTimeoutInterval: 45_000,
@@ -366,8 +369,9 @@ class BotManager {
       }
     })
     bot.on('end', (reason) => {
+      if (this.sessions.get(account.id) !== session) return
       const retryWithoutRememberedVersion = !session.ready && !explicitVersion && Boolean(rememberedVersion)
-      this.clearSession(account.id)
+      this.clearSession(account.id, session)
       if (retryWithoutRememberedVersion && !reconnectState.manual) {
         this.emit('log', account.id, { kind: 'error', message: `Minecraft ${rememberedVersion} did not reach the world. Retrying once with fresh version detection.`, at: Date.now() })
         this.scheduleReconnect(
@@ -395,10 +399,13 @@ class BotManager {
       this.status(id, 'offline', 'Disconnected')
       return
     }
-    this.clearTimers(session)
-    session.bot.quit('Disconnected from AFK Desk')
-    this.sessions.delete(id)
-    this.status(id, 'offline', 'Disconnected')
+    // Detach before quit: its end event may be synchronous or arrive after a new connection.
+    this.clearSession(id, session)
+    try {
+      session.bot.quit('Disconnected from AFK Desk')
+    } finally {
+      if (!this.sessions.has(id)) this.status(id, 'offline', 'Disconnected')
+    }
   }
 
   scheduleReconnect(account, reason) {
@@ -956,10 +963,11 @@ class BotManager {
     if (account.antiAfk !== false && session.bot.entity) this.enableAntiAfk(id, account)
   }
 
-  clearSession(id) {
+  clearSession(id, expectedSession) {
     const session = this.sessions.get(id)
-    if (session) this.clearTimers(session)
+    if (expectedSession && session !== expectedSession) return
     this.sessions.delete(id)
+    if (session) this.clearTimers(session)
   }
 
   clearTimers(session) {

@@ -145,7 +145,9 @@ class SmartProxyManager {
     const candidates = (accounts || []).filter((item) => item.id !== account.id && item?.shareProxyToPool === true && item?.proxy?.enabled === true).map((item) => ({ owner: item, proxy: item.proxy }))
     if (!candidates.length) throw new Error('No enabled shared proxies are available in the smart pool.')
     const stickyId = this.sticky.get(account.identityId)
-    const ranked = candidates.filter(({ owner }) => (this.leases.get(owner.id) || 0) < Math.max(1, Number(owner.proxyMaxSessions) || 1)).sort((a, b) => this.score(b.owner.id) - this.score(a.owner.id))
+    const available = candidates.filter(({ owner }) => (this.health.get(owner.id)?.cooldownUntil || 0) <= Date.now())
+    if (!available.length) throw new Error('Every smart proxy is currently cooling down after a failure.')
+    const ranked = available.filter(({ owner }) => (this.leases.get(owner.id) || 0) < Math.max(1, Number(owner.proxyMaxSessions) || 1)).sort((a, b) => this.score(b.owner.id) - this.score(a.owner.id))
     const selected = ranked.find(({ owner }) => owner.id === stickyId) || ranked[0]
     if (!selected) throw new Error('Every smart proxy is currently at its session limit.')
     this.sticky.set(account.identityId, selected.owner.id)
@@ -184,6 +186,7 @@ class MacroEngine {
     this.timers = timers
     this.running = new Map()
     this.timerHandles = new Map()
+    this.inventorySnapshots = new Map()
   }
 
   sync(account) {
@@ -199,16 +202,24 @@ class MacroEngine {
   async handleEvent(profileId, type, payload) {
     const account = this.getAccount(profileId)
     if (!account) return
+    let inventoryChanged = false
+    if (type === 'telemetry' && Array.isArray(payload?.inventory)) {
+      const snapshot = JSON.stringify(payload.inventory)
+      inventoryChanged = this.inventorySnapshots.has(profileId) && this.inventorySnapshots.get(profileId) !== snapshot
+      this.inventorySnapshots.set(profileId, snapshot)
+    }
+    if (type === 'status' && payload?.status === 'offline') this.inventorySnapshots.delete(profileId)
     const triggerType = type === 'status' && payload?.status === 'online' ? 'connected'
       : type === 'status' && payload?.status === 'offline' ? 'disconnected'
         : type === 'log' && payload?.kind === 'chat' ? 'chat'
           : type === 'telemetry' ? 'health'
             : type === 'window' && payload?.open ? 'window' : type
     for (const macro of normalizeAutomations(account.automations)) {
-      if (!macro.enabled || macro.trigger.type !== triggerType) continue
-      if (triggerType === 'chat' && macro.trigger.contains && !String(payload?.message || '').toLowerCase().includes(macro.trigger.contains.toLowerCase())) continue
-      if (triggerType === 'health' && Number(payload?.health) >= macro.trigger.below) continue
-      void this.run(profileId, macro.id, { type: triggerType, payload }).catch(() => {})
+      const matchedType = inventoryChanged && macro.trigger.type === 'inventory' ? 'inventory' : triggerType
+      if (!macro.enabled || macro.trigger.type !== matchedType) continue
+      if (matchedType === 'chat' && macro.trigger.contains && !String(payload?.message || '').toLowerCase().includes(macro.trigger.contains.toLowerCase())) continue
+      if (matchedType === 'health' && Number(payload?.health) >= macro.trigger.below) continue
+      void this.run(profileId, macro.id, { type: matchedType, payload }).catch(() => {})
     }
   }
 
@@ -217,28 +228,43 @@ class MacroEngine {
     const macro = normalizeAutomations(account?.automations).find((item) => item.id === macroId)
     if (!macro) throw new Error('Automation not found.')
     if (this.running.has(profileId)) throw new Error('Another automation is already running for this profile.')
-    const context = { profileId, macro, event, variables: {}, steps: 0, startedAt: Date.now(), cancelled: false }
+    const controller = new AbortController()
+    const context = { profileId, macro, event, variables: {}, steps: 0, startedAt: Date.now(), cancelled: false, controller, signal: controller.signal }
     this.running.set(profileId, context)
-    this.emit('macro', profileId, { status: 'running', macroId, name: macro.name, at: Date.now() })
+    let onAbort
+    const interrupted = new Promise((_, reject) => {
+      onAbort = () => reject(context.signal.reason)
+      context.signal.addEventListener('abort', onAbort, { once: true })
+    })
+    const deadline = this.timers.setTimeout(() => controller.abort(new Error('Automation exceeded the beta runtime limit.')), MAX_MACRO_RUNTIME_MS)
     try {
-      await this.runSteps(context, macro.steps)
+      this.emit('macro', profileId, { status: 'running', macroId, name: macro.name, at: Date.now() })
+      await Promise.race([this.runSteps(context, macro.steps), interrupted])
+      if (context.signal.aborted) throw context.signal.reason
       this.emit('macro', profileId, { status: 'completed', macroId, name: macro.name, at: Date.now() })
     } catch (error) {
       const status = context.cancelled ? 'cancelled' : 'failed'
       this.emit('macro', profileId, { status, macroId, name: macro.name, error: String(error?.message || error).slice(0, 200), at: Date.now() })
       if (!context.cancelled) throw error
-    } finally { if (this.running.get(profileId) === context) this.running.delete(profileId) }
+    } finally {
+      this.timers.clearTimeout(deadline)
+      context.signal.removeEventListener('abort', onAbort)
+      if (this.running.get(profileId) === context) this.running.delete(profileId)
+    }
   }
 
   stop(profileId) {
     const context = this.running.get(profileId)
-    if (context) context.cancelled = true
+    if (context) {
+      context.cancelled = true
+      context.controller.abort(new Error('Automation cancelled.'))
+    }
   }
 
   async runSteps(context, steps) {
     for (const step of steps) {
       this.guard(context)
-      if (step.type === 'wait') await wait(step.milliseconds)
+      if (step.type === 'wait') await wait(step.milliseconds, this.timers, context.signal)
       else if (step.type === 'set') context.variables[step.variable] = step.value
       else if (step.type === 'if') await this.runSteps(context, this.test(step.condition, context) ? step.then : step.else)
       else if (step.type === 'repeat') for (let index = 0; index < step.times; index += 1) { context.variables.index = index; await this.runSteps(context, step.steps) }
@@ -259,6 +285,7 @@ class MacroEngine {
   }
 
   guard(context) {
+    if (context.signal.aborted) throw context.signal.reason
     if (context.cancelled) throw new Error('Automation cancelled.')
     context.steps += 1
     if (context.steps > MAX_MACRO_STEPS) throw new Error('Automation exceeded the beta step limit.')
@@ -268,6 +295,7 @@ class MacroEngine {
   cancelTimers(profileId) {
     for (const handle of this.timerHandles.get(profileId) || []) this.timers.clearInterval(handle)
     this.timerHandles.delete(profileId)
+    this.inventorySnapshots.delete(profileId)
   }
 }
 
@@ -289,7 +317,21 @@ function redact(value, key = '') {
 function bounded(value, minimum, maximum, fallback) { const number = Number(value); return Number.isFinite(number) ? Math.max(minimum, Math.min(number, maximum)) : fallback }
 function integer(value, minimum, maximum, fallback) { return Math.round(bounded(value, minimum, maximum, fallback)) }
 function primitive(value) { return ['string', 'number', 'boolean'].includes(typeof value) ? value : '' }
-function wait(milliseconds) { return new Promise((resolve) => setTimeout(resolve, milliseconds)) }
+function wait(milliseconds, timers, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) return reject(signal.reason)
+    const onAbort = () => {
+      timers.clearTimeout(handle)
+      signal.removeEventListener('abort', onAbort)
+      reject(signal.reason)
+    }
+    const handle = timers.setTimeout(() => {
+      signal.removeEventListener('abort', onAbort)
+      resolve()
+    }, milliseconds)
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+}
 
 module.exports = {
   AlertManager, MacroEngine, PersistentEventStore, SmartProxyManager,

@@ -9,6 +9,7 @@ import App from '../App';
 jest.setTimeout(30000);
 
 jest.mock('@react-native-async-storage/async-storage', () => require('@react-native-async-storage/async-storage/jest/async-storage-mock'));
+jest.mock('react-native-keychain');
 jest.mock('nodejs-mobile-react-native', () => ({
   start: jest.fn(),
   channel: {addListener: jest.fn(), removeListener: jest.fn(), post: jest.fn()},

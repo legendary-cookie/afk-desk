@@ -1,9 +1,11 @@
 import React, {useCallback, useEffect, useRef, useState} from 'react';
 import {
-  Alert, FlatList, Image, Linking, Modal, Pressable, SafeAreaView, ScrollView, Share,
+  Alert, FlatList, Image, Modal, Pressable, SafeAreaView, ScrollView, Share,
   StatusBar, StyleSheet, Switch, Text, TextInput, View,
 } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import {loadAccounts, saveAccounts} from './account-storage';
+import {syncForegroundSessions} from './foreground-service';
+import {openExternalUrl, openMicrosoftSignIn} from './external-links';
 import nodejs from 'nodejs-mobile-react-native';
 
 type ProxyConfig = {enabled: boolean; type: 'socks5' | 'http'; host: string; port: string; username: string; password: string};
@@ -24,7 +26,6 @@ type ServerMenu = {open: boolean; title: string; size: number; slots: Item[]; re
 type Telemetry = {health: number; food: number; position: null | {x: number; y: number; z: number}; dimension: string; nearestChest?: null | {type: string; x: number; y: number; z: number; distance: number}; inventory: Item[]};
 type Session = {status: string; detail: string; logs: Log[]; telemetry?: Telemetry; serverWindow?: ServerMenu | null};
 
-const STORAGE_KEY = 'afkdesk.mobile.accounts.v1';
 const SUPPORTED_GAME_VERSIONS = ['1.21.11', '1.21.9', '1.21.8', '1.21.6', '1.21.5', '1.21.4', '1.21.3', '1.21.1', '1.20.6', '1.20.4', '1.20.2', '1.20.1', '1.20', '1.19.4', '1.19.3', '1.19.2', '1.19', '1.18.2', '1.17.1', '1.16.5', '1.15.2', '1.14.4', '1.13.2', '1.12.2', '1.11.2', '1.10.2', '1.9.4', '1.8.8'];
 const EMPTY_PROXY: ProxyConfig = {enabled: false, type: 'socks5', host: '', port: '1080', username: '', password: ''};
 const blankAccount = (): Account => ({
@@ -61,7 +62,6 @@ function engineCommand<T = void>(command: Record<string, unknown>): Promise<T> {
 function App(): React.JSX.Element {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [accountsLoaded, setAccountsLoaded] = useState(false);
-  const accountWrite = useRef<Promise<void>>(Promise.resolve());
   const [selectedId, setSelectedId] = useState('');
   const [sessions, setSessions] = useState<Record<string, Session>>({});
   const [engineReady, setEngineReady] = useState(false);
@@ -76,6 +76,10 @@ function App(): React.JSX.Element {
   const completionRequest = useRef(0);
   accountsRef.current = accounts;
 
+  useEffect(() => {
+    syncForegroundSessions(sessions).catch(error => Alert.alert('Background service', error.message));
+  }, [sessions]);
+
   const selected = accounts.find(account => account.id === selectedId) || accounts[0];
   const session = selected ? sessions[selected.id] || {status: 'offline', detail: 'Not connected', logs: []} : undefined;
 
@@ -84,8 +88,8 @@ function App(): React.JSX.Element {
   }, []);
 
   useEffect(() => {
-    AsyncStorage.getItem(STORAGE_KEY).then(raw => {
-      const restored: Account[] = (raw ? JSON.parse(raw) : []).map(normalizeAccount);
+    loadAccounts<Account>().then(saved => {
+      const restored = saved.map(normalizeAccount);
       setAccounts(restored);
       if (restored[0]) setSelectedId(restored[0].id);
       setAccountsLoaded(true);
@@ -126,9 +130,7 @@ function App(): React.JSX.Element {
 
   useEffect(() => {
     if (!accountsLoaded) return;
-    const snapshot = JSON.stringify(accounts);
-    accountWrite.current = accountWrite.current
-      .then(() => AsyncStorage.setItem(STORAGE_KEY, snapshot))
+    saveAccounts(accounts)
       .catch(() => Alert.alert('Storage error', 'Account changes could not be saved. Please try again before closing the app.'));
   }, [accounts, accountsLoaded]);
 
@@ -225,8 +227,7 @@ function App(): React.JSX.Element {
       return;
     }
     if (click.action === 'open_url') {
-      try { await Linking.openURL(click.value); }
-      catch { await Share.share({message: click.value}); }
+      await openExternalUrl(click.value);
       return;
     }
     await Share.share({message: click.value});
@@ -320,7 +321,7 @@ function App(): React.JSX.Element {
     }} />
     <SettingsModal visible={settingsOpen} accounts={accounts} onClose={() => setSettingsOpen(false)} onChange={setAccounts} />
     <ServerMenuModal value={session?.serverWindow || null} onClick={slot => selected && engineCommand({action: 'window-click', accountId: selected.id, slot}).catch((error: Error) => Alert.alert('Menu action failed', error.message))} onClose={() => selected && engineCommand({action: 'window-close', accountId: selected.id}).catch((error: Error) => Alert.alert('Close menu failed', error.message))} />
-    <Modal transparent visible={Boolean(loginCode)} animationType="fade"><View style={styles.backdrop}><View style={styles.modalCard}><Text style={styles.title}>Microsoft sign-in</Text><Text style={styles.modalHelp}>Open Microsoft, switch to the account you want, then enter this code:</Text><Text selectable style={styles.deviceCode}>{loginCode?.code}</Text><Pressable style={styles.primary} onPress={() => Linking.openURL(loginCode?.verificationUri || 'https://microsoft.com/link')}><Text style={styles.primaryText}>Open Microsoft sign-in</Text></Pressable><Pressable style={styles.modalButton} onPress={() => setLoginCode(null)}><Text style={styles.buttonText}>Close</Text></Pressable></View></View></Modal>
+    <Modal transparent visible={Boolean(loginCode)} animationType="fade"><View style={styles.backdrop}><View style={styles.modalCard}><Text style={styles.title}>Microsoft sign-in</Text><Text style={styles.modalHelp}>Open Microsoft, switch to the account you want, then enter this code:</Text><Text selectable style={styles.deviceCode}>{loginCode?.code}</Text><Pressable style={styles.primary} onPress={openMicrosoftSignIn}><Text style={styles.primaryText}>Open Microsoft sign-in</Text></Pressable><Pressable style={styles.modalButton} onPress={() => setLoginCode(null)}><Text style={styles.buttonText}>Close</Text></Pressable></View></View></Modal>
   </SafeAreaView>;
 }
 

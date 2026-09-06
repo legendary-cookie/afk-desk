@@ -1,4 +1,5 @@
 const path = require('node:path')
+const { profilePath } = require('./profile-path.cjs')
 const { applyProtocolFixes } = require('./protocol-fixes.cjs')
 const { createProxyConnect } = require('./proxy-connect.cjs')
 const { ResourcePackLoader, normalizePackEvent } = require('./resource-pack.cjs')
@@ -11,6 +12,9 @@ const CONTAINER_NAMES = new Set(['chest', 'trapped_chest', 'barrel'])
 const DEFAULT_AUTO_DEPOSIT_RANGE = 5
 const MAX_AUTO_DEPOSIT_RANGE = 16
 const CONTAINER_SCAN_INTERVAL = 5000
+const STABLE_SESSION_MS = 60_000
+const CONNECTION_TIMEOUT_MS = 120_000
+const DEVICE_LOGIN_TIMEOUT_MS = 15 * 60_000
 const CONFIGURATION_BLOCKED_GAMEPLAY_PACKETS = new Set([
   'position', 'look', 'position_look', 'flying', 'player_input', 'tick_end',
   'entity_action', 'arm_animation', 'held_item_slot', 'block_dig', 'block_place',
@@ -33,6 +37,7 @@ class BotManager {
   }
 
   connect(account, { reconnecting = false } = {}) {
+    const profilesFolder = profilePath(this.profilesPath, account?.id)
     if (this.sessions.has(account.id)) throw new Error('This account is already connecting or online.')
     const reconnectState = this.reconnects.get(account.id) || { attempts: 0, timer: null, manual: false }
     if (reconnectState.timer) this.clearReconnectTimer(reconnectState.timer)
@@ -42,21 +47,28 @@ class BotManager {
     this.reconnects.set(account.id, reconnectState)
 
     const selectedVersion = normalizeVersionSelection(account.version)
+    let session
+    let loginCodeRequested = false
     const bot = this.createBot({
       host: account.host,
       port: Number(account.port) || 25565,
       username: account.username,
       auth: 'microsoft',
       version: selectedVersion || false,
-      profilesFolder: path.join(this.profilesPath, account.id),
+      profilesFolder,
       connect: createProxyConnect(account.proxy, { host: account.host, port: Number(account.port) || 25565 }),
       hideErrors: true,
-      onMsaCode: (code) => this.emit('login-code', account.id, normalizeLoginCode(code))
+      onMsaCode: (code) => {
+        if (session && this.sessions.get(account.id) !== session) return
+        loginCodeRequested = true
+        if (session) this.armConnectionWatchdog(account.id, session, DEVICE_LOGIN_TIMEOUT_MS)
+        this.emit('login-code', account.id, normalizeLoginCode(code))
+      }
     })
     installMovementPacketCompatibility(bot)
     installModernPlayerInputCompatibility(bot)
 
-    const session = {
+    session = {
       bot, account: { ...account }, antiAfkTimer: null, jumpTimer: null, telemetryTimer: null,
       containerScanTimer: null, messageTimers: new Set(), ready: false, switching: false,
       joinMessageSent: false, identityKey: '', telemetryKey: '', nearestChest: null,
@@ -65,9 +77,12 @@ class BotManager {
     }
     this.sessions.set(account.id, session)
     this.status(account.id, 'connecting', reconnecting ? `Reconnect attempt ${reconnectState.attempts}…` : `Connecting to ${account.host}…`)
+    this.armConnectionWatchdog(account.id, session, loginCodeRequested ? DEVICE_LOGIN_TIMEOUT_MS : CONNECTION_TIMEOUT_MS)
 
     bot._client?.on?.('start_configuration', () => {
+      if (this.sessions.get(account.id) !== session) return
       session.switching = true
+      this.armConnectionWatchdog(account.id, session, CONNECTION_TIMEOUT_MS)
       bot._client.write('settings', {
         locale: 'en_us',
         viewDistance: 3,
@@ -83,13 +98,17 @@ class BotManager {
     })
 
     const markReady = () => {
-      if (!this.sessions.has(account.id)) return
+      if (this.sessions.get(account.id) !== session) return
       const completedSwitch = session.switching
       if (session.ready && !completedSwitch) return
       const firstReady = !session.ready
       session.ready = true
       session.switching = false
-      reconnectState.attempts = 0
+      clearTimeout(session.connectionTimer)
+      session.connectionTimer = null
+      if (firstReady) session.stabilityTimer = setTimeout(() => {
+        if (this.sessions.get(account.id) === session) reconnectState.attempts = 0
+      }, STABLE_SESSION_MS)
       this.status(account.id, 'online', `Online as ${bot.username}`)
       emitIdentity()
       this.emitTelemetry(account.id)
@@ -110,6 +129,7 @@ class BotManager {
     })
 
     const emitIdentity = () => {
+      if (this.sessions.get(account.id) !== session) return
       const player = bot.player || bot.players?.[bot.username]
       const identity = {
         username: String(bot.username || bot._client?.username || '').slice(0, 16),
@@ -123,11 +143,13 @@ class BotManager {
     }
 
     const emitTelemetry = () => {
-      if (!this.sessions.has(account.id)) return
+      if (this.sessions.get(account.id) !== session) return
       this.emitTelemetry(account.id)
     }
 
     bot.on('login', () => {
+      if (this.sessions.get(account.id) !== session) return
+      if (!session.ready) this.armConnectionWatchdog(account.id, session, CONNECTION_TIMEOUT_MS)
       if (!session.ready) this.status(account.id, 'connected', 'Authenticated. Joining world…')
       emitIdentity()
     })
@@ -136,15 +158,21 @@ class BotManager {
     bot.on('health', emitTelemetry)
     bot.inventory?.on?.('updateSlot', emitTelemetry)
     bot.on('windowOpen', (window) => {
-      if (session.depositing) return
-      const emitWindow = () => this.emit('window', account.id, buildWindowSnapshot(window, session.resourcePack))
+      if (this.sessions.get(account.id) !== session || session.depositing) return
+      const emitWindow = () => {
+        if (this.sessions.get(account.id) === session && bot.currentWindow === window) {
+          this.emit('window', account.id, buildWindowSnapshot(window, session.resourcePack))
+        }
+      }
       emitWindow()
       window?.on?.('updateSlot', emitWindow)
     })
     bot.on('windowClose', () => {
+      if (this.sessions.get(account.id) !== session) return
       if (!session.depositing) this.emit('window', account.id, { open: false })
     })
     bot.on('resourcePack', async (first, second) => {
+      if (this.sessions.get(account.id) !== session) return
       const pack = normalizePackEvent(first, second)
       if (!pack.url) {
         this.emit('log', account.id, { kind: 'error', message: 'The server offered a resource pack without a usable HTTP address.', at: Date.now() })
@@ -154,13 +182,16 @@ class BotManager {
       const host = safeUrlHost(pack.url)
       this.emit('log', account.id, { kind: 'system', message: `Loading server resource pack from ${host}…`, at: Date.now() })
       try {
-        session.resourcePack = await this.resourcePackLoader.load(pack.url, pack.hash)
+        const loaded = await this.resourcePackLoader.load(pack.url, pack.hash)
+        if (this.sessions.get(account.id) !== session) return
+        session.resourcePack = loaded
         bot.acceptResourcePack?.()
         session.telemetryKey = ''
         emitTelemetry()
         if (bot.currentWindow && !session.depositing) this.emit('window', account.id, buildWindowSnapshot(bot.currentWindow, session.resourcePack))
         this.emit('log', account.id, { kind: 'system', message: 'Server resource pack loaded. Custom menu art is enabled.', at: Date.now() })
       } catch (error) {
+        if (this.sessions.get(account.id) !== session) return
         rejectResourcePack(bot, first, second, pack.hash)
         this.emit('log', account.id, { kind: 'error', message: `Server resource pack failed: ${String(error?.message || error).slice(0, 180)}`, at: Date.now() })
       }
@@ -168,20 +199,26 @@ class BotManager {
     bot.on('spawn', markReady)
     bot.on('forcedMove', markReady)
     bot.on('respawn', () => {
+      if (this.sessions.get(account.id) !== session) return
       markReady()
       if (account.serverChangeMessage) this.scheduleMessage(account.id, account.serverChangeMessage, account.messageDelay)
     })
     bot.on('messagestr', (message, _position, originalMessage) => {
+      if (this.sessions.get(account.id) !== session) return
       markReady()
       const formatted = originalMessage?.toMotd?.() || message
       this.emit('log', account.id, { kind: 'chat', message, segments: parseInteractiveChat(originalMessage, message, formatted), at: Date.now() })
     })
     bot.on('kicked', (reason) => {
+      if (this.sessions.get(account.id) !== session) return
       session.lastKickReason = formatReason(reason)
       this.emit('log', account.id, { kind: 'error', message: `Kicked: ${session.lastKickReason}`, at: Date.now() })
     })
-    bot.on('error', (error) => this.emit('log', account.id, { kind: 'error', message: error.message, at: Date.now() }))
+    bot.on('error', (error) => {
+      if (this.sessions.get(account.id) === session) this.emit('log', account.id, { kind: 'error', message: error.message, at: Date.now() })
+    })
     bot.on('end', (reason) => {
+      if (this.sessions.get(account.id) !== session) return
       this.clearSession(account.id)
       if (account.autoReconnect !== false && !reconnectState.manual) {
         this.scheduleReconnect(account, session.lastKickReason || reason)
@@ -204,9 +241,8 @@ class BotManager {
       this.status(id, 'offline', 'Disconnected')
       return
     }
-    this.clearTimers(session)
+    this.clearSession(id)
     session.bot.quit('Disconnected from AFK Desk')
-    this.sessions.delete(id)
     this.status(id, 'offline', 'Disconnected')
   }
 
@@ -226,7 +262,7 @@ class BotManager {
     this.status(account.id, 'reconnecting', `Disconnected${reason ? `: ${String(reason).slice(0, 90)}` : ''}. Retrying in ${delay}s…`)
     state.timer = this.scheduleReconnectTimer(() => {
       state.timer = null
-      if (state.manual || this.sessions.has(account.id)) return
+      if (this.reconnects.get(account.id) !== state || state.manual || this.sessions.has(account.id)) return
       try { this.connect(state.account, { reconnecting: true }) }
       catch (error) {
         this.emit('log', account.id, { kind: 'error', message: `Reconnect failed: ${error.message}`, at: Date.now() })
@@ -234,6 +270,23 @@ class BotManager {
       }
     }, delay * 1000)
     this.reconnects.set(account.id, state)
+  }
+
+  armConnectionWatchdog(id, session, delay) {
+    clearTimeout(session.connectionTimer)
+    session.connectionTimer = setTimeout(() => {
+      if (this.sessions.get(id) !== session) return
+      const reason = 'Connection timed out before joining the world'
+      this.clearSession(id)
+      try { session.bot.quit(reason) } catch {}
+      if (session.account.autoReconnect !== false && !this.reconnects.get(id)?.manual) {
+        this.scheduleReconnect(session.account, reason)
+      } else {
+        this.reconnects.delete(id)
+        this.status(id, 'offline', reason)
+      }
+    }, delay)
+    session.connectionTimer?.unref?.()
   }
 
   sendChat(id, message) {
@@ -260,12 +313,15 @@ class BotManager {
 
   control(id, control, duration = 350) {
     const bot = this.requireOnline(id)
+    const session = this.sessions.get(id)
     const allowed = new Set(['forward', 'back', 'left', 'right', 'jump', 'sprint', 'sneak'])
     if (!allowed.has(control)) throw new Error('Unknown movement control.')
     bot.setControlState(control, true)
-    setTimeout(() => {
-      if (this.sessions.has(id)) bot.setControlState(control, false)
+    const timer = setTimeout(() => {
+      session.messageTimers.delete(timer)
+      if (this.sessions.get(id) === session) bot.setControlState(control, false)
     }, Math.max(100, Math.min(Number(duration) || 350, 3000)))
+    session.messageTimers.add(timer)
   }
 
   look(id, direction) {
@@ -392,7 +448,7 @@ class BotManager {
     const delay = Math.max(0, Math.min(Number(delaySeconds) || 0, 30)) * 1000
     const timer = setTimeout(() => {
       session.messageTimers.delete(timer)
-      if (!this.sessions.has(id)) return
+      if (this.sessions.get(id) !== session) return
       try { this.sendChat(id, String(message).slice(0, 256)) }
       catch (error) { this.emit('log', id, { kind: 'error', message: `Automatic message failed: ${error.message}`, at: Date.now() }) }
     }, delay)
@@ -421,6 +477,10 @@ class BotManager {
   }
 
   clearTimers(session) {
+    if (session.connectionTimer) clearTimeout(session.connectionTimer)
+    session.connectionTimer = null
+    if (session.stabilityTimer) clearTimeout(session.stabilityTimer)
+    session.stabilityTimer = null
     session.depositRevision += 1
     try { session.activeDepositContainer?.close() } catch {}
     session.activeDepositContainer = null

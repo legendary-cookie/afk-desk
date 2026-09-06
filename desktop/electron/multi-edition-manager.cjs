@@ -7,8 +7,14 @@ class MultiEditionBotManager {
 
   connect(account, options) {
     const edition = account?.edition === 'bedrock' ? 'bedrock' : 'java'
+    const other = this[edition === 'java' ? 'bedrock' : 'java']
+    const retry = other.reconnects?.get(account.id)
+    if (other.sessions?.has(account.id) || (retry?.timer && !retry.manual)) {
+      throw new Error('This profile is already active in another edition. Disconnect it before changing edition.')
+    }
+    const result = this[edition].connect(account, options)
     this.editions.set(account.id, edition)
-    return this[edition].connect(account, options)
+    return result
   }
 
   disconnect(id) { return this.manager(id).disconnect(id) }

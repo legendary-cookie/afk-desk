@@ -66,6 +66,27 @@ test('Forge auto matching performs a fresh ping even with a remembered version',
   assert.equal(options.version, false)
 })
 
+test('default auto loader performs a fresh ping even with a remembered version', (t) => {
+  let options
+  const manager = new BotManager({ profilesPath: 'profiles', emit: () => {}, createBot: input => { options = input; return new FakeBot() } })
+  t.after(() => manager.disconnect('default-auto'))
+  manager.connect({ id: 'default-auto', username: 'fixture', host: 'localhost', version: '', lastSuccessfulVersion: '1.12.2', antiAfk: false, autoReconnect: false })
+  assert.equal(options.version, false)
+})
+
+test('invalid account or identity paths are rejected before connection state or bot creation', () => {
+  let calls = 0
+  const manager = new BotManager({ profilesPath: 'profiles', emit: () => {}, createBot: () => { calls++; return new FakeBot() } })
+  for (const unsafe of ['../outside', '..\\outside', 'C:\\outside', 'CON', 'account/child']) {
+    for (const fields of [{ id: unsafe }, { id: 'safe', identityId: unsafe }]) {
+      assert.throws(() => manager.connect({ username: 'fixture', host: 'localhost', ...fields }), /Invalid profile identifier/)
+      assert.equal(calls, 0)
+      assert.equal(manager.sessions.size, 0)
+      assert.equal(manager.reconnects.size, 0)
+    }
+  }
+})
+
 test('connects, emits status, sends chat, and disconnects', () => {
   const events = []
   const bot = new FakeBot()
@@ -90,6 +111,45 @@ test('connects, emits status, sends chat, and disconnects', () => {
 
   manager.disconnect('one')
   assert.equal(events.at(-1)[2].status, 'offline')
+})
+
+test('a late end from a disconnected bot cannot clear its replacement session', (t) => {
+  const events = []
+  const oldBot = new FakeBot()
+  oldBot.quit = () => {}
+  const replacement = new FakeBot()
+  const bots = [oldBot, replacement]
+  const manager = new BotManager({ profilesPath: 'profiles', emit: (...event) => events.push(event), createBot: () => bots.shift() })
+  const account = { id: 'late-end', username: 'fixture', host: 'localhost', antiAfk: false, autoReconnect: true }
+  t.after(() => manager.disconnect(account.id))
+  manager.connect(account)
+  manager.disconnect(account.id)
+  manager.connect(account)
+  const session = manager.sessions.get(account.id)
+  const reconnect = manager.reconnects.get(account.id)
+  const count = events.length
+  oldBot.emit('end', 'delayed network close')
+  assert.equal(manager.sessions.get(account.id), session)
+  assert.equal(manager.reconnects.get(account.id), reconnect)
+  assert.equal(events.length, count)
+})
+
+test('disconnect detaches the old session before quit callbacks can connect again', (t) => {
+  const oldBot = new FakeBot()
+  const replacement = new FakeBot()
+  const bots = [oldBot, replacement]
+  const events = []
+  const manager = new BotManager({ profilesPath: 'profiles', emit: (...event) => events.push(event), createBot: () => bots.shift() })
+  const account = { id: 'reentrant-quit', username: 'fixture', host: 'localhost', antiAfk: false, autoReconnect: false }
+  t.after(() => manager.disconnect(account.id))
+  manager.connect(account)
+  oldBot.quit = () => {
+    oldBot.emit('end', 'quit')
+    manager.connect(account)
+  }
+  manager.disconnect(account.id)
+  assert.equal(manager.sessions.get(account.id)?.bot, replacement)
+  assert.equal(events.filter(([type]) => type === 'status').at(-1)[2].status, 'connecting')
 })
 
 test('chat completion returns bounded server suggestions and online player names', async () => {
@@ -144,7 +204,7 @@ test('sends separate join and server-change messages', async (t) => {
   assert.deepEqual(bot.writes, [])
 })
 
-test('auto version reuses the last successful protocol and reports the resolved version', () => {
+test('vanilla auto version reuses the last successful protocol and reports the resolved version', () => {
   const events = []
   const bot = new FakeBot()
   bot.version = '1.21.1'
@@ -156,7 +216,7 @@ test('auto version reuses the last successful protocol and reports the resolved 
   })
   manager.connect({
     id: 'auto-version', username: 'user@example.com', host: 'localhost', port: 25565,
-    version: '', lastSuccessfulVersion: '1.21.1', antiAfk: false, autoReconnect: false
+    modLoader: 'vanilla', version: '', lastSuccessfulVersion: '1.21.1', antiAfk: false, autoReconnect: false
   })
   assert.equal(options.version, '1.21.1')
   bot.entity = { yaw: 0, pitch: 0 }
@@ -201,7 +261,7 @@ test('a remembered auto version falls back to fresh detection if it fails before
   })
   manager.connect({
     id: 'stale-version', username: 'user@example.com', host: 'localhost', port: 25565,
-    version: '', lastSuccessfulVersion: '1.21.1', antiAfk: false, autoReconnect: true
+    modLoader: 'vanilla', version: '', lastSuccessfulVersion: '1.21.1', antiAfk: false, autoReconnect: true
   })
   bots[0].emit('end', 'unsupported protocol')
   scheduled()
@@ -218,7 +278,7 @@ test('Auto retries stale remembered versions once even when general reconnect is
     createBot: (input) => { versions.push(input.version); return bots[versions.length - 1] },
     scheduleReconnectTimer: (callback) => { scheduled = callback; return 'retry' }
   })
-  manager.connect({ id: 'one-shot-auto', username: 'user@example.com', host: 'localhost', version: '', lastSuccessfulVersion: '1.21.1', antiAfk: false, autoReconnect: false })
+  manager.connect({ id: 'one-shot-auto', username: 'user@example.com', host: 'localhost', modLoader: 'vanilla', version: '', lastSuccessfulVersion: '1.21.1', antiAfk: false, autoReconnect: false })
   bots[0].emit('end', 'unsupported protocol')
   scheduled()
   assert.deepEqual(versions, ['1.21.1', false])
