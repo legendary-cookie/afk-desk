@@ -19,7 +19,7 @@ applyProtocolFixes()
 const mineflayer = require('mineflayer')
 const { Vec3 } = require('vec3')
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder')
-const { normalizeVersionSelection, supportedVersionOrEmpty } = require('./version-support.cjs')
+const { normalizeVersionSelection } = require('./version-support.cjs')
 const { moddedBotOptions, installModdedCompatibility, installCustomChannels, normalizeModdedProfile } = require('./modded-compatibility.cjs')
 
 const CHEST_NAMES = new Set(['chest', 'trapped_chest', 'barrel'])
@@ -77,10 +77,9 @@ class BotManager {
     this.reconnects.set(account.id, reconnectState)
 
     const explicitVersion = normalizeVersionSelection(account.version)
-    const moddedProfile = normalizeModdedProfile(account)
-    const needsForgeDetection = ['auto', 'forge', 'neoforge'].includes(moddedProfile.loader) && moddedProfile.handshake !== 'off' && !moddedProfile.mods.length
-    const rememberedVersion = explicitVersion || needsForgeDetection ? '' : supportedVersionOrEmpty(account.lastSuccessfulVersion)
-    const connectionVersion = explicitVersion || rememberedVersion
+    // Auto must negotiate against the current server. A previously successful
+    // version (including one from a peer account) can become stale after an update.
+    const connectionVersion = explicitVersion
     const modLog = (message) => this.emit('log', account.id, { kind: 'system', message, at: Date.now() })
     const bot = this.createBot({
       host: account.host,
@@ -98,13 +97,6 @@ class BotManager {
     installModdedCompatibility(bot._client, { ...account, version: connectionVersion }, modLog)
     installCustomChannels(bot._client, account, modLog)
     bot.loadPlugin?.(pathfinder)
-    if (!explicitVersion && rememberedVersion) {
-      this.emit('log', account.id, {
-        kind: 'system',
-        message: `Auto version: using proven Minecraft ${rememberedVersion} for this server.`,
-        at: Date.now()
-      })
-    }
     installMovementPacketCompatibility(bot)
     installModernPlayerInputCompatibility(bot)
 
@@ -375,15 +367,8 @@ class BotManager {
     })
     bot.on('end', (reason) => {
       if (this.sessions.get(account.id) !== session) return
-      const retryWithoutRememberedVersion = !session.ready && !explicitVersion && Boolean(rememberedVersion)
       this.clearSession(account.id, session)
-      if (retryWithoutRememberedVersion && !reconnectState.manual) {
-        this.emit('log', account.id, { kind: 'error', message: `Minecraft ${rememberedVersion} did not reach the world. Retrying once with fresh version detection.`, at: Date.now() })
-        this.scheduleReconnect(
-          { ...account, lastSuccessfulVersion: '' },
-          session.lastKickReason || session.lastNetworkReason || reason
-        )
-      } else if (account.autoReconnect !== false && !reconnectState.manual) {
+      if (account.autoReconnect !== false && !reconnectState.manual) {
         this.scheduleReconnect(account, session.lastKickReason || session.lastNetworkReason || reason)
       } else {
         this.reconnects.delete(account.id)

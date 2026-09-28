@@ -213,7 +213,7 @@ test('sends separate join and server-change messages', async (t) => {
   assert.deepEqual(bot.writes, [])
 })
 
-test('vanilla auto version reuses the last successful protocol and reports the resolved version', () => {
+test('vanilla Auto detects the current server version even after a previous successful connection', () => {
   const events = []
   const bot = new FakeBot()
   bot.version = '1.21.1'
@@ -227,7 +227,7 @@ test('vanilla auto version reuses the last successful protocol and reports the r
     id: 'auto-version', username: 'user@example.com', host: 'localhost', port: 25565,
     modLoader: 'vanilla', version: '', lastSuccessfulVersion: '1.21.1', antiAfk: false, autoReconnect: false
   })
-  assert.equal(options.version, '1.21.1')
+  assert.equal(options.version, false)
   bot.entity = { yaw: 0, pitch: 0 }
   bot.emit('spawn')
   assert.deepEqual(events.find(([type]) => type === 'version'), ['version', 'auto-version', { version: '1.21.1', automatic: true, stable: false }])
@@ -258,7 +258,7 @@ test('an auto-detected version is confirmed only after a stable minute online', 
   manager.disconnect('stable-version')
 })
 
-test('a remembered auto version falls back to fresh detection if it fails before the world loads', () => {
+test('Auto reconnect always detects the current server version', () => {
   const bots = [new FakeBot(), new FakeBot()]
   const versions = []
   let scheduled
@@ -274,11 +274,11 @@ test('a remembered auto version falls back to fresh detection if it fails before
   })
   bots[0].emit('end', 'unsupported protocol')
   scheduled()
-  assert.deepEqual(versions, ['1.21.1', false])
+  assert.deepEqual(versions, [false, false])
   manager.disconnect('stale-version')
 })
 
-test('Auto retries stale remembered versions once even when general reconnect is off', () => {
+test('Auto does not retry when general reconnect is off', () => {
   const bots = [new FakeBot(), new FakeBot()]
   const versions = []
   let scheduled
@@ -289,8 +289,8 @@ test('Auto retries stale remembered versions once even when general reconnect is
   })
   manager.connect({ id: 'one-shot-auto', username: 'user@example.com', host: 'localhost', modLoader: 'vanilla', version: '', lastSuccessfulVersion: '1.21.1', antiAfk: false, autoReconnect: false })
   bots[0].emit('end', 'unsupported protocol')
-  scheduled()
-  assert.deepEqual(versions, ['1.21.1', false])
+  assert.equal(scheduled, undefined)
+  assert.deepEqual(versions, [false])
   manager.disconnect('one-shot-auto')
 })
 

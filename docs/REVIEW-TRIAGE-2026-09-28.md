@@ -14,6 +14,7 @@ The supplied review examined the published `main` branch, while this working bra
 | Android event listener cleanup | Confirmed; cleanup now removes the three subscriptions returned by the bridge. Mounted UI test added. |
 | Desktop browser smoke misses version API | Already corrected and exercised against the beta.8 UI. |
 | `adm-zip` 0.6.0 advisory | Confirmed after the review; both engines now resolve 0.6.1. See desktop/SECURITY.md for current audit scope. |
+| Auto game version can reuse stale last-use or peer-account history | Confirmed after the review; Auto now negotiates on every connection, while an explicitly selected version stays fixed. A branded ping name can only disambiguate versions sharing the reported protocol. Desktop regression and 28-version tests pass. |
 
 Still open for a later milestone: resource-pack downloads can follow redirects to local/private network destinations, and the pack fetch path does not inherit the configured game proxy. A safe policy must include DNS resolution and redirect checks while allowing intentional private packs. The embedded Android Node 18 runtime also remains below Mineflayer's declared Node 22 requirement; desktop test results cannot certify Android runtime operation. Mobile UI tests cover account lifecycle but not every screen or background-service condition. Real-server, long-running, and physical-device tests remain unperformed.
 

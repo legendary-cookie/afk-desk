@@ -24,4 +24,5 @@ test('version selection accepts Auto or an advertised engine version only', () =
 test('server ping protocols resolve to the matching supported game version', () => {
   assert.equal(resolvePingVersion({ version: { name: 'Velocity 1.8-1.21.11', protocol: 774 } }), '1.21.11')
   assert.equal(resolvePingVersion({ version: { name: 'Paper 1.20.4', protocol: 765 } }), '1.20.4')
+  assert.equal(resolvePingVersion({ version: { name: 'Proxy supports 1.21.11', protocol: 765 } }), '1.20.4')
 })

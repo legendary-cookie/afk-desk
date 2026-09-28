@@ -31,11 +31,13 @@ function supportedVersionOrEmpty(value) {
 function resolvePingVersion(response) {
   const protocolVersion = Number(response?.version?.protocol)
   if (!Number.isInteger(protocolVersion)) return ''
-  const branded = String(response?.version?.name || '').match(/\b\d+\.\d+(?:\.\d+)?\b/g) || []
-  for (const version of branded.reverse()) {
-    if (ENGINE_VERSION_SET.has(version)) return version
-  }
   const candidates = minecraftData.postNettyVersionsByProtocolVersion.pc[protocolVersion] || []
+  const branded = String(response?.version?.name || '').match(/\b\d+\.\d+(?:\.\d+)?\b/g) || []
+  // Several patch releases share one protocol number. A matching name can
+  // disambiguate them, but must never select a different protocol.
+  for (const version of branded.reverse()) {
+    if (ENGINE_VERSION_SET.has(version) && candidates.some(candidate => candidate.minecraftVersion === version)) return version
+  }
   for (const candidate of candidates) {
     if (ENGINE_VERSION_SET.has(candidate.minecraftVersion)) return candidate.minecraftVersion
   }

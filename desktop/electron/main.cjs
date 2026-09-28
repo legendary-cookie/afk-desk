@@ -16,7 +16,7 @@ const { BedrockBotManager } = require('./bedrock-bot-manager.cjs')
 const { MultiEditionBotManager } = require('./multi-edition-manager.cjs')
 const { sendToWindow } = require('./window-events.cjs')
 const { DiagnosticLog } = require('./diagnostic-log.cjs')
-const { preferredVersionForAccount, rememberedVersionState } = require('./version-compatibility.cjs')
+const { rememberedVersionState } = require('./version-compatibility.cjs')
 const { supportedVersions, normalizeVersionSelection } = require('./version-support.cjs')
 const { normalizeModdedProfile } = require('./modded-compatibility.cjs')
 const {
@@ -572,9 +572,8 @@ function withProxyPassword(account) {
     try { password = safeStorage.decryptString(Buffer.from(proxy.passwordEncrypted, 'base64')) }
     catch { throw new Error('Could not decrypt this account’s proxy password. Re-enter it in account settings.') }
   }
-  const lastSuccessfulVersion = account.version ? account.lastSuccessfulVersion : preferredVersionForAccount(account, store.list())
   const enabled = account.proxyMode === 'manual' ? proxy.enabled === true : account.proxyMode === 'smart' ? true : false
-  return { ...account, lastSuccessfulVersion, proxy: { ...proxy, enabled, password } }
+  return { ...account, proxy: { ...proxy, enabled, password } }
 }
 
 function publicAccount(account) {
