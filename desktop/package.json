@@ -1,6 +1,6 @@
 {
   "name": "afkdesk",
-  "version": "0.10.0-beta.7",
+  "version": "0.10.0-beta.9",
   "description": "A simple, local-first Minecraft AFK desktop client",
   "main": "electron/main.cjs",
   "author": "AFK Desk contributors",
@@ -15,7 +15,7 @@
     "postinstall": "patch-package"
   },
   "dependencies": {
-    "adm-zip": "^0.6.0",
+    "adm-zip": "^0.6.1",
     "bedrock-protocol": "^3.58.3",
     "minecraft-protocol-forge": "github:PrismarineJS/node-minecraft-protocol-forge#54fc6a2f",
     "mineflayer": "4.37.1",
@@ -25,8 +25,12 @@
   "overrides": {
     "tar": "7.5.22",
     "axios": "1.19.0",
-    "@azure/msal-node": { "uuid": "11.1.1" },
-    "yggdrasil": { "uuid": "11.1.1" }
+    "@azure/msal-node": {
+      "uuid": "11.1.1"
+    },
+    "yggdrasil": {
+      "uuid": "11.1.1"
+    }
   },
   "devDependencies": {
     "electron": "^43.2.0",

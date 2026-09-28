@@ -1,4 +1,5 @@
 const path = require('node:path')
+const { isDeepStrictEqual } = require('node:util')
 const { profilePath, validateProfileId } = require('./profile-path.cjs')
 const { applyProtocolFixes } = require('./protocol-fixes.cjs')
 const { createProxyConnect } = require('./proxy-connect.cjs')
@@ -61,6 +62,7 @@ class BotManager {
     this.sessions = new Map()
     this.reconnects = new Map()
     this.nextAutomaticServerSwitchAt = 0
+    this.nextWorldBlockRevision = 0
   }
 
   connect(account, { reconnecting = false } = {}) {
@@ -160,6 +162,9 @@ class BotManager {
     })
     bot.physicsEnabled = account.environmentalMovement !== false
     this.sessions.set(account.id, session)
+    for (const event of ['blockUpdate', 'chunkColumnLoad', 'chunkColumnUnload', 'respawn']) {
+      bot.on(event, () => this.invalidateWorldSnapshot(account.id, session))
+    }
     this.status(account.id, 'connecting', reconnecting ? `Reconnect attempt ${reconnectState.attempts}…` : `Connecting to ${account.host}…`)
     session.connectionTimer = this.scheduleNetworkTimer(() => {
       session.connectionTimer = null
@@ -530,7 +535,10 @@ class BotManager {
       const item = bot.inventory?.slots?.[safeSlot]
       if (!item) throw new Error('That inventory stack is no longer available.')
       const count = Math.max(1, Math.min(Number(requestedCount) || 1, Number(item.count) || 1))
-      await bot.toss(item.type, item.metadata ?? null, count)
+      if (typeof bot.transfer !== 'function') throw new Error('Exact-slot inventory transfer is unavailable.')
+      await bot.transfer({ window: bot.inventory, itemType: item.type, metadata: item.metadata ?? null,
+        nbt: item.nbt, count, sourceStart: safeSlot, sourceEnd: safeSlot + 1,
+        destStart: -999, destEnd: -999 })
       this.emit('log', id, { kind: 'sent', message: `Dropped ${count} × ${item.displayName || item.name}`, at: Date.now() })
       return { slot: safeSlot, count }
     })
@@ -546,11 +554,15 @@ class BotManager {
       if (!block) throw new Error('No visible chest or barrel is in range.')
       const count = Math.max(1, Math.min(Number(requestedCount) || item.count, Number(item.count) || 1))
       const container = await (bot.openContainer || bot.openChest).call(bot, block)
-      try { await container.deposit(item.type, item.metadata ?? null, count, item.nbt) }
+      let transferred
+      try {
+        if (lockedSlotSet(session.account).has(safeSlot)) throw new Error('That inventory stack is locked.')
+        transferred = await transferPlayerSlot(bot, container, safeSlot, count)
+      }
       finally { try { container.close() } catch {} }
       const location = chestLocation(bot, block)
-      this.emit('log', id, { kind: 'sent', message: `Deposited ${count} × ${item.displayName || item.name} at ${location.x}, ${location.y}, ${location.z}.`, at: Date.now() })
-      return { slot: safeSlot, count, location }
+      this.emit('log', id, { kind: 'sent', message: `Deposited ${transferred} × ${item.displayName || item.name} at ${location.x}, ${location.y}, ${location.z}.`, at: Date.now() })
+      return { slot: safeSlot, count: transferred, location }
     })
   }
 
@@ -613,26 +625,85 @@ class BotManager {
           for (let z = -safeRadius; z <= safeRadius; z += 1) {
             const block = bot.blockAt?.(new Vec3(anchor.x + x, anchor.y + y, anchor.z + z), false)
             if (!block || block.name === 'air' || block.name === 'cave_air' || block.name === 'void_air') continue
-            blocks.push({ x: block.position.x, y: block.position.y, z: block.position.z, name: String(block.name).slice(0, 80), solid: block.boundingBox === 'block', water: WATER_NAMES.has(block.name) || WATERLIKE_NAMES.has(block.name) })
+            blocks.push({ x: block.position.x, y: block.position.y, z: block.position.z, name: String(block.name).slice(0, 80), solid: block.boundingBox === 'block', water: WATER_NAMES.has(block.name) || WATERLIKE_NAMES.has(block.name), shapes: boundedBlockShapes(block), stateId: Number.isSafeInteger(block.stateId) ? block.stateId : null })
           }
         }
       }
-      blocks = blocks.slice(0, 2500)
-      if (session) session.worldBlockCache = { ...anchor, radius: safeRadius, blocks, at: Date.now() }
+      // The radius/height loops already cap the volume at 5,625 cells. Slicing
+      // by scan order erased the upper/eastern half of dense nearby worlds.
+      if (session) {
+        session.worldBlockRevision = ++this.nextWorldBlockRevision
+        session.worldBlockCache = { ...anchor, radius: safeRadius, blocks, at: Date.now() }
+      }
     }
     const entities = Object.values(bot.entities || {}).filter((entity) => entity?.position && entity !== bot.entity && entity.position.distanceTo(center) <= safeRadius * 2).slice(0, 100).map((entity) => ({
       id: Number(entity.id), name: String(entity.username || entity.displayName || entity.name || entity.type || 'entity').slice(0, 80), type: String(entity.type || ''),
       x: roundDiagnostic(entity.position.x), y: roundDiagnostic(entity.position.y), z: roundDiagnostic(entity.position.z), distance: roundDiagnostic(entity.position.distanceTo(center))
     }))
-    return { edition: 'java', radius: safeRadius, position: vectorSnapshot(center), yaw: Number(bot.entity.yaw) || 0, pitch: Number(bot.entity.pitch) || 0, blocks: blocks.slice(0, 2500), entities, at: Date.now() }
+    return { edition: 'java', radius: safeRadius, position: vectorSnapshot(center), yaw: Number(bot.entity.yaw) || 0, pitch: Number(bot.entity.pitch) || 0, blocks, entities,
+      blockRevision: session.worldBlockRevision || 0,
+      quickBarSlot: Math.max(0, Math.min(Number(bot.quickBarSlot) || 0, 8)),
+      heldItem: bot.heldItem ? { name: String(bot.heldItem.name || '').slice(0, 80), displayName: String(bot.heldItem.displayName || bot.heldItem.name || '').slice(0, 100), count: Math.max(0, Math.min(Number(bot.heldItem.count) || 0, 999)) } : null,
+      at: Date.now() }
   }
 
   async worldAction(id, action, target = {}) {
     const bot = this.requireOnline(id)
+    const session = this.sessions.get(id)
+    if (action === 'stop-dig') {
+      if (session.worldDigging) session.worldDigging.cancelled = true
+      bot.stopDigging?.()
+      session.worldDigging = null
+      return { stopped: true }
+    }
+    if (action === 'stop-use') {
+      bot.deactivateItem?.()
+      return { stopped: true }
+    }
+    if (action === 'select-hotbar') {
+      const slot = target?.slot
+      if (!Number.isInteger(slot) || slot < 0 || slot > 8) throw new Error('Hotbar slot must be an integer from 0 to 8.')
+      if (session.worldDigging) {
+        session.worldDigging.cancelled = true
+        bot.stopDigging?.()
+        session.worldDigging = null
+      }
+      bot.setQuickBarSlot(slot)
+      this.emitTelemetry(id)
+      return { slot }
+    }
+    if (bot.currentWindow) throw new Error('Close the server menu before interacting with the world.')
+    if (action === 'dig-crosshair') return this.digWorldBlock(id, session, crosshairBlock(bot))
+    if (action === 'use-crosshair') {
+      if (session.worldUsing) throw new Error('A world interaction is already running.')
+      const block = crosshairBlock(bot, false)
+      if (!block) { bot.activateItem(); return { used: true } }
+      const face = blockFaceVector(block.face)
+      session.worldUsing = true
+      try {
+        const heldName = bot.heldItem?.name
+        const heldBlock = heldName && bot.registry?.blocksByName?.[heldName]
+        if (heldBlock && (!isInteractiveBlock(block.name) || bot.controlState?.sneak)) {
+          await bot.placeBlock(block, face)
+          return { placed: true, position: block.position.plus(face), block: heldName }
+        }
+        await bot.activateBlock(block, face)
+        return { used: true, position: block.position, block: block.name }
+      } finally {
+        session.worldUsing = false
+        this.invalidateWorldSnapshot(id, session)
+      }
+    }
     if (action === 'attack-nearest') {
       const entity = Object.values(bot.entities || {}).filter((entry) => entry?.position && entry !== bot.entity).sort((a, b) => a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position))[0]
-      if (!entity || entity.position.distanceTo(bot.entity.position) > 6) throw new Error('No nearby entity is in attack range.')
-      await bot.lookAt(entity.position.offset(0, Number(entity.height || 1) / 2, 0), true)
+      if (!entity || entity.position.distanceTo(bot.entity.position) > 3.5) throw new Error('No nearby entity is in attack range.')
+      const aim = entity.position.offset(0, Number(entity.height || 1) / 2, 0)
+      const eye = worldEye(bot)
+      if (!bot.world?.raycast) throw new Error('World raycasting is not available yet.')
+      const obstacle = bot.world.raycast(eye, aim.minus(eye).normalize(), eye.distanceTo(aim))
+      if (obstacle) throw new Error('The nearby entity is not visible.')
+      await bot.lookAt(aim, true)
+      if (this.sessions.get(id) !== session) throw new Error('This account is no longer online.')
       bot.attack(entity)
       return { entityId: entity.id }
     }
@@ -641,8 +712,8 @@ class BotManager {
     if (![point.x, point.y, point.z].every(Number.isFinite)) throw new Error('Enter valid target coordinates.')
     const block = bot.blockAt(point, false)
     if (action === 'look-at') { await bot.lookAt(point.offset(0.5, 0.5, 0.5), true); return { position: point } }
-    if (action === 'activate-block') { if (!block) throw new Error('Target block is not loaded.'); await bot.activateBlock(block); return { position: point, block: block.name } }
-    if (action === 'dig-block') { if (!block || block.name === 'air') throw new Error('Target block is empty or unloaded.'); await bot.dig(block); return { position: point, block: block.name } }
+    if (action === 'activate-block') { validateVisibleBlock(bot, block); await bot.activateBlock(block); this.invalidateWorldSnapshot(id, session); return { position: point, block: block.name } }
+    if (action === 'dig-block') { validateVisibleBlock(bot, block); return this.digWorldBlock(id, session, block, true) }
     if (action === 'walk-to') {
       if (!bot.pathfinder) throw new Error('Pathfinder is not loaded.')
       bot.pathfinder.setMovements(new Movements(bot))
@@ -650,6 +721,36 @@ class BotManager {
       return { position: point }
     }
     throw new Error('Unknown world action.')
+  }
+
+  async digWorldBlock(id, session, block, turnToTarget = false) {
+    if (session.worldDigging) throw new Error('Digging is already running.')
+    if (!block || ['air', 'cave_air', 'void_air'].includes(block.name)) throw new Error('No visible block is in reach.')
+    const operation = { cancelled: false }
+    session.worldDigging = operation
+    try {
+      if (turnToTarget) {
+        await session.bot.lookAt(block.position.offset(0.5, 0.5, 0.5), true)
+        if (operation.cancelled || this.sessions.get(id) !== session) return { cancelled: true }
+        validateVisibleBlock(session.bot, block)
+      }
+      // Keep the validated crosshair direction. Mineflayer's ignore mode also
+      // installs cancellation synchronously instead of awaiting a look turn.
+      await session.bot.dig(block, 'ignore')
+      return operation.cancelled ? { cancelled: true } : { position: block.position, block: block.name }
+    } catch (error) {
+      if (operation.cancelled) return { cancelled: true }
+      throw error
+    } finally {
+      if (session.worldDigging === operation) session.worldDigging = null
+      this.invalidateWorldSnapshot(id, session)
+    }
+  }
+
+  invalidateWorldSnapshot(id, session) {
+    if (this.sessions.get(id) !== session) return
+    session.worldBlockCache = null
+    session.worldBlockRevision = ++this.nextWorldBlockRevision
   }
 
   setItemLocks(id, slots) {
@@ -714,8 +815,11 @@ class BotManager {
       session.activeDepositContainer = chest
       for (const item of items) {
         if (!isDepositActive(session, depositRevision)) break
-        await chest.deposit(item.type, item.metadata ?? null, item.count, item.nbt)
-        deposited += item.count
+        const slot = Number(item.slot)
+        if (lockedSlotSet(session.account).has(slot)) continue
+        const current = session.bot.inventory?.slots?.[slot]
+        if (!current) continue
+        deposited += await transferPlayerSlot(session.bot, chest, slot, current.count)
       }
       if (deposited > 0) {
         const { x, y, z } = chestLocation(session.bot, block)
@@ -971,6 +1075,10 @@ class BotManager {
   }
 
   clearTimers(session) {
+    if (session.worldDigging) session.worldDigging.cancelled = true
+    try { session.bot.stopDigging?.() } catch {}
+    try { if (session.bot.usingHeldItem) session.bot.deactivateItem?.() } catch {}
+    session.worldDigging = null
     session.depositRevision += 1
     try { session.activeDepositContainer?.close() } catch {}
     session.activeDepositContainer = null
@@ -1006,6 +1114,48 @@ class BotManager {
   status(id, status, detail) {
     this.emit('status', id, { status, detail, at: Date.now() })
   }
+}
+
+function worldEye(bot) {
+  const height = Number(bot.entity.eyeHeight) || 1.62
+  return bot.entity.position.offset(0, Math.max(0.1, Math.min(height, 2)), 0)
+}
+
+function crosshairBlock(bot, required = true) {
+  if (!bot.world?.raycast) throw new Error('World raycasting is not available yet.')
+  const yaw = Number(bot.entity.yaw) || 0
+  const pitch = Number(bot.entity.pitch) || 0
+  const direction = new Vec3(-Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch))
+  const block = bot.world.raycast(worldEye(bot), direction, 5)
+  if (block && (!block.intersect || worldEye(bot).distanceTo(block.intersect) > 5.001)) throw new Error('Target is outside interaction range.')
+  if (!block && required) throw new Error('No visible block is in reach.')
+  return block
+}
+
+function validateVisibleBlock(bot, block) {
+  if (!block || ['air', 'cave_air', 'void_air'].includes(block.name)) throw new Error('Target block is empty or unloaded.')
+  const eye = worldEye(bot)
+  const center = block.position.offset(0.5, 0.5, 0.5)
+  if (eye.distanceTo(center) > 5) throw new Error('Target is outside interaction range.')
+  const hit = bot.world?.raycast?.(eye, center.minus(eye).normalize(), 5)
+  if (!hit || !hit.position.equals(block.position)) throw new Error('Target block is not visible.')
+}
+
+function blockFaceVector(face) {
+  const values = [[0, -1, 0], [0, 1, 0], [0, 0, -1], [0, 0, 1], [-1, 0, 0], [1, 0, 0]]
+  if (!Number.isInteger(face) || !values[face]) throw new Error('The target block face is not available.')
+  return new Vec3(...values[face])
+}
+
+function isInteractiveBlock(name) {
+  return /(?:chest|barrel|furnace|hopper|dispenser|dropper|crafting_table|anvil|enchanting_table|lectern|stonecutter|grindstone|loom|smithing_table|beacon|brewing_stand|lever|note_block|bell|(?:^|_)(?:door|trapdoor|button|bed|fence_gate))$/.test(String(name))
+}
+
+function boundedBlockShapes(block) {
+  const shapes = Array.isArray(block.shapes) ? block.shapes : (block.boundingBox === 'block' ? [[0, 0, 0, 1, 1, 1]] : [])
+  return shapes.slice(0, 8).filter(shape => Array.isArray(shape) && shape.length === 6 && shape.every(Number.isFinite))
+    .map(shape => shape.map(value => Math.max(0, Math.min(value, 1))))
+    .filter(shape => shape[3] > shape[0] && shape[4] > shape[1] && shape[5] > shape[2])
 }
 
 function normalizeLoginCode(code) {
@@ -1528,7 +1678,7 @@ function buildTelemetry(bot, nearestChest = null, environmentalMovement, fluidMo
     count: Math.max(1, Math.min(Number(item.count) || 1, 127)),
     ...itemDurability(item),
     ...itemTooltipDetails(item, bot?.registry, bot?.__afkDeskEnchantmentsById),
-    ...resourcePack?.itemAppearance?.(item)
+    ...safeItemAppearance(resourcePack, item)
   }))
   const environment = environmentalMovement === undefined ? undefined : {
     enabled: environmentalMovement !== false,
@@ -1691,6 +1841,27 @@ function playerInventorySlot(value) {
   return slot
 }
 
+async function transferPlayerSlot(bot, container, slot, requestedCount) {
+  if (typeof bot.transfer !== 'function') throw new Error('Exact-slot inventory transfer is unavailable.')
+  const inventoryStart = Number(bot.inventory?.inventoryStart)
+  const containerStart = Number(container?.inventoryStart)
+  const containerEnd = Number(container?.inventoryEnd)
+  const source = containerStart + slot - inventoryStart
+  const item = bot.inventory?.slots?.[slot]
+  const windowItem = container?.slots?.[source]
+  if (!Number.isInteger(inventoryStart) || !Number.isInteger(containerStart) || !Number.isInteger(containerEnd) ||
+      !Number.isInteger(source) || source < containerStart || source >= containerEnd ||
+      !item || !windowItem || item.type !== windowItem.type || item.metadata !== windowItem.metadata ||
+      !isDeepStrictEqual(item.nbt, windowItem.nbt) ||
+      !isDeepStrictEqual(item.components, windowItem.components)) throw new Error('The selected inventory stack is no longer available in the container.')
+  const count = Math.min(Number(requestedCount), Number(item.count), Number(windowItem.count))
+  if (!Number.isInteger(count) || count < 1) throw new Error('The selected inventory stack is empty.')
+  await bot.transfer({ window: container, itemType: item.type, metadata: item.metadata ?? null,
+    nbt: item.nbt, count, sourceStart: source, sourceEnd: source + 1,
+    destStart: 0, destEnd: containerStart })
+  return count
+}
+
 function delay(milliseconds) { return new Promise((resolve) => setTimeout(resolve, milliseconds)) }
 
 function resolveEquipmentDestination(item, requested) {
@@ -1729,12 +1900,20 @@ function buildWindowSnapshot(window, registry, enchantmentsById, resourcePack = 
     count: Math.max(1, Math.min(Number(item.count) || 1, 127)),
     ...itemDurability(item),
     ...itemTooltipDetails(item, registry, enchantmentsById),
-    ...resourcePack?.itemAppearance?.(item)
+    ...safeItemAppearance(resourcePack, item)
   } : null).filter(Boolean)
   const titleSource = window?.title?.json ?? window?.title
-  const resourceTitle = resourcePack?.titleAppearance?.(titleSource)
+  const resourceTitle = safeTitleAppearance(resourcePack, titleSource)
   const title = resourceTitle ? 'Custom server menu' : String(extractText(window?.title) || 'Server menu').slice(0, 100)
   return { open: true, title, ...(resourceTitle ? { resourceTitle } : {}), size: limit, slots }
+}
+
+function safeItemAppearance(resourcePack, item) {
+  try { return resourcePack?.itemAppearance?.(item) || {} } catch { return {} }
+}
+
+function safeTitleAppearance(resourcePack, title) {
+  try { return resourcePack?.titleAppearance?.(title) || null } catch { return null }
 }
 
 function safeUrlHost(value) {

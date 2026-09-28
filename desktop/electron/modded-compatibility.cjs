@@ -1,4 +1,5 @@
 const forgeAdapter = require('minecraft-protocol-forge')
+const { describeCompatibility } = require('../assets/compatibility-capabilities.js')
 
 const LOADERS = new Set(['auto', 'vanilla', 'plugin', 'fabric', 'quilt', 'forge', 'neoforge', 'sponge', 'custom'])
 const HANDSHAKES = new Set(['auto', 'off', 'fml1', 'fml2', 'fml3'])
@@ -48,12 +49,34 @@ function inferredHandshake(version) {
 
 function installModdedCompatibility(client, account, report = () => {}, dependencies = {}) {
   const profile = normalizeModdedProfile(account)
+  const capability = describeCompatibility(account)
+  if (capability.error) throw new Error(capability.error)
+  if (capability.mode === 'vanilla-only') { report(capability.summary); return false }
   if (!client || !FORGE_LOADERS.has(profile.loader) || profile.handshake === 'off') return false
   const autoVersionForge = dependencies.autoVersionForge || forgeAdapter.autoVersionForge
   const handshakes = dependencies.handshakes || {
     fml1: forgeAdapter.forgeHandshake,
     fml2: require('minecraft-protocol-forge/src/client/forgeHandshake2'),
     fml3: require('minecraft-protocol-forge/src/client/forgeHandshake3')
+  }
+  if (!profile.mods.length && profile.handshake !== 'auto') {
+    if (profile.handshake !== 'fml1') {
+      // FML2/3 reflect the server mod/channel lists when options are absent.
+      handshakes[profile.handshake](client, {})
+    } else {
+      const hook = response => {
+        const mods = response?.modinfo?.modList
+        if (!Array.isArray(mods)) {
+          report('FML1 requires a server-advertised mod list. Configure a manual mod list if the server omits it.')
+          return
+        }
+        handshakes.fml1(client, { forgeMods: normalizeMods(mods) })
+      }
+      if (account?.version) detectFixedVersionMods(client, account, [hook], dependencies)
+      else { (client.autoVersionHooks ||= []).push(hook) }
+    }
+    report(`Mod compatibility: using the explicitly selected ${profile.handshake.toUpperCase()} handshake.`)
+    return true
   }
   if (profile.mods.length) {
     const install = (version) => {
@@ -66,11 +89,23 @@ function installModdedCompatibility(client, account, report = () => {}, dependen
     if (profile.handshake === 'auto' && !account?.version) {
       // Auto-version hooks run after protocol selection and before handshaking.
       if (!client.autoVersionHooks) client.autoVersionHooks = []
-      client.autoVersionHooks.push((_response, negotiatedClient, options) => install(options.version || negotiatedClient.version))
+      client.autoVersionHooks.push((_response, negotiatedClient, options) => {
+        const version = options.version || negotiatedClient.version
+        const resolved = describeCompatibility({ ...account, version })
+        if (resolved.mode === 'vanilla-only') { report(resolved.summary); return }
+        install(version)
+      })
     } else install(account?.version)
   } else {
     const firstHook = client.autoVersionHooks?.length || 0
     autoVersionForge(client, {})
+    if (profile.loader === 'neoforge' && !account?.version) {
+      client.autoVersionHooks = client.autoVersionHooks.map((hook, index) => index < firstHook ? hook : (response, negotiatedClient, options) => {
+        const resolved = describeCompatibility({ ...account, version: options.version || negotiatedClient.version })
+        if (resolved.mode === 'vanilla-only') { report(resolved.summary); return }
+        hook(response, negotiatedClient, options)
+      })
+    }
     if (account?.version) {
       // Fixed-version connections skip upstream autoVersionHooks. Fetch the
       // Forge metadata separately without changing the selected game version.
@@ -108,15 +143,52 @@ function detectFixedVersionMods(client, account, hooks, dependencies) {
 
 function installCustomChannels(client, account, report = () => {}) {
   const profile = normalizeModdedProfile(account)
-  let registered = 0
-  for (const channel of profile.channels) {
-    try { client?.registerChannel?.(channel, ['restBuffer', []], true); registered += 1 } catch (error) { report(`Mod channel ${channel} was not registered: ${error.message}`) }
+  if (!client?.on) return 0
+  const reserved = new Set(['minecraft:brand', 'minecraft:register', 'minecraft:unregister', 'fml:loginwrapper', 'fml:handshake'])
+  const channels = profile.channels.filter(channel => {
+    if (!reserved.has(channel)) return true
+    report(`Mod channel ${channel} is reserved for a built-in codec and cannot be registered as raw data.`)
+    return false
+  })
+  const registered = new Set()
+  const reported = new Set()
+  const onState = state => {
+    if (state !== 'play') return
+    const repeat = []
+    for (const channel of channels) {
+      if (registered.has(channel)) { repeat.push(channel); continue }
+      try {
+        if (typeof client.registerChannel !== 'function') throw new Error('Protocol channel registration is unavailable')
+        client.registerChannel(channel, ['restBuffer', []], true)
+        registered.add(channel)
+      } catch (error) { report(`Mod channel ${channel} was not registered: ${error.message}`) }
+    }
+    if (repeat.length && client.writeChannel) {
+      const minor = Number(String(client.version || '').split('.')[1])
+      try { client.writeChannel(minor <= 12 ? 'REGISTER' : 'minecraft:register', repeat) }
+      catch (error) { report(`Optional mod channels could not be reannounced: ${error.message}`) }
+    }
+    if (registered.size) report(`Mod compatibility: registered ${registered.size} optional raw plugin channel${registered.size === 1 ? '' : 's'}; no custom mod codec is implied.`)
   }
-  if (registered) report(`Mod compatibility: registered ${registered} custom plugin channel${registered === 1 ? '' : 's'}.`)
-  return registered
+  const onRequest = packet => {
+    const channel = String(packet?.channel || '').slice(0, 128)
+    if (!channel || reported.has(channel) || reported.size >= 16 || channel === 'fml:loginwrapper') return
+    reported.add(channel)
+    report(`Server requested login channel ${channel}. AFK Desk has no custom login handler for it; use optional/server-side mods or a dedicated compatible adapter. The standard unsupported response is preserved.`)
+  }
+  client.on('state', onState)
+  client.on('login_plugin_request', onRequest)
+  client.once('end', () => {
+    client.removeListener('state', onState)
+    client.removeListener('login_plugin_request', onRequest)
+  })
+  onState(client.state)
+  return channels.length
 }
 
 function moddedBotOptions(account) {
+  const capability = describeCompatibility(account)
+  if (capability.error) throw new Error(capability.error)
   const profile = normalizeModdedProfile(account)
   return { brand: profile.brand }
 }

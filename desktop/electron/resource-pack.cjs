@@ -176,16 +176,20 @@ class ParsedResourcePack {
     return definition ? resolveItemDefinition(definition.model || definition, customModelData) : null
   }
 
-  #modelTexture(modelKey, seen = new Set(), inherited = {}) {
-    const key = normalizeAssetKey(modelKey)
-    if (!key || seen.has(key)) return null
-    seen.add(key)
-    const model = this.json.get(modelJsonKey(key))
-    if (!model) return key.includes(':item/') ? key : null
-    const textures = { ...inherited, ...(model.textures || {}) }
-    const candidate = textures.layer0 || textures.layer1 || textures.particle || Object.values(textures).find((value) => typeof value === 'string')
-    if (candidate) return resolveTextureVariable(candidate, textures)
-    return model.parent ? this.#modelTexture(model.parent, seen, textures) : null
+  #modelTexture(modelKey) {
+    const seen = new Set()
+    let key = normalizeAssetKey(modelKey)
+    let textures = {}
+    for (let depth = 0; depth < 64 && key && !seen.has(key); depth++) {
+      seen.add(key)
+      const model = this.json.get(modelJsonKey(key))
+      if (!model) return key.includes(':item/') ? key : null
+      textures = { ...textures, ...(model.textures || {}) }
+      const candidate = textures.layer0 || textures.layer1 || textures.particle || Object.values(textures).find((value) => typeof value === 'string')
+      if (candidate) return resolveTextureVariable(candidate, textures)
+      key = model.parent ? normalizeAssetKey(model.parent) : ''
+    }
+    return null
   }
 }
 

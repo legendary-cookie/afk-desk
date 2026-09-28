@@ -6,7 +6,9 @@ const KEY_CONTROLS = {
   KeyA: 'left',
   KeyS: 'back',
   KeyD: 'right',
-  Space: 'jump'
+  Space: 'jump',
+  ShiftLeft: 'sneak', ShiftRight: 'sneak',
+  ControlLeft: 'sprint', ControlRight: 'sprint'
 }
 
 const activeManualInputs = new Map()
@@ -17,6 +19,10 @@ let povFocusId = null
 let povRefreshActive = false
 const povSnapshots = new Map()
 const povDisplaySnapshots = new Map()
+const povCanvasRenderers = new WeakMap()
+const povHeldActions = new Set()
+const povItemAtlasImage = new Image()
+povItemAtlasImage.src = '../assets/minecraft-items.png'
 let povAnimationFrame = null
 let povLastAnimationAt = 0
 let povLookAnimationFrame = null
@@ -162,6 +168,8 @@ function bindEvents() {
   el['proxy-mode'].addEventListener('change', syncProxyFields)
   el.edition.addEventListener('change', syncEditionFields)
   el['mod-loader'].addEventListener('change', syncModdedFields)
+  el.version.addEventListener('change', updateCompatibilityHelp)
+  el['mod-handshake'].addEventListener('change', updateCompatibilityHelp)
   el['proxy-type'].addEventListener('change', () => {
     el['proxy-port'].value = el['proxy-type'].value === 'http' ? 8080 : 1080
   })
@@ -1088,15 +1096,20 @@ function bindManualMovement() {
     if (!KEY_CONTROLS[event.code]) return
     releaseManualInput(`key:${event.code}`)
   })
-  window.addEventListener('blur', releaseAllManualInputs)
-  document.addEventListener('visibilitychange', () => { if (document.hidden) releaseAllManualInputs() })
+  window.addEventListener('blur', () => { releaseAllManualInputs(); releasePovActions() })
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) { releaseAllManualInputs(); releasePovActions(); stopPovPolling(); stopPovAnimation() }
+    else if (el['pov-dialog'].open && !povPaused) { startPovPolling(); startPovAnimation() }
+  })
+  document.addEventListener('keydown', handlePovKey)
+  document.addEventListener('mouseup', releasePovMouse)
 }
 
 function shouldIgnoreMovementKey(target, code) {
   if (!state.selectedId) return true
   const openDialog = document.querySelector('dialog[open]')
   if (openDialog && openDialog !== el['pov-dialog']) return true
-  if (openDialog === el['pov-dialog'] && !povFocusId) return true
+  if (openDialog === el['pov-dialog'] && (!povFocusId || povPaused)) return true
   if (target?.closest?.('input, textarea, select, [contenteditable="true"]')) return true
   return code === 'Space' && Boolean(target?.closest?.('button, a'))
 }
@@ -1246,6 +1259,8 @@ function handleBotEvent({ type, id, payload }) {
     state.statuses.set(id, payload)
     if (!['online', 'connected'].includes(payload.status)) {
       releaseAllManualInputs(id)
+      releasePovActions(null, id)
+      povSnapshots.delete(id); povDisplaySnapshots.delete(id)
       state.serverWindows.delete(id)
     }
     renderAccountList()
@@ -1910,30 +1925,31 @@ function openPov() {
   el['pov-columns'].value = state.settings.povColumns || 3; el['pov-refresh'].value = String(state.settings.povRefreshMs || 1500); el['pov-fps'].value = String(state.settings.povFrameRate || 30); el['pov-view-mode'].value = state.settings.povViewMode || 'perspective'; el['pov-radius'].value = state.settings.povRadius || 6
   el['pov-dialog'].showModal(); renderPovGrid(); void refreshPov(); startPovPolling(); startPovAnimation()
 }
-function startPovPolling() { stopPovPolling(); if (!povPaused) povTimer = setInterval(refreshPov, povFocusId ? 50 : 200) }
+function startPovPolling() { stopPovPolling(); if (!povPaused && !document.hidden) povTimer = setInterval(refreshPov, povFocusId ? 75 : 350) }
 function closePov() { closePovInput(); if (el['pov-dialog'].open) el['pov-dialog'].close() }
 function closePovInput() {
-  stopPovPolling(); stopPovAnimation(); releaseAllManualInputs(povFocusId)
+  stopPovPolling(); stopPovAnimation(); releaseAllManualInputs(povFocusId); releasePovActions()
   if (document.pointerLockElement?.closest?.('#pov-grid')) document.exitPointerLock?.()
   if (povLookAnimationFrame) cancelAnimationFrame(povLookAnimationFrame)
   povLookAnimationFrame = null; povLookDelta = { accountId: null, yaw: 0, pitch: 0 }
 }
 function stopPovPolling() { if (povTimer) clearInterval(povTimer); povTimer = null }
-function togglePovPause() { povPaused = !povPaused; el['pov-pause'].textContent = povPaused ? 'Resume' : 'Pause'; el['pov-pause'].setAttribute('aria-pressed', String(povPaused)); if (povPaused) { stopPovPolling(); stopPovAnimation() } else { void refreshPov(); startPovPolling(); startPovAnimation() } }
+function togglePovPause() { povPaused = !povPaused; el['pov-pause'].textContent = povPaused ? 'Resume' : 'Pause'; el['pov-pause'].setAttribute('aria-pressed', String(povPaused)); if (povPaused) { closePovInput() } else { void refreshPov(); startPovPolling(); startPovAnimation() } }
 async function updatePovOptions() { state.settings = await api.saveSettings({ ...state.settings, povColumns: Number(el['pov-columns'].value), povRefreshMs: Number(el['pov-refresh'].value), povFrameRate: Number(el['pov-fps'].value), povViewMode: el['pov-view-mode'].value, povRadius: Number(el['pov-radius'].value) }); renderPovGrid(); startPovPolling(); startPovAnimation() }
 
 function startPovAnimation() {
   stopPovAnimation(); povLastAnimationAt = 0
   const frame = (now) => {
-    if (!el['pov-dialog'].open || povPaused) { povAnimationFrame = null; return }
-    const requested = povFocusId ? Number(el['pov-fps'].value) || 30 : 15
+    if (!el['pov-dialog'].open || povPaused || document.hidden) { povAnimationFrame = null; return }
+    const requested = povFocusId ? Math.min(60, Number(el['pov-fps'].value) || 30) : 10
     if (!povLastAnimationAt || now - povLastAnimationAt >= 1000 / requested - 1) {
       const elapsed = povLastAnimationAt ? now - povLastAnimationAt : 1000 / requested
       povLastAnimationAt = now
       for (const canvas of el['pov-grid'].querySelectorAll('canvas[data-account-id]')) {
         const account = state.accounts.find((entry) => entry.id === canvas.dataset.accountId)
         const target = povSnapshots.get(canvas.dataset.accountId)
-        if (!account || !target) continue
+        if (!account) continue
+        if (!target || !['online', 'connected'].includes(getStatus(account.id).status)) { drawPovPlaceholder(canvas, getStatus(account.id)); continue }
         const display = interpolatePovSnapshot(povDisplaySnapshots.get(account.id), target, elapsed)
         povDisplaySnapshots.set(account.id, display); drawPov(display, canvas, account)
       }
@@ -1953,7 +1969,7 @@ function interpolatePovSnapshot(current, target, elapsedMs) {
 function visiblePovAccounts() { const search = el['pov-search'].value.trim().toLowerCase(); return state.accounts.filter((account) => !search || `${account.profileName} ${account.minecraftName} ${account.host}`.toLowerCase().includes(search)).filter((account) => !povFocusId || account.id === povFocusId).slice(0, state.settings.povMaxFeeds || 9) }
 
 async function refreshPov() {
-  if (!el['pov-dialog'].open || povPaused || povRefreshActive) return
+  if (!el['pov-dialog'].open || povPaused || document.hidden || povRefreshActive) return
   povRefreshActive = true
   const accounts = visiblePovAccounts().filter((account) => ['online', 'connected'].includes(getStatus(account.id).status))
   const results = await Promise.allSettled(accounts.map((account) => api.getWorldSnapshot(account.id, Number(el['pov-radius'].value), Number(el['pov-refresh'].value))))
@@ -1969,6 +1985,9 @@ function renderPovGrid() {
     const card = document.createElement('article'); card.className = 'pov-card'
     const header = document.createElement('header'); header.append(createPlayerHead(account, 'account-avatar')); const title = document.createElement('div'); const strong = document.createElement('strong'); strong.textContent = account.minecraftName || account.profileName || account.label; const small = document.createElement('small'); small.textContent = account.host; title.append(strong, small); const expand = document.createElement('button'); expand.type = 'button'; expand.className = 'icon-button pov-expand'; expand.textContent = povFocusId ? '↙' : '↗'; expand.title = povFocusId ? 'Return to grid' : 'Focus this feed'; expand.addEventListener('click', () => { povFocusId = povFocusId ? null : account.id; state.selectedId = account.id; render(); renderPovGrid(); startPovPolling() }); header.append(title, expand)
     const canvas = document.createElement('canvas'); canvas.width = povFocusId ? 960 : 480; canvas.height = povFocusId ? 540 : 270; canvas.dataset.accountId = account.id; canvas.tabIndex = 0; canvas.setAttribute('aria-label', `${strong.textContent} POV. Click to focus, use WASD and Space to move, and move the mouse to look.`); canvas.addEventListener('click', selectPovTarget)
+    canvas.addEventListener('mousedown', handlePovMouseDown)
+    canvas.addEventListener('contextmenu', (event) => event.preventDefault())
+    canvas.addEventListener('wheel', handlePovWheel, { passive: false })
     const snapshot = povDisplaySnapshots.get(account.id) || povSnapshots.get(account.id); if (snapshot) requestAnimationFrame(() => drawPov(snapshot, canvas, account)); else drawPovPlaceholder(canvas, getStatus(account.id))
     card.append(header, canvas); return card
   }))
@@ -2009,13 +2028,14 @@ function drawMapPov(snapshot, canvas) {
 
 function selectPovTarget(event) {
   const canvas = event.currentTarget
+  if (povPaused || document.pointerLockElement === canvas) return
   const accountId = canvas.dataset.accountId
   if (accountId) { state.selectedId = accountId; povFocusId ||= accountId }
   const position = JSON.parse(canvas.dataset.position || 'null')
   if (el['pov-view-mode'].value !== 'map') {
     render(); renderPovGrid(); startPovPolling()
     const focusedCanvas = [...el['pov-grid'].querySelectorAll('canvas')].find((entry) => entry.dataset.accountId === accountId)
-    focusedCanvas?.focus(); focusedCanvas?.requestPointerLock?.()
+    focusedCanvas?.focus(); focusedCanvas?.requestPointerLock?.()?.catch?.(() => toast('Mouse capture unavailable. Focus the feed for keyboard controls.', 'error'))
     return
   }
   if (!position) return
@@ -2030,7 +2050,7 @@ function selectPovTarget(event) {
 function handlePovMouseMove(event) {
   const canvas = document.pointerLockElement
   const accountId = canvas?.closest?.('#pov-grid') ? canvas.dataset.accountId : null
-  if (!accountId || accountId !== povFocusId || el['pov-view-mode'].value !== 'perspective') return
+  if (!accountId || accountId !== povFocusId || povPaused || el['pov-view-mode'].value !== 'perspective') return
   povLookDelta.accountId = accountId
   const delta = povMath.mouseLookDelta(event.movementX, event.movementY)
   povLookDelta.yaw += delta.yaw
@@ -2053,7 +2073,7 @@ function handlePovPointerLockChange() {
   const canvas = document.pointerLockElement
   const active = Boolean(canvas?.closest?.('#pov-grid'))
   el['pov-grid'].classList.toggle('pointer-locked', active)
-  if (!active) releaseAllManualInputs(povFocusId)
+  if (!active) { releaseAllManualInputs(povFocusId); releasePovActions() }
   el['pov-detail'].textContent = active
     ? 'Gameplay control active · WASD move · Space jumps · Mouse looks · Esc releases the mouse.'
     : 'Click a perspective feed to capture the mouse and enable gameplay controls.'
@@ -2062,12 +2082,17 @@ function handlePovPointerLockChange() {
 function drawPerspectivePov(snapshot, canvas, account) {
   const context = canvas.getContext('2d'), width = canvas.width, height = canvas.height
   if (!snapshot.position) return drawPovPlaceholder(canvas, { status: 'online', detail: 'Waiting for chunks…' })
-  const renderWidth = povFocusId ? 320 : 192
+  let cached = povCanvasRenderers.get(canvas)
+  if (!cached) { cached = { renderer: new window.afkVoxelRenderer.VoxelRenderer(), canvas: document.createElement('canvas') }; povCanvasRenderers.set(canvas, cached) }
+  const renderWidth = povFocusId ? (Number(el['pov-fps'].value) === 60 ? 192 : 256) : 128
   const renderHeight = Math.round(renderWidth * 9 / 16)
-  const frame = renderLowResolutionVoxelView(snapshot, renderWidth, renderHeight)
-  const lowResolutionCanvas = document.createElement('canvas')
-  lowResolutionCanvas.width = renderWidth; lowResolutionCanvas.height = renderHeight
-  lowResolutionCanvas.getContext('2d').putImageData(frame, 0, 0)
+  const frame = cached.renderer.render(snapshot, renderWidth, renderHeight)
+  const lowResolutionCanvas = cached.canvas
+  if (lowResolutionCanvas.width !== renderWidth || lowResolutionCanvas.height !== renderHeight) {
+    lowResolutionCanvas.width = renderWidth; lowResolutionCanvas.height = renderHeight
+    cached.image = new ImageData(frame.data, renderWidth, renderHeight)
+  }
+  lowResolutionCanvas.getContext('2d').putImageData(cached.image, 0, 0)
   context.imageSmoothingEnabled = false
   context.clearRect(0, 0, width, height)
   context.drawImage(lowResolutionCanvas, 0, 0, width, height)
@@ -2077,86 +2102,84 @@ function drawPerspectivePov(snapshot, canvas, account) {
   canvas.dataset.position = JSON.stringify(snapshot.position); canvas.dataset.radius = String(snapshot.radius || 6)
 }
 
-function renderLowResolutionVoxelView(snapshot, width, height) {
-  const frame = new ImageData(width, height)
-  const blocks = new Map((snapshot.blocks || []).map((block) => [`${block.x},${block.y},${block.z}`, block]))
-  const position = snapshot.position
-  const camera = { x: Number(position.x), y: Number(position.y) + 1.62, z: Number(position.z) }
-  const { forward, right, up } = povMath.viewBasis(snapshot.yaw, snapshot.pitch)
-  const fovScale = Math.tan(72 * Math.PI / 360), aspect = width / height
-  const underwater = Boolean(blocks.get(`${Math.floor(camera.x)},${Math.floor(camera.y)},${Math.floor(camera.z)}`)?.water)
-  const maxDistance = Math.max(4, (Number(snapshot.radius) || 6) * 1.7)
-  for (let py = 0; py < height; py += 1) {
-    const screenY = (1 - (py + .5) / height * 2) * fovScale
-    for (let px = 0; px < width; px += 1) {
-      const screenX = ((px + .5) / width * 2 - 1) * fovScale * aspect
-      const ray = normalizeVector({ x: forward.x + right.x * screenX + up.x * screenY, y: forward.y + up.y * screenY, z: forward.z + right.z * screenX + up.z * screenY })
-      const hit = traceVoxelRay(camera, ray, blocks, maxDistance, underwater)
-      const color = hit ? shadeVoxelHit(hit, underwater) : voxelSkyColor(py / height, underwater)
-      const offset = (py * width + px) * 4
-      frame.data[offset] = color[0]; frame.data[offset + 1] = color[1]; frame.data[offset + 2] = color[2]; frame.data[offset + 3] = 255
-    }
-  }
-  return frame
-}
-
-function traceVoxelRay(origin, direction, blocks, maxDistance, underwater) {
-  let x = Math.floor(origin.x), y = Math.floor(origin.y), z = Math.floor(origin.z), distance = 0, face = 'y'
-  const stepX = direction.x < 0 ? -1 : 1, stepY = direction.y < 0 ? -1 : 1, stepZ = direction.z < 0 ? -1 : 1
-  const deltaX = direction.x === 0 ? Infinity : Math.abs(1 / direction.x)
-  const deltaY = direction.y === 0 ? Infinity : Math.abs(1 / direction.y)
-  const deltaZ = direction.z === 0 ? Infinity : Math.abs(1 / direction.z)
-  let sideX = direction.x < 0 ? (origin.x - x) * deltaX : (x + 1 - origin.x) * deltaX
-  let sideY = direction.y < 0 ? (origin.y - y) * deltaY : (y + 1 - origin.y) * deltaY
-  let sideZ = direction.z < 0 ? (origin.z - z) * deltaZ : (z + 1 - origin.z) * deltaZ
-  while (distance <= maxDistance) {
-    const block = blocks.get(`${x},${y},${z}`)
-    if (block && (block.solid || (block.water && !underwater))) {
-      const hitX = origin.x + direction.x * distance, hitY = origin.y + direction.y * distance, hitZ = origin.z + direction.z * distance
-      const u = face === 'x' ? fractional(hitZ) : fractional(hitX)
-      const v = face === 'y' ? fractional(hitZ) : fractional(hitY)
-      return { block, distance, face, x, y, z, u, v }
-    }
-    if (sideX < sideY && sideX < sideZ) { x += stepX; distance = sideX; sideX += deltaX; face = 'x' }
-    else if (sideY < sideZ) { y += stepY; distance = sideY; sideY += deltaY; face = 'y' }
-    else { z += stepZ; distance = sideZ; sideZ += deltaZ; face = 'z' }
-  }
-  return null
-}
-
-function shadeVoxelHit(hit, underwater) {
-  const base = blockRgb(hit.block.name, hit.block.water)
-  const faceLight = hit.face === 'y' ? 1 : hit.face === 'x' ? .82 : .68
-  const texel = (Math.floor(hit.u * 8) * 17 + Math.floor(hit.v * 8) * 31 + hit.x * 13 + hit.y * 7 + hit.z * 19) & 7
-  const edge = hit.u < .035 || hit.u > .965 || hit.v < .035 || hit.v > .965
-  const pattern = (edge ? .62 : .9 + texel * .018) * (/leaves/.test(hit.block.name) && texel < 2 ? .76 : 1)
-  const fog = Math.min(.78, hit.distance / 18)
-  const fogColor = underwater ? [36, 112, 151] : [126, 166, 190]
-  return base.map((channel, index) => Math.round(channel * faceLight * pattern * (1 - fog) + fogColor[index] * fog))
-}
-
-function voxelSkyColor(vertical, underwater) {
-  if (underwater) return [Math.round(22 + vertical * 16), Math.round(86 + vertical * 26), Math.round(122 + vertical * 30)]
-  if (vertical < .52) { const amount = vertical / .52; return [Math.round(94 + amount * 38), Math.round(157 + amount * 35), Math.round(205 + amount * 22)] }
-  const amount = (vertical - .52) / .48; return [Math.round(82 - amount * 28), Math.round(116 - amount * 38), Math.round(69 - amount * 22)]
-}
-
-function blockRgb(name = '', water = false) {
-  if (water || /water|kelp|seagrass/.test(name)) return [39, 126, 178]
-  if (/grass|leaves|moss|vine/.test(name)) return [79, 127, 54]
-  if (/stone|ore|deepslate|cobble/.test(name)) return [116, 120, 125]
-  if (/sand|sandstone/.test(name)) return [202, 184, 107]
-  if (/snow|quartz|white/.test(name)) return [218, 222, 218]
-  if (/wood|log|plank|chest|barrel/.test(name)) return [139, 101, 59]
-  if (/dirt|mud|clay/.test(name)) return [121, 88, 57]
-  return [132, 109, 76]
-}
-
-function fractional(value) { return value - Math.floor(value) }
-function normalizeVector(vector) { const length = Math.hypot(vector.x, vector.y, vector.z) || 1; return { x: vector.x / length, y: vector.y / length, z: vector.z / length } }
 function drawCrosshair(context, canvas) { const x = canvas.width / 2, y = canvas.height / 2, arm = Math.max(5, canvas.width / 96); context.save(); context.strokeStyle = '#ffffffdd'; context.lineWidth = Math.max(1, canvas.width / 480); context.beginPath(); context.moveTo(x - arm, y); context.lineTo(x + arm, y); context.moveTo(x, y - arm); context.lineTo(x, y + arm); context.stroke(); context.restore() }
 function drawPovEntities(context, snapshot, canvas) { const yaw = Number(snapshot.yaw) || 0, horizon = canvas.height * .5; context.font = `${Math.max(10, canvas.width / 48)}px sans-serif`; context.textAlign = 'center'; for (const entity of snapshot.entities || []) { const dx = Number(entity.x ?? entity.position?.x) - snapshot.position.x, dz = Number(entity.z ?? entity.position?.z) - snapshot.position.z, { side, depth } = povMath.projectHorizontal(dx, dz, yaw); if (depth <= .3) continue; const x = canvas.width / 2 + side / depth * canvas.width * .55, y = horizon - ((Number(entity.y ?? entity.position?.y) || snapshot.position.y) - snapshot.position.y) / depth * canvas.height * .55; if (x < 0 || x > canvas.width || y < 0 || y > canvas.height) continue; context.fillStyle = entity.type === 'player' ? '#ffe06a' : '#ff7479'; context.fillText(entity.username || entity.name || entity.type || 'entity', x, y) } }
-function drawPovHud(context, canvas, account) { const telemetry = state.telemetry.get(account.id) || {}; const health = Math.max(0, Math.min(20, Number(telemetry.health) || 0)); const food = Math.max(0, Math.min(20, Number(telemetry.food) || 0)); context.textAlign = 'left'; context.font = `${Math.max(12, canvas.width / 38)}px monospace`; context.fillStyle = '#ff5964'; context.fillText(`♥ ${health}/20`, 14, canvas.height - 44); context.fillStyle = '#e8b856'; context.fillText(`◆ ${food}/20`, 14, canvas.height - 18); const box = Math.max(20, Math.min(36, canvas.width / 15)), start = canvas.width / 2 - box * 4.5; for (let i = 0; i < 9; i++) { context.fillStyle = '#111b'; context.fillRect(start + i * box, canvas.height - box - 8, box - 2, box - 2); context.strokeStyle = '#ddd'; context.strokeRect(start + i * box, canvas.height - box - 8, box - 2, box - 2) } }
+function drawPovHud(context, canvas, account) {
+  const telemetry = state.telemetry.get(account.id) || {}, snapshot = povSnapshots.get(account.id) || {}
+  const health = Math.max(0, Math.min(20, Number(telemetry.health ?? snapshot.health) || 0)), food = Math.max(0, Math.min(20, Number(telemetry.food ?? snapshot.food) || 0))
+  const box = Math.max(24, Math.min(48, canvas.width / 12)), start = canvas.width / 2 - box * 4.5, bottom = canvas.height - box - 10
+  context.font = `${Math.max(12, canvas.width / 48)}px monospace`; context.textAlign = 'left'
+  context.fillStyle = '#080d12bb'; context.fillRect(start - 8, bottom - 29, box * 9 + 14, box + 36)
+  context.fillStyle = '#f76666'; context.fillText(`♥ ${health}/20`, start, bottom - 10)
+  context.textAlign = 'right'; context.fillStyle = '#e6b55d'; context.fillText(`◆ ${food}/20`, start + box * 9 - 4, bottom - 10)
+  const selected = Number(snapshot.quickBarSlot ?? telemetry.selectedHotbarSlot) || 0
+  const inventory = telemetry.inventory || []
+  const atlas = window.__minecraftItemAtlas
+  for (let i = 0; i < 9; i++) {
+    const x = start + i * box
+    context.fillStyle = i === selected ? '#766849cc' : '#17212cdd'; context.fillRect(x, bottom, box - 2, box - 2)
+    context.strokeStyle = i === selected ? '#ffdf85' : '#89939a'; context.lineWidth = i === selected ? 3 : 1; context.strokeRect(x, bottom, box - 2, box - 2)
+    const item = inventory.find(entry => entry.slot === 36 + i), index = atlas?.items?.[item?.name]
+    if (Number.isInteger(index) && povItemAtlasImage.complete && povItemAtlasImage.naturalWidth) context.drawImage(povItemAtlasImage, index % atlas.columns * atlas.cell, Math.floor(index / atlas.columns) * atlas.cell, atlas.cell, atlas.cell, x + 5, bottom + 5, box - 12, box - 12)
+    context.textAlign = 'left'; context.font = `${Math.max(9, box / 4)}px monospace`; context.fillStyle = '#bac7cc'; context.fillText(String(i + 1), x + 3, bottom + 10)
+    if (item?.count > 1) { context.textAlign = 'right'; context.fillStyle = '#fff'; context.fillText(String(item.count), x + box - 5, bottom + box - 5) }
+  }
+  const held = inventory.find(item => item.slot === 36 + selected) || snapshot.heldItem
+  context.textAlign = 'center'; context.fillStyle = '#f3eedf'; context.font = `${Math.max(11, canvas.width / 52)}px sans-serif`
+  if (held) context.fillText(held.customName || held.displayName || held.name, canvas.width / 2, bottom - 34)
+  context.lineWidth = 1
+}
+
+function handlePovMouseDown(event) {
+  const canvas = event.currentTarget
+  if (povPaused || document.pointerLockElement !== canvas || canvas.dataset.accountId !== povFocusId || ![0, 2].includes(event.button)) return
+  event.preventDefault()
+  const action = event.button === 0 ? 'dig-crosshair' : 'use-crosshair'
+  const key = `${povFocusId}|${event.button}`
+  if (povHeldActions.has(key)) return
+  povHeldActions.add(key)
+  api.worldAction(povFocusId, action, {}).catch(error => toast(cleanError(error), 'error'))
+}
+function releasePovMouse(event) { releasePovActions(event.button) }
+function releasePovActions(button = null, accountId = null) {
+  if (button === null && (!accountId || povLookDelta.accountId === accountId)) {
+    if (povLookAnimationFrame) cancelAnimationFrame(povLookAnimationFrame)
+    povLookAnimationFrame = null; povLookDelta = { accountId: null, yaw: 0, pitch: 0 }
+  }
+  for (const key of [...povHeldActions]) {
+    const [id, mouse] = key.split('|')
+    if (accountId && id !== accountId) continue
+    if (button !== null && Number(mouse) !== button) continue
+    povHeldActions.delete(key)
+    api.worldAction(id, Number(mouse) === 0 ? 'stop-dig' : 'stop-use', {}).catch(() => {})
+  }
+}
+function povInputAllowed(target) {
+  return el['pov-dialog'].open && povFocusId && !povPaused && !target?.closest?.('input, textarea, select, button, [contenteditable="true"]')
+}
+function selectPovHotbar(slot) {
+  const id = povFocusId
+  api.worldAction(id, 'select-hotbar', { slot }).then(() => {
+    const snapshot = povSnapshots.get(id)
+    if (snapshot) snapshot.quickBarSlot = slot
+  }).catch(error => toast(cleanError(error), 'error'))
+}
+function handlePovKey(event) {
+  if (event.code === 'Escape' && el['pov-dialog'].open) { releaseAllManualInputs(); releasePovActions(); return }
+  if (!povInputAllowed(event.target) || event.repeat) return
+  if (/^Digit[1-9]$/.test(event.code)) { event.preventDefault(); selectPovHotbar(Number(event.code.slice(-1)) - 1) }
+  if (event.code === 'KeyE') {
+    event.preventDefault(); closePov()
+    if (state.inventoryCollapsed) toggleInventory()
+    el['toggle-inventory'].focus()
+  }
+}
+function handlePovWheel(event) {
+  if (!povInputAllowed(event.target)) return
+  event.preventDefault()
+  const current = Number(povSnapshots.get(povFocusId)?.quickBarSlot ?? state.telemetry.get(povFocusId)?.selectedHotbarSlot) || 0
+  selectPovHotbar((current + (event.deltaY > 0 ? 1 : 8)) % 9)
+}
 
 function setPovTarget(position) {
   el['pov-x'].value = Math.floor(position.x)
@@ -2186,6 +2209,13 @@ function syncModdedFields() {
   const defaults = { fabric: 'fabric', quilt: 'quilt', forge: 'forge', neoforge: 'neoforge' }
   if (!el['client-brand'].value || ['vanilla', 'fabric', 'quilt', 'forge', 'neoforge'].includes(el['client-brand'].value)) el['client-brand'].value = defaults[loader] || 'vanilla'
   el['mod-handshake'].disabled = !['auto', 'forge', 'neoforge'].includes(loader)
+  updateCompatibilityHelp()
+}
+
+function updateCompatibilityHelp() {
+  const capability = window.AfkCompatibility?.describeCompatibility({ modLoader: el['mod-loader'].value, version: el.version.value, modHandshake: el['mod-handshake'].value })
+  const description = document.getElementById('compatibility-summary')
+  if (capability && description) description.textContent = [capability.error, capability.summary, ...capability.limitations].filter(Boolean).join(' ')
 }
 
 function createPlayerHead(account, className) {

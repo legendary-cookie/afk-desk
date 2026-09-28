@@ -114,18 +114,16 @@ function App(): React.JSX.Element {
         setAccounts(old => old.map(item => item.id === accountId ? {...item, minecraftName: payload.username || item.minecraftName, skinUrl: payload.skinUrl || item.skinUrl} : item));
       }
     };
-    nodejs.channel.addListener('engine-ready', onReady);
-    nodejs.channel.addListener('engine-reply', onReply);
-    nodejs.channel.addListener('engine-event', onEvent);
+    const subscriptions = [
+      nodejs.channel.addListener('engine-ready', onReady),
+      nodejs.channel.addListener('engine-reply', onReply),
+      nodejs.channel.addListener('engine-event', onEvent),
+    ] as unknown as {remove: () => void}[];
     if (!engineStarted) {
       engineStarted = true;
       nodejs.start('main.js');
     }
-    return () => {
-      nodejs.channel.removeListener('engine-ready', onReady);
-      nodejs.channel.removeListener('engine-reply', onReply);
-      nodejs.channel.removeListener('engine-event', onEvent);
-    };
+    return () => subscriptions.forEach(subscription => subscription.remove());
   }, [updateSession]);
 
   useEffect(() => {

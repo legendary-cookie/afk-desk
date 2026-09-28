@@ -12,7 +12,7 @@ jest.mock('@react-native-async-storage/async-storage', () => require('@react-nat
 jest.mock('react-native-keychain');
 jest.mock('nodejs-mobile-react-native', () => ({
   start: jest.fn(),
-  channel: {addListener: jest.fn(), removeListener: jest.fn(), post: jest.fn()},
+  channel: {addListener: jest.fn(() => ({remove: jest.fn()})), post: jest.fn()},
 }));
 
 const key = 'afkdesk.mobile.accounts.v1';
@@ -46,6 +46,14 @@ afterEach(() => {
   jest.clearAllTimers();
   jest.useRealTimers();
   jest.restoreAllMocks();
+});
+
+test('unmount removes all three bridge subscriptions', async () => {
+  await mount();
+  const subscriptions = (nodejs.channel.addListener as jest.Mock).mock.results.map(result => result.value as {remove: jest.Mock});
+  expect(subscriptions).toHaveLength(3);
+  act(() => app.unmount());
+  for (const subscription of subscriptions) expect(subscription.remove).toHaveBeenCalledTimes(1);
 });
 
 test('deleting the final account survives remount', async () => {

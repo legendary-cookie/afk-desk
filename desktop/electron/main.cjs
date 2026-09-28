@@ -1,6 +1,10 @@
 const { app, BrowserWindow, ipcMain, shell, safeStorage, Notification, dialog } = require('electron')
 const path = require('node:path')
 const crypto = require('node:crypto')
+const fs = require('node:fs')
+const os = require('node:os')
+const smokeTest = process.argv.includes('--smoke-test')
+if (smokeTest) app.setPath('userData', fs.mkdtempSync(path.join(os.tmpdir(), 'afkdesk-release-smoke-')))
 const { pathToFileURL } = require('node:url')
 const { registerTrustedHandler, restrictWindow, isMicrosoftLoginUrl } = require('./ipc-security.cjs')
 const { validateProfileId } = require('./profile-path.cjs')
@@ -37,6 +41,7 @@ const startupTimers = new Map()
 
 function createWindow() {
   mainWindow = new BrowserWindow({
+    show: !smokeTest,
     width: 1180,
     height: 760,
     minWidth: 860,
@@ -53,6 +58,27 @@ function createWindow() {
     }
   })
   restrictWindow(mainWindow)
+  if (smokeTest) {
+    const deadline = setTimeout(() => app.exit(1), 20000)
+    mainWindow.webContents.once('did-finish-load', async () => {
+      try {
+        const result = await mainWindow.webContents.executeJavaScript(`(async () => {
+          const [version, accounts, versions] = await Promise.all([window.afkDesk.getAppVersion(), window.afkDesk.listAccounts(), window.afkDesk.getSupportedVersions()]);
+          await window.afkDesk.getSettings();
+          return { version, accountCount: accounts.length, supportedVersions: versions.length, bridge: true };
+        })()`)
+        if (result.accountCount !== 0 || !result.supportedVersions) throw new Error('Smoke data isolation or protocol initialization failed.')
+        if (process.env.AFK_DESK_SMOKE_REPORT) fs.writeFileSync(process.env.AFK_DESK_SMOKE_REPORT, JSON.stringify({ ...result, userData: app.getPath('userData') }, null, 2))
+        console.log('AFK_DESK_SMOKE_PASS', JSON.stringify(result))
+        clearTimeout(deadline)
+        app.exit(0)
+      } catch (error) {
+        console.error('AFK_DESK_SMOKE_FAIL', error.message)
+        clearTimeout(deadline)
+        app.exit(1)
+      }
+    })
+  }
   mainWindow.loadFile(documentPath)
 }
 
@@ -90,9 +116,9 @@ app.whenReady().then(async () => {
   for (const account of store.list()) macroEngine.sync(account)
   registerIpc()
   createWindow()
-  autoConnectConfiguredAccounts()
-  if (process.argv.includes('--smoke-test')) setTimeout(() => app.quit(), 5000)
+  if (!smokeTest) autoConnectConfiguredAccounts()
 }).catch((error) => {
+  if (smokeTest) { console.error('AFK_DESK_SMOKE_FAIL', error.message); app.exit(1); return }
   dialog.showErrorBox('AFK Desk could not start', String(error?.message || error))
   app.quit()
 })

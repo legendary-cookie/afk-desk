@@ -6,6 +6,15 @@ const { ResourcePackLoader, parseResourcePack, normalizePackEvent, resolveItemDe
 
 const PIXEL = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+XfSUWQAAAABJRU5ErkJggg==', 'base64')
 
+test('a long chain of distinct model parents falls back without overflowing the stack', () => {
+  const zip = new AdmZip()
+  for (let index = 0; index < 12000; index++) {
+    zip.addFile(`assets/minecraft/models/item/chain_${index}.json`, Buffer.from(JSON.stringify({ parent: `minecraft:item/chain_${index + 1}` })))
+  }
+  const pack = parseResourcePack(zip.toBuffer())
+  assert.deepEqual(pack.itemAppearance({ name: 'chain_0' }), {})
+})
+
 test('declared oversized body is cancelled before any pull is consumed', async () => {
   let cancelled = false
   const loader = new ResourcePackLoader({ maxPackBytes: 16, fetchImpl: async () => new Response(new ReadableStream({

@@ -371,17 +371,17 @@ class BotManager {
 
   setAutoDeposit(id, enabled, range) {
     const session = this.sessions.get(id)
-    if (!session) return
     const nextEnabled = enabled === true
-    const nextRange = normalizeAutoDepositRange(range ?? session.account.autoDepositRange)
-    const changed = session.account.autoDepositToChest !== nextEnabled || session.account.autoDepositRange !== nextRange
-    session.account.autoDepositToChest = nextEnabled
-    session.account.autoDepositRange = nextRange
     const reconnectState = this.reconnects.get(id)
+    const nextRange = normalizeAutoDepositRange(range ?? session?.account.autoDepositRange ?? reconnectState?.account?.autoDepositRange)
     if (reconnectState?.account) {
       reconnectState.account.autoDepositToChest = nextEnabled
       reconnectState.account.autoDepositRange = nextRange
     }
+    if (!session) return
+    const changed = session.account.autoDepositToChest !== nextEnabled || session.account.autoDepositRange !== nextRange
+    session.account.autoDepositToChest = nextEnabled
+    session.account.autoDepositRange = nextRange
     if (changed) session.depositRevision += 1
     if (!nextEnabled) {
       try { session.activeDepositContainer?.close() } catch {}
@@ -648,7 +648,7 @@ function buildTelemetry(bot, nearestChest = null, resourcePack = null) {
     name: String(item.name || '').slice(0, 80),
     displayName: String(item.displayName || item.name || 'Unknown item').slice(0, 100),
     count: Math.max(1, Math.min(Number(item.count) || 1, 127)),
-    ...resourcePack?.itemAppearance?.(item)
+    ...safeItemAppearance(resourcePack, item)
   }))
   return {
     health: Math.max(0, Math.min(finite(bot?.health), 20)),
@@ -777,12 +777,20 @@ function buildWindowSnapshot(window, resourcePack = null) {
     name: String(item.name || '').slice(0, 80),
     displayName: String(item.displayName || item.name || 'Unknown item').slice(0, 100),
     count: Math.max(1, Math.min(Number(item.count) || 1, 127)),
-    ...resourcePack?.itemAppearance?.(item)
+    ...safeItemAppearance(resourcePack, item)
   } : null).filter(Boolean)
   const titleSource = window?.title?.json ?? window?.title
-  const resourceTitle = resourcePack?.titleAppearance?.(titleSource)
+  const resourceTitle = safeTitleAppearance(resourcePack, titleSource)
   const title = resourceTitle ? 'Custom server menu' : String(extractText(window?.title) || 'Server menu').slice(0, 100)
   return { open: true, title, ...(resourceTitle ? { resourceTitle } : {}), size: limit, slots }
+}
+
+function safeItemAppearance(resourcePack, item) {
+  try { return resourcePack?.itemAppearance?.(item) || {} } catch { return {} }
+}
+
+function safeTitleAppearance(resourcePack, title) {
+  try { return resourcePack?.titleAppearance?.(title) || null } catch { return null }
 }
 
 function safeUrlHost(value) {

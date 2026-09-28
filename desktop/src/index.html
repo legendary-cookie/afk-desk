@@ -210,7 +210,7 @@
           <label class="field full"><span>Minecraft version</span><select id="version"><option value="">Automatic (detect from server)</option></select><small>Automatic retries fresh detection if a remembered version fails. Choose an exact engine-supported version when a proxy hides the backend version.</small></label>
           <details id="modded-fields" class="form-section full modded-fields">
             <summary>Modded server compatibility</summary>
-            <p>Plugin servers work as vanilla. Automatic mode detects Forge FML1/FML2/FML3 and mirrors the server-advertised mod list. Fabric, Quilt and custom channels can be identified below.</p>
+            <p id="compatibility-summary" aria-live="polite">Vanilla-compatible servers are supported. Client mod code is not executed.</p>
             <div class="modded-grid">
               <label class="field"><span>Server type</span><select id="mod-loader"><option value="auto">Automatic</option><option value="vanilla">Vanilla</option><option value="plugin">Bukkit / Spigot / Paper / Purpur / proxy</option><option value="fabric">Fabric</option><option value="quilt">Quilt</option><option value="forge">Forge</option><option value="neoforge">NeoForge</option><option value="sponge">Sponge</option><option value="custom">Custom protocol</option></select></label>
               <label class="field"><span>Forge handshake</span><select id="mod-handshake"><option value="auto">Automatic generation</option><option value="off">Disabled</option><option value="fml1">FML1 (legacy)</option><option value="fml2">FML2</option><option value="fml3">FML3</option></select></label>
@@ -447,7 +447,8 @@
         </div>
         <div id="pov-grid" class="pov-grid" aria-live="polite"></div>
         <div class="beta-toolbar world-toolbar"><label>Radius <input id="pov-radius" type="number" min="2" max="12" value="6" /></label><label>X <input id="pov-x" type="number" step="1" /></label><label>Y <input id="pov-y" type="number" step="1" /></label><label>Z <input id="pov-z" type="number" step="1" /></label><button data-world-action="look-at" class="button secondary" type="button">Look</button><button data-world-action="walk-to" class="button secondary" type="button">Walk</button><button data-world-action="activate-block" class="button secondary" type="button">Use block</button><button data-world-action="dig-block" class="button danger" type="button">Dig</button><button data-world-action="attack-nearest" class="button danger" type="button">Attack nearest</button><button data-world-action="use-held" class="button secondary" type="button">Use held</button></div>
-        <p id="pov-detail" class="dialog-copy">Click a perspective feed to focus it. WASD moves, Space jumps, the mouse looks, and Esc releases the mouse.</p>
+        <p id="pov-detail" class="dialog-copy">Click a perspective feed to focus it and capture the mouse.</p>
+        <p class="pov-control-help"><kbd>WASD</kbd> move · <kbd>Space</kbd> jump · <kbd>Shift</kbd> sneak · <kbd>Ctrl</kbd> sprint · Left mouse dig · Right mouse use/place · <kbd>1–9</kbd> / wheel hotbar · <kbd>E</kbd> inventory · <kbd>Esc</kbd> release. Original lightweight textures; only loaded chunks are visible.</p>
       </div>
     </dialog>
 
@@ -455,6 +456,8 @@
     <div id="toast-region" class="toast-region" aria-live="polite"></div>
     <script src="../assets/minecraft-items.js"></script>
     <script src="../assets/pov-math.js"></script>
+    <script src="../assets/pov-renderer.js"></script>
+    <script src="../assets/compatibility-capabilities.js"></script>
     <script src="renderer.js"></script>
   </body>
 </html>
