@@ -1,15 +1,35 @@
 const api = window.afkDesk
+const povMath = window.afkPovMath
 
 const KEY_CONTROLS = {
   KeyW: 'forward',
   KeyA: 'left',
   KeyS: 'back',
   KeyD: 'right',
-  Space: 'jump'
+  Space: 'jump',
+  ShiftLeft: 'sneak', ShiftRight: 'sneak',
+  ControlLeft: 'sprint', ControlRight: 'sprint'
 }
 
 const activeManualInputs = new Map()
 let chatCompletionTimer = null
+let povTimer = null
+let povPaused = false
+let povFocusId = null
+let povRefreshActive = false
+const povSnapshots = new Map()
+const povDisplaySnapshots = new Map()
+const povCanvasRenderers = new WeakMap()
+const povHeldActions = new Set()
+const povItemAtlasImage = new Image()
+povItemAtlasImage.src = '../assets/minecraft-items.png'
+let povAnimationFrame = null
+let povLastAnimationAt = 0
+let povLookAnimationFrame = null
+let povLookDelta = { accountId: null, yaw: 0, pitch: 0 }
+let automationDraft = []
+let automationIndex = 0
+let automationStepIndex = -1
 
 const ENCHANTMENT_DETAILS = {
   aqua_affinity: [1, 'Speeds up underwater mining.'],
@@ -73,20 +93,21 @@ const state = {
   chatSuggestionIndex: 0,
   chatCompletionRequest: 0,
   supportedVersions: [],
-  settings: { uiScale: 100, sidePanelWidth: 300, inventoryHeight: 220, macros: [] },
+  settings: { uiScale: 100, workspaceDesign: 'hybrid', colorTheme: 'obsidian', sidePanelWidth: 300, inventoryHeight: 220, macros: [] },
   inventoryCollapsed: false,
+  workspaceView: 'overview',
   resolvedVersions: new Map(),
   login: { code: '', url: 'https://microsoft.com/link' }
 }
 
 const el = Object.fromEntries([
-  'account-list', 'account-count', 'add-account', 'open-settings', 'toggle-sidebar', 'quick-scale', 'quick-scale-number', 'reset-scale', 'quick-scale-value', 'display-menu', 'console-menu', 'macro-menu', 'settings-dialog', 'close-settings', 'start-with-windows', 'stagger-startup-connections', 'startup-connection-delay', 'save-settings', 'empty-state', 'dashboard', 'account-title', 'app-version', 'settings-app-version',
-  'edit-account', 'connection-button', 'status-banner', 'status-name', 'status-detail', 'server-address',
-  'detail-username', 'detail-server', 'detail-version', 'detail-antiafk', 'detail-environment', 'detail-water', 'detail-health', 'detail-hunger', 'detail-coordinates', 'detail-chest', 'detail-dimension', 'inventory-count', 'inventory-grid', 'auto-deposit-toggle', 'hold-selected', 'equip-destination', 'equip-selected', 'lock-selected', 'drop-selected', 'toggle-inventory', 'console-log', 'clear-console',
-  'chat-form', 'chat-message', 'chat-suggestions', 'macro-pad', 'manage-macros', 'macro-dialog', 'close-macro-dialog', 'macro-editor', 'macro-rows', 'add-macro', 'cancel-macros', 'save-macros', 'account-dialog', 'account-form', 'dialog-title', 'account-id', 'label',
-  'username', 'host', 'port', 'version', 'connect-on-startup', 'proxy-enabled', 'proxy-fields', 'proxy-type', 'proxy-host', 'proxy-port', 'proxy-username', 'proxy-password', 'proxy-password-help', 'proxy-clear-password', 'anti-afk', 'anti-afk-min-delay', 'anti-afk-max-delay', 'anti-afk-duration', 'anti-afk-look-degrees', 'anti-afk-walk-distance', 'anti-afk-jump', 'anti-afk-look', 'anti-afk-sneak', 'anti-afk-swing', 'anti-afk-walk', 'environmental-movement', 'auto-reconnect', 'auto-reconnect-delay', 'auto-reconnect-max', 'auto-deposit-setting', 'auto-deposit-range', 'join-message', 'server-change-message',
-  'message-delay', 'form-error', 'delete-account', 'login-dialog', 'login-code', 'open-login-private', 'open-login',
-  'close-login', 'ui-scale', 'ui-scale-value', 'column-resizer', 'inventory-resizer', 'server-window-dialog', 'server-window-title', 'server-window-stage', 'server-window-art', 'server-window-grid', 'close-server-window', 'item-tooltip', 'toast-region'
+  'account-list', 'account-count', 'add-account', 'open-settings', 'toggle-sidebar', 'open-command-center', 'command-dialog', 'command-search', 'command-results', 'close-command-center', 'quick-scale', 'quick-scale-number', 'reset-scale', 'quick-scale-value', 'quick-workspace-design', 'quick-color-theme', 'workspace-design', 'color-theme', 'display-menu', 'console-menu', 'macro-menu', 'settings-dialog', 'close-settings', 'start-with-windows', 'notifications-enabled', 'stagger-startup-connections', 'startup-connection-delay', 'save-settings', 'empty-state', 'dashboard', 'account-title', 'app-version', 'settings-app-version',
+  'edit-account', 'open-logs', 'open-automations', 'open-pov', 'connection-button', 'status-banner', 'status-name', 'status-detail', 'server-address',
+  'detail-username', 'detail-server', 'detail-version', 'detail-antiafk', 'detail-environment', 'detail-water', 'detail-health', 'detail-hunger', 'detail-coordinates', 'detail-chest', 'detail-dimension', 'inventory-count', 'inventory-grid', 'auto-deposit-toggle', 'hold-selected', 'equip-destination', 'equip-selected', 'lock-selected', 'inventory-action-count', 'deposit-selected', 'drop-count-selected', 'drop-selected', 'toggle-inventory', 'console-log', 'clear-console',
+  'chat-form', 'chat-message', 'chat-suggestions', 'macro-pad', 'manage-macros', 'macro-dialog', 'close-macro-dialog', 'macro-editor', 'macro-rows', 'add-macro', 'cancel-macros', 'save-macros', 'account-dialog', 'account-form', 'dialog-title', 'account-id', 'identity-id', 'profile-name', 'edition', 'label',
+  'username', 'host', 'port', 'version', 'modded-fields', 'mod-loader', 'mod-handshake', 'client-brand', 'mod-list', 'mod-channels', 'connect-on-startup', 'proxy-mode', 'proxy-enabled', 'proxy-fields', 'proxy-type', 'proxy-host', 'proxy-port', 'proxy-username', 'proxy-password', 'proxy-password-help', 'proxy-clear-password', 'share-proxy-pool', 'proxy-label', 'proxy-max-sessions', 'alert-disconnect', 'alert-errors', 'alert-health', 'anti-afk', 'anti-afk-min-delay', 'anti-afk-max-delay', 'anti-afk-duration', 'anti-afk-look-degrees', 'anti-afk-walk-distance', 'anti-afk-jump', 'anti-afk-look', 'anti-afk-sneak', 'anti-afk-swing', 'anti-afk-walk', 'environmental-movement', 'auto-reconnect', 'auto-reconnect-delay', 'auto-reconnect-backoff', 'auto-reconnect-max-delay', 'auto-reconnect-rate-limit-delay', 'auto-reconnect-max', 'connect-timeout', 'reconnect-reset-delay', 'auto-deposit-setting', 'auto-deposit-range', 'join-message', 'server-change-message',
+  'message-delay', 'form-error', 'delete-account', 'duplicate-profile', 'login-dialog', 'login-code', 'open-login-private', 'open-login',
+  'close-login', 'ui-scale', 'ui-scale-value', 'pov-settings-refresh', 'pov-settings-fps', 'pov-settings-radius', 'pov-settings-columns', 'pov-max-feeds', 'pov-settings-view-mode', 'pov-show-hud', 'column-resizer', 'inventory-resizer', 'server-window-dialog', 'server-window-title', 'server-window-stage', 'server-window-art', 'server-window-grid', 'close-server-window', 'logs-dialog', 'close-logs', 'log-filter', 'refresh-logs', 'clear-persistent-logs', 'persistent-log-view', 'automation-dialog', 'close-automation', 'automation-json', 'automation-list', 'automation-flow', 'automation-palette', 'automation-inspector', 'automation-add', 'automation-delete', 'automation-scope', 'automation-json-toggle', 'automation-test', 'save-automations', 'stop-automation', 'pov-dialog', 'close-pov', 'pov-grid', 'pov-search', 'pov-columns', 'pov-refresh', 'pov-fps', 'pov-view-mode', 'pov-pause', 'pov-back-grid', 'pov-radius', 'pov-x', 'pov-y', 'pov-z', 'pov-detail', 'item-tooltip', 'toast-region'
 ].map((id) => [id, document.getElementById(id)]))
 
 async function init() {
@@ -99,6 +120,7 @@ async function init() {
   el['settings-app-version'].textContent = `Version ${appVersion}`
   state.selectedId = state.accounts[0]?.id || null
   applyUiScale(state.settings.uiScale)
+  applyVisualDesign(state.settings.workspaceDesign, state.settings.colorTheme)
   applyPanelLayout(state.settings)
   bindEvents()
   render()
@@ -109,6 +131,14 @@ async function init() {
 function bindEvents() {
   el['add-account'].addEventListener('click', () => openAccountDialog())
   el['open-settings'].addEventListener('click', openSettingsDialog)
+  el['open-command-center'].addEventListener('click', openCommandCenter)
+  el['close-command-center'].addEventListener('click', closeCommandCenter)
+  el['command-search'].addEventListener('input', renderCommandResults)
+  el['command-search'].addEventListener('keydown', handleCommandSearchKey)
+  el['command-dialog'].addEventListener('cancel', (event) => { event.preventDefault(); closeCommandCenter() })
+  document.addEventListener('keydown', (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); openCommandCenter() }
+  })
   el['close-settings'].addEventListener('click', () => {
     applyUiScale(state.settings.uiScale)
     el['settings-dialog'].close()
@@ -117,18 +147,29 @@ function bindEvents() {
   el['stagger-startup-connections'].addEventListener('change', syncStartupDelay)
   document.querySelector('[data-action="add"]').addEventListener('click', () => openAccountDialog())
   el['edit-account'].addEventListener('click', () => openAccountDialog(selectedAccount()))
+  el['open-logs'].addEventListener('click', openPersistentLogs)
+  el['open-automations'].addEventListener('click', openAutomations)
+  el['open-pov'].addEventListener('click', openPov)
   el['account-form'].addEventListener('submit', saveAccount)
   document.querySelectorAll('[data-close-account]').forEach((button) => button.addEventListener('click', () => el['account-dialog'].close()))
   el['delete-account'].addEventListener('click', deleteAccount)
+  el['duplicate-profile'].addEventListener('click', duplicateProfile)
   el['connection-button'].addEventListener('click', toggleConnection)
   el['drop-selected'].addEventListener('click', dropSelectedStack)
+  el['drop-count-selected'].addEventListener('click', dropSelectedCount)
+  el['deposit-selected'].addEventListener('click', depositSelectedCount)
   el['hold-selected'].addEventListener('click', holdSelectedItem)
   el['equip-selected'].addEventListener('click', equipSelectedItem)
   el['lock-selected'].addEventListener('click', toggleSelectedItemLock)
   el['auto-deposit-toggle'].addEventListener('change', toggleAutoDeposit)
   el['close-server-window'].addEventListener('click', closeServerWindow)
   el['server-window-dialog'].addEventListener('cancel', (event) => { event.preventDefault(); closeServerWindow() })
-  el['proxy-enabled'].addEventListener('change', syncProxyFields)
+  el['proxy-enabled'].addEventListener('change', () => { el['proxy-mode'].value = el['proxy-enabled'].checked ? 'manual' : 'direct'; syncProxyFields() })
+  el['proxy-mode'].addEventListener('change', syncProxyFields)
+  el.edition.addEventListener('change', syncEditionFields)
+  el['mod-loader'].addEventListener('change', syncModdedFields)
+  el.version.addEventListener('change', updateCompatibilityHelp)
+  el['mod-handshake'].addEventListener('change', updateCompatibilityHelp)
   el['proxy-type'].addEventListener('change', () => {
     el['proxy-port'].value = el['proxy-type'].value === 'http' ? 8080 : 1080
   })
@@ -161,7 +202,15 @@ function bindEvents() {
     if (event.key === 'Enter') { event.preventDefault(); void saveQuickScale(el['quick-scale-number'].value) }
   })
   el['reset-scale'].addEventListener('click', () => saveQuickScale(100))
+  el['quick-workspace-design'].addEventListener('change', () => saveVisualDesign(el['quick-workspace-design'].value, el['quick-color-theme'].value))
+  el['quick-color-theme'].addEventListener('change', () => saveVisualDesign(el['quick-workspace-design'].value, el['quick-color-theme'].value))
+  el['workspace-design'].addEventListener('change', () => applyVisualDesign(el['workspace-design'].value, el['color-theme'].value))
+  el['color-theme'].addEventListener('change', () => applyVisualDesign(el['workspace-design'].value, el['color-theme'].value))
   document.querySelectorAll('[data-collapse-target]').forEach((button) => button.addEventListener('click', () => toggleSection(button)))
+  document.querySelectorAll('[data-workspace-view]').forEach((button) => button.addEventListener('click', () => setWorkspaceView(button.dataset.workspaceView)))
+  document.querySelector('[data-workspace-dialog="pov"]').addEventListener('click', openPov)
+  document.querySelector('[data-workspace-dialog="automations"]').addEventListener('click', openAutomations)
+  document.querySelector('[data-workspace-dialog="logs"]').addEventListener('click', openPersistentLogs)
   bindManualMovement()
   bindPanelResizers()
   document.querySelectorAll('[data-look]').forEach((button) => button.addEventListener('click', () => run(() => api.look(state.selectedId, button.dataset.look))))
@@ -172,6 +221,30 @@ function bindEvents() {
   el['open-login'].addEventListener('click', () => run(() => api.openExternal(state.login.url)))
   el['open-login-private'].addEventListener('click', () => run(() => api.openIsolatedLogin(state.login.accountId, state.login.url, state.login.code)))
   el['close-login'].addEventListener('click', () => el['login-dialog'].close())
+  el['close-logs'].addEventListener('click', () => el['logs-dialog'].close())
+  el['refresh-logs'].addEventListener('click', refreshPersistentLogs)
+  el['log-filter'].addEventListener('change', refreshPersistentLogs)
+  el['clear-persistent-logs'].addEventListener('click', clearPersistentLogs)
+  el['close-automation'].addEventListener('click', () => el['automation-dialog'].close())
+  el['save-automations'].addEventListener('click', saveAutomations)
+  el['stop-automation'].addEventListener('click', () => run(() => api.stopAutomation(state.selectedId)))
+  el['automation-add'].addEventListener('click', addAutomation)
+  el['automation-delete'].addEventListener('click', deleteAutomation)
+  el['automation-json-toggle'].addEventListener('change', toggleAutomationJson)
+  el['automation-test'].addEventListener('click', testAutomation)
+  el['close-pov'].addEventListener('click', closePov)
+  el['pov-dialog'].addEventListener('close', closePovInput)
+  document.addEventListener('mousemove', handlePovMouseMove)
+  document.addEventListener('pointerlockchange', handlePovPointerLockChange)
+  el['pov-radius'].addEventListener('change', refreshPov)
+  el['pov-search'].addEventListener('input', renderPovGrid)
+  el['pov-columns'].addEventListener('change', updatePovOptions)
+  el['pov-refresh'].addEventListener('change', updatePovOptions)
+  el['pov-fps'].addEventListener('change', updatePovOptions)
+  el['pov-view-mode'].addEventListener('change', updatePovOptions)
+  el['pov-pause'].addEventListener('click', togglePovPause)
+  el['pov-back-grid'].addEventListener('click', () => { povFocusId = null; renderPovGrid(); startPovPolling() })
+  document.querySelectorAll('[data-world-action]').forEach((button) => button.addEventListener('click', () => runWorldAction(button.dataset.worldAction)))
 }
 
 function populateVersionOptions(versions) {
@@ -195,12 +268,12 @@ function render() {
   if (!account) { renderServerWindow(); return }
 
   const status = getStatus(account.id)
-  el['account-title'].textContent = account.label
+  el['account-title'].textContent = account.profileName || account.label
   el['server-address'].textContent = `${account.host}:${account.port}`
   el['detail-username'].textContent = account.username
   el['detail-server'].textContent = `${account.host}:${account.port}`
   const resolvedVersion = state.resolvedVersions.get(account.id) || account.lastSuccessfulVersion
-  el['detail-version'].textContent = account.version || (resolvedVersion ? `${resolvedVersion} (auto)` : 'Auto-detect')
+  el['detail-version'].textContent = account.edition === 'bedrock' ? `Bedrock ${resolvedVersion || 'auto'}` : account.version || (resolvedVersion ? `${resolvedVersion} (auto)` : 'Auto-detect')
   const minDelay = account.antiAfkMinDelay ?? account.antiAfkInterval ?? 45
   const maxDelay = account.antiAfkMaxDelay ?? account.antiAfkInterval ?? minDelay
   el['detail-antiafk'].textContent = account.antiAfk ? `${minDelay}–${maxDelay} seconds` : 'Disabled'
@@ -229,9 +302,9 @@ function renderAccountList() {
     const copy = document.createElement('span')
     copy.className = 'account-copy'
     const title = document.createElement('strong')
-    title.textContent = account.label
+    title.textContent = account.profileName || account.label
     const server = document.createElement('span')
-    server.textContent = account.host
+    server.textContent = `${account.edition === 'bedrock' ? 'Bedrock · ' : ''}${account.host}`
     copy.append(title, server)
     const indicator = document.createElement('span')
     indicator.className = `mini-status ${status}`
@@ -601,6 +674,8 @@ function updateInventoryActions(canInteract = ['online', 'connected'].includes(g
   const item = telemetry?.inventory?.find((entry) => entry.slot === state.selectedInventorySlot)
   const locked = item && isSelectedAccountSlotLocked(item.slot)
   el['drop-selected'].disabled = !canInteract || !item || locked
+  el['drop-count-selected'].disabled = !canInteract || !item || locked
+  el['deposit-selected'].disabled = !canInteract || !item || locked
   el['drop-selected'].textContent = 'Drop'
   el['drop-selected'].title = item ? locked ? `${item.displayName} is locked` : `Drop ${item.count} × ${item.displayName}` : 'Select a stack to drop'
   el['lock-selected'].disabled = !item
@@ -681,6 +756,22 @@ async function dropSelectedStack() {
   renderTelemetry()
 }
 
+async function dropSelectedCount() {
+  const slot = state.selectedInventorySlot
+  if (slot == null) return
+  const count = Math.max(1, Math.min(Number(el['inventory-action-count'].value) || 1, 64))
+  try { await api.dropItems(state.selectedId, slot, count); toast(`Dropped ${count} item${count === 1 ? '' : 's'}.`) }
+  catch (error) { toast(cleanError(error), 'error') }
+}
+
+async function depositSelectedCount() {
+  const slot = state.selectedInventorySlot
+  if (slot == null) return
+  const count = Math.max(1, Math.min(Number(el['inventory-action-count'].value) || 1, 64))
+  try { await api.depositSlot(state.selectedId, slot, count); toast(`Deposited ${count} item${count === 1 ? '' : 's'}.`) }
+  catch (error) { toast(cleanError(error), 'error') }
+}
+
 async function toggleAutoDeposit() {
   const account = selectedAccount()
   if (!account) return
@@ -704,13 +795,22 @@ function openAccountDialog(account) {
   el['account-form'].reset()
   el['form-error'].hidden = true
   el['account-id'].value = account?.id || ''
+  el['identity-id'].value = account?.identityId || ''
+  el['profile-name'].value = account?.profileName || account?.host || ''
+  el.edition.value = account?.edition || 'java'
   el.label.value = account?.minecraftName || ''
   el.username.value = account?.username || ''
   el.host.value = account?.host || ''
   el.port.value = account?.port || 25565
   el.version.value = account?.version || ''
+  el['mod-loader'].value = account?.modLoader || 'auto'
+  el['mod-handshake'].value = account?.modHandshake || 'auto'
+  el['client-brand'].value = account?.clientBrand || ''
+  el['mod-list'].value = (account?.mods || []).map((mod) => `${mod.modid}@${mod.version}`).join('\n')
+  el['mod-channels'].value = (account?.modChannels || []).join('\n')
   el['connect-on-startup'].checked = account?.connectOnStartup === true
   el['proxy-enabled'].checked = account?.proxy?.enabled === true
+  el['proxy-mode'].value = account?.proxyMode || (account?.proxy?.enabled ? 'manual' : 'direct')
   el['proxy-type'].value = account?.proxy?.type || 'socks5'
   el['proxy-host'].value = account?.proxy?.host || ''
   el['proxy-port'].value = account?.proxy?.port || (account?.proxy?.type === 'http' ? 8080 : 1080)
@@ -719,7 +819,15 @@ function openAccountDialog(account) {
   el['proxy-password'].placeholder = account?.proxy?.hasPassword ? 'Saved password unchanged' : 'Not saved yet'
   el['proxy-password-help'].textContent = account?.proxy?.hasPassword ? 'A password is saved with Windows encryption. Enter a new one only to replace it.' : 'Encrypted with Windows protection when saved.'
   el['proxy-clear-password'].checked = false
+  el['share-proxy-pool'].checked = account?.shareProxyToPool === true
+  el['proxy-label'].value = account?.proxyLabel || ''
+  el['proxy-max-sessions'].value = account?.proxyMaxSessions || 1
+  el['alert-disconnect'].checked = account?.alerts?.disconnect !== false
+  el['alert-errors'].checked = account?.alerts?.errors !== false
+  el['alert-health'].value = account?.alerts?.healthBelow ?? 6
   syncProxyFields()
+  syncEditionFields(false)
+  syncModdedFields()
   el['anti-afk'].checked = account?.antiAfk !== false
   const legacyAntiAfkDelay = account?.antiAfkInterval || 45
   el['anti-afk-min-delay'].value = account?.antiAfkMinDelay ?? legacyAntiAfkDelay
@@ -735,7 +843,12 @@ function openAccountDialog(account) {
   el['environmental-movement'].checked = account?.environmentalMovement !== false
   el['auto-reconnect'].checked = account?.autoReconnect !== false
   el['auto-reconnect-delay'].value = account?.autoReconnectDelay || 5
+  el['auto-reconnect-backoff'].value = account?.autoReconnectBackoffMultiplier ?? 2
+  el['auto-reconnect-max-delay'].value = account?.autoReconnectMaxDelay ?? 300
+  el['auto-reconnect-rate-limit-delay'].value = account?.autoReconnectRateLimitDelay ?? 30
   el['auto-reconnect-max'].value = account?.autoReconnectMaxAttempts ?? 0
+  el['connect-timeout'].value = account?.connectTimeoutSeconds ?? 60
+  el['reconnect-reset-delay'].value = account?.reconnectResetDelay ?? 60
   el['auto-deposit-setting'].checked = account?.autoDepositToChest === true
   el['auto-deposit-range'].value = account?.autoDepositRange ?? 5
   el['join-message'].value = account?.joinMessage || ''
@@ -743,6 +856,7 @@ function openAccountDialog(account) {
   el['message-delay'].value = account?.messageDelay ?? 6
   el['dialog-title'].textContent = account ? 'Edit account' : 'Add account'
   el['delete-account'].hidden = !account
+  el['duplicate-profile'].hidden = !account
   el['account-dialog'].showModal()
   setTimeout(() => (account ? el.host : el.username).focus(), 0)
 }
@@ -752,11 +866,19 @@ async function saveAccount(event) {
   const existing = state.accounts.find((account) => account.id === el['account-id'].value)
   const input = {
     id: el['account-id'].value || undefined,
+    identityId: el['identity-id'].value || undefined,
+    profileName: el['profile-name'].value,
+    edition: el.edition.value,
     label: el.label.value,
     username: el.username.value,
     host: el.host.value,
     port: Number(el.port.value),
     version: el.version.value,
+    modLoader: el['mod-loader'].value,
+    modHandshake: el['mod-handshake'].value,
+    clientBrand: el['client-brand'].value,
+    modList: el['mod-list'].value,
+    modChannels: el['mod-channels'].value,
     connectOnStartup: el['connect-on-startup'].checked,
     proxy: {
       enabled: el['proxy-enabled'].checked,
@@ -767,6 +889,16 @@ async function saveAccount(event) {
       password: el['proxy-password'].value,
       clearPassword: el['proxy-clear-password'].checked
     },
+    proxyMode: el['proxy-mode'].value,
+    shareProxyToPool: el['share-proxy-pool'].checked,
+    proxyLabel: el['proxy-label'].value,
+    proxyMaxSessions: Number(el['proxy-max-sessions'].value),
+    alerts: {
+      disconnect: el['alert-disconnect'].checked,
+      errors: el['alert-errors'].checked,
+      healthBelow: Number(el['alert-health'].value)
+    },
+    automations: existing?.automations || [],
     minecraftName: existing?.minecraftName || '',
     minecraftUuid: existing?.minecraftUuid || '',
     skinUrl: existing?.skinUrl || '',
@@ -784,7 +916,12 @@ async function saveAccount(event) {
     environmentalMovement: el['environmental-movement'].checked,
     autoReconnect: el['auto-reconnect'].checked,
     autoReconnectDelay: Number(el['auto-reconnect-delay'].value),
+    autoReconnectBackoffMultiplier: Number(el['auto-reconnect-backoff'].value),
+    autoReconnectMaxDelay: Number(el['auto-reconnect-max-delay'].value),
+    autoReconnectRateLimitDelay: Number(el['auto-reconnect-rate-limit-delay'].value),
     autoReconnectMaxAttempts: Number(el['auto-reconnect-max'].value),
+    connectTimeoutSeconds: Number(el['connect-timeout'].value),
+    reconnectResetDelay: Number(el['reconnect-reset-delay'].value),
     autoDepositToChest: el['auto-deposit-setting'].checked,
     autoDepositRange: Number(el['auto-deposit-range'].value),
     joinMessage: el['join-message'].value,
@@ -820,6 +957,20 @@ async function deleteAccount() {
   el['account-dialog'].close()
   render()
   toast('Account deleted.')
+}
+
+async function duplicateProfile() {
+  const id = el['account-id'].value
+  if (!id) return
+  try {
+    const copy = await api.duplicateProfile(id)
+    state.accounts.push(copy)
+    state.selectedId = copy.id
+    el['account-dialog'].close()
+    render()
+    openAccountDialog(copy)
+    toast('Server profile duplicated. Authentication identity is shared.')
+  } catch (error) { toast(cleanError(error), 'error') }
 }
 
 async function toggleConnection() {
@@ -945,12 +1096,20 @@ function bindManualMovement() {
     if (!KEY_CONTROLS[event.code]) return
     releaseManualInput(`key:${event.code}`)
   })
-  window.addEventListener('blur', releaseAllManualInputs)
-  document.addEventListener('visibilitychange', () => { if (document.hidden) releaseAllManualInputs() })
+  window.addEventListener('blur', () => { releaseAllManualInputs(); releasePovActions() })
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) { releaseAllManualInputs(); releasePovActions(); stopPovPolling(); stopPovAnimation() }
+    else if (el['pov-dialog'].open && !povPaused) { startPovPolling(); startPovAnimation() }
+  })
+  document.addEventListener('keydown', handlePovKey)
+  document.addEventListener('mouseup', releasePovMouse)
 }
 
 function shouldIgnoreMovementKey(target, code) {
-  if (!state.selectedId || document.querySelector('dialog[open]')) return true
+  if (!state.selectedId) return true
+  const openDialog = document.querySelector('dialog[open]')
+  if (openDialog && openDialog !== el['pov-dialog']) return true
+  if (openDialog === el['pov-dialog'] && (!povFocusId || povPaused)) return true
   if (target?.closest?.('input, textarea, select, [contenteditable="true"]')) return true
   return code === 'Space' && Boolean(target?.closest?.('button, a'))
 }
@@ -1100,6 +1259,8 @@ function handleBotEvent({ type, id, payload }) {
     state.statuses.set(id, payload)
     if (!['online', 'connected'].includes(payload.status)) {
       releaseAllManualInputs(id)
+      releasePovActions(null, id)
+      povSnapshots.delete(id); povDisplaySnapshots.delete(id)
       state.serverWindows.delete(id)
     }
     renderAccountList()
@@ -1136,7 +1297,7 @@ function handleBotEvent({ type, id, payload }) {
       if (validSkinUrl(payload.skinUrl)) account.skinUrl = payload.skinUrl
       renderAccountList()
       if (id === state.selectedId) {
-        el['account-title'].textContent = account.label
+        el['account-title'].textContent = account.profileName || account.label
         el['detail-username'].textContent = account.username
       }
     }
@@ -1149,6 +1310,14 @@ function handleBotEvent({ type, id, payload }) {
     }
     el['login-code'].textContent = payload.code || 'See console'
     if (!el['login-dialog'].open) el['login-dialog'].showModal()
+  }
+  if (type === 'macro') {
+    const logs = state.logs.get(id) || []
+    state.logs.set(id, [...logs.slice(-499), { kind: payload.status === 'failed' ? 'error' : 'system', message: `Automation ${payload.name || payload.macroId}: ${payload.status}${payload.error ? ` — ${payload.error}` : ''}`, at: payload.at }])
+    if (id === state.selectedId) {
+      renderConsole()
+      if (payload.status === 'failed') toast(`Automation failed: ${payload.error}`, 'error')
+    }
   }
 }
 
@@ -1302,9 +1471,19 @@ async function openSettingsDialog() {
     const settings = await api.getSettings()
     state.settings = settings
     el['start-with-windows'].checked = settings.startWithWindows === true
+    el['notifications-enabled'].checked = settings.notificationsEnabled === true
     el['stagger-startup-connections'].checked = settings.staggerStartupConnections !== false
     el['startup-connection-delay'].value = settings.startupConnectionDelay || 3
     el['ui-scale'].value = settings.uiScale || 100
+    el['workspace-design'].value = settings.workspaceDesign || 'hybrid'
+    el['color-theme'].value = settings.colorTheme || 'obsidian'
+    el['pov-settings-refresh'].value = String(settings.povRefreshMs || 1500)
+    el['pov-settings-fps'].value = String(settings.povFrameRate || 30)
+    el['pov-settings-radius'].value = settings.povRadius || 6
+    el['pov-settings-columns'].value = settings.povColumns || 3
+    el['pov-max-feeds'].value = settings.povMaxFeeds || 9
+    el['pov-settings-view-mode'].value = settings.povViewMode || 'perspective'
+    el['pov-show-hud'].checked = settings.povShowHud !== false
     el['ui-scale-value'].textContent = `${el['ui-scale'].value}%`
     syncStartupDelay()
     el['settings-dialog'].showModal()
@@ -1316,11 +1495,22 @@ async function saveSettings() {
     state.settings = await api.saveSettings({
       ...state.settings,
       startWithWindows: el['start-with-windows'].checked,
+      notificationsEnabled: el['notifications-enabled'].checked,
       staggerStartupConnections: el['stagger-startup-connections'].checked,
       startupConnectionDelay: Number(el['startup-connection-delay'].value),
       uiScale: Number(el['ui-scale'].value)
+      ,workspaceDesign: el['workspace-design'].value
+      ,colorTheme: el['color-theme'].value
+      ,povRefreshMs: Number(el['pov-settings-refresh'].value)
+      ,povFrameRate: Number(el['pov-settings-fps'].value)
+      ,povRadius: Number(el['pov-settings-radius'].value)
+      ,povColumns: Number(el['pov-settings-columns'].value)
+      ,povMaxFeeds: Number(el['pov-max-feeds'].value)
+      ,povViewMode: el['pov-settings-view-mode'].value
+      ,povShowHud: el['pov-show-hud'].checked
     })
     applyUiScale(state.settings.uiScale)
+    applyVisualDesign(state.settings.workspaceDesign, state.settings.colorTheme)
     el['settings-dialog'].close()
     toast('Settings saved.')
   } catch (error) { toast(cleanError(error), 'error') }
@@ -1524,9 +1714,508 @@ function cleanError(error) {
 }
 
 function syncProxyFields() {
-  const disabled = !el['proxy-enabled'].checked
+  const mode = el['proxy-mode'].value
+  el['proxy-enabled'].checked = mode === 'manual'
+  const disabled = mode !== 'manual'
   el['proxy-fields'].querySelectorAll('input, select').forEach((input) => { input.disabled = disabled })
   el['proxy-fields'].classList.toggle('disabled', disabled)
+}
+
+function applyVisualDesign(design = 'hybrid', theme = 'obsidian') {
+  const designs = new Set(['operations', 'community', 'command', 'hybrid', 'studio', 'telemetry'])
+  const themes = new Set(['obsidian', 'midnight', 'graphite', 'ember', 'arctic', 'high-contrast'])
+  const resolvedDesign = designs.has(design) ? design : 'hybrid'
+  const resolvedTheme = themes.has(theme) ? theme : 'obsidian'
+  document.documentElement.dataset.workspace = resolvedDesign
+  document.documentElement.dataset.theme = resolvedTheme
+  if (el['quick-workspace-design']) el['quick-workspace-design'].value = resolvedDesign
+  if (el['quick-color-theme']) el['quick-color-theme'].value = resolvedTheme
+  if (el['workspace-design']) el['workspace-design'].value = resolvedDesign
+  if (el['color-theme']) el['color-theme'].value = resolvedTheme
+  state.settings.workspaceDesign = resolvedDesign
+  state.settings.colorTheme = resolvedTheme
+  requestAnimationFrame(() => applyPanelLayout(state.settings))
+}
+
+async function saveVisualDesign(design, theme) {
+  applyVisualDesign(design, theme)
+  el['display-menu'].hidePopover?.()
+  try { state.settings = await api.saveSettings({ ...state.settings }) }
+  catch (error) { toast(`Display choice was not saved: ${cleanError(error)}`, 'error') }
+}
+
+function setWorkspaceView(view = 'overview') {
+  const resolved = ['overview', 'chat', 'inventory'].includes(view) ? view : 'overview'
+  state.workspaceView = resolved
+  el.dashboard.dataset.view = resolved
+  document.querySelectorAll('[data-workspace-view]').forEach((button) => button.classList.toggle('active', button.dataset.workspaceView === resolved))
+  if (resolved === 'chat') requestAnimationFrame(() => el['chat-message'].focus())
+  if (resolved === 'inventory') state.inventoryCollapsed = false
+  applyPanelLayout(state.settings)
+}
+
+let commandSelection = 0
+function commandItems() {
+  const items = [
+    { label: 'Connect or disconnect selected profile', group: 'Account', keywords: 'reconnect online offline', run: toggleConnection },
+    { label: 'Open chat', group: 'Workspace', keywords: 'console messages', run: () => el['chat-message'].focus() },
+    { label: 'Open inventory', group: 'Workspace', keywords: 'items hotbar gear', run: () => document.querySelector('.inventory-panel')?.scrollIntoView({ behavior: 'smooth', block: 'center' }) },
+    { label: 'Open POV and world actions', group: 'Workspace', keywords: 'camera entities blocks', run: openPov },
+    { label: 'Open automations', group: 'Workspace', keywords: 'macro conditions loops', run: openAutomations },
+    { label: 'Open persistent logs', group: 'Workspace', keywords: 'alerts history events', run: openPersistentLogs },
+    { label: 'Edit selected profile', group: 'Account', keywords: 'server proxy settings', run: () => openAccountDialog(selectedAccount()) },
+    { label: 'Add server profile', group: 'Account', keywords: 'duplicate account new', run: () => openAccountDialog() },
+    ...['operations', 'community', 'command', 'hybrid', 'studio', 'telemetry'].map(design => ({ label: `Use ${design} workspace`, group: 'Display', keywords: 'layout design theme', run: () => saveVisualDesign(design, state.settings.colorTheme) })),
+    ...state.accounts.map(account => ({ label: `Switch to ${account.profileName || account.label || account.username}`, group: 'Profiles', keywords: `${account.host} ${account.edition || 'java'}`, run: () => { state.selectedId = account.id; render() } }))
+  ]
+  const query = el['command-search']?.value.trim().toLowerCase() || ''
+  return query ? items.filter(item => `${item.label} ${item.group} ${item.keywords}`.toLowerCase().includes(query)) : items
+}
+
+function openCommandCenter() {
+  commandSelection = 0
+  el['command-search'].value = ''
+  renderCommandResults()
+  if (!el['command-dialog'].open) el['command-dialog'].showModal()
+  requestAnimationFrame(() => el['command-search'].focus())
+}
+
+function closeCommandCenter() { if (el['command-dialog'].open) el['command-dialog'].close() }
+
+function renderCommandResults() {
+  const items = commandItems()
+  commandSelection = Math.max(0, Math.min(commandSelection, Math.max(0, items.length - 1)))
+  el['command-results'].replaceChildren(...items.map((item, index) => {
+    const button = document.createElement('button')
+    button.type = 'button'; button.className = `command-result${index === commandSelection ? ' selected' : ''}`
+    button.setAttribute('role', 'option'); button.setAttribute('aria-selected', String(index === commandSelection))
+    const copy = document.createElement('span'); copy.textContent = item.label
+    const group = document.createElement('small'); group.textContent = item.group
+    button.append(copy, group)
+    button.addEventListener('click', () => { closeCommandCenter(); void item.run() })
+    return button
+  }))
+}
+
+function handleCommandSearchKey(event) {
+  const items = commandItems()
+  if (event.key === 'Escape') { event.preventDefault(); closeCommandCenter(); return }
+  if (event.key === 'ArrowDown') { event.preventDefault(); commandSelection = Math.min(items.length - 1, commandSelection + 1); renderCommandResults() }
+  if (event.key === 'ArrowUp') { event.preventDefault(); commandSelection = Math.max(0, commandSelection - 1); renderCommandResults() }
+  if (event.key === 'Enter' && items[commandSelection]) { event.preventDefault(); closeCommandCenter(); void items[commandSelection].run() }
+}
+
+async function openPersistentLogs() {
+  if (!selectedAccount()) return
+  el['logs-dialog'].showModal()
+  await refreshPersistentLogs()
+}
+
+async function refreshPersistentLogs() {
+  const account = selectedAccount()
+  if (!account) return
+  el['persistent-log-view'].textContent = 'Loading…'
+  try {
+    const filter = el['log-filter'].value
+    const events = await api.listLogs(account.id, { limit: 2000, kinds: filter ? [filter] : [] })
+    el['persistent-log-view'].textContent = events.length ? events.map(formatPersistentEvent).join('\n') : 'No matching persistent events.'
+    el['persistent-log-view'].scrollTop = el['persistent-log-view'].scrollHeight
+  } catch (error) { el['persistent-log-view'].textContent = cleanError(error) }
+}
+
+function formatPersistentEvent(event) {
+  const time = new Date(event.at || Date.now()).toLocaleString()
+  const category = String(event.kind || event.type || 'event').toUpperCase().padEnd(10)
+  const message = event.message || event.detail || event.error || event.status || JSON.stringify(Object.fromEntries(Object.entries(event).filter(([key]) => !['at', 'profileId', 'type', 'kind'].includes(key))))
+  return `${time}  ${category} ${String(message || '').replace(/\s+/g, ' ').slice(0, 2000)}`
+}
+
+async function clearPersistentLogs() {
+  const account = selectedAccount()
+  if (!account || !confirm(`Clear persistent history for ${account.profileName || account.label}?`)) return
+  await api.clearLogs(account.id)
+  await refreshPersistentLogs()
+}
+
+const AUTOMATION_STEP_TYPES = {
+  chat: ['Chat', { message: '/help' }], wait: ['Wait', { milliseconds: 1000 }], move: ['Move', { control: 'forward', duration: 500 }],
+  look: ['Look', { direction: 'left' }], drop: ['Drop item', { slot: 36, count: 1 }], deposit: ['Deposit', { slot: 36, count: 64 }],
+  equip: ['Equip', { slot: 36, destination: 'hand' }], clickGui: ['GUI click', { slot: 0 }], attackNearest: ['Attack nearest', {}],
+  useHeld: ['Use held', {}], notify: ['Alert', { message: 'Automation event' }], if: ['Condition', { condition: { type: 'healthBelow', value: 6 }, then: [] }],
+  repeat: ['Repeat', { times: 2, steps: [] }]
+}
+
+function openAutomations() {
+  const account = selectedAccount()
+  if (!account) return
+  automationDraft = structuredClone(account.automations?.length ? account.automations : [{ id: cryptoId(), name: 'New workflow', enabled: true, trigger: { type: 'manual' }, steps: [{ type: 'wait', milliseconds: 1000 }] }])
+  automationIndex = 0; automationStepIndex = -1
+  el['automation-json-toggle'].checked = false; el['automation-json'].hidden = true; el['automation-workspace']?.removeAttribute('hidden')
+  renderAutomationFlow(); el['automation-dialog'].showModal()
+}
+
+function renderAutomationFlow() {
+  automationIndex = Math.max(0, Math.min(automationIndex, Math.max(0, automationDraft.length - 1)))
+  const workflow = automationDraft[automationIndex]
+  el['automation-list'].replaceChildren(...automationDraft.map((item, index) => automationTab(item, index)))
+  el['automation-flow'].replaceChildren()
+  if (!workflow) { el['automation-flow'].textContent = 'Create a workflow to begin.'; renderAutomationInspector(); return }
+  el['automation-flow'].append(automationNode(`WHEN · ${workflow.trigger?.type || 'manual'}`, triggerSummary(workflow.trigger), -1, 'trigger'))
+  ;(workflow.steps || []).forEach((step, index) => el['automation-flow'].append(automationNode(AUTOMATION_STEP_TYPES[step.type]?.[0] || step.type, stepSummary(step), index, 'action')))
+  const add = document.createElement('button'); add.type = 'button'; add.className = 'automation-add-node'; add.textContent = '＋ Add a step'; add.addEventListener('click', () => el['automation-palette'].scrollIntoView({ behavior: 'smooth', block: 'nearest' })); el['automation-flow'].append(add)
+  renderAutomationPalette(); renderAutomationInspector()
+}
+
+function automationTab(item, index) { const button = document.createElement('button'); button.type = 'button'; button.className = `automation-tab${index === automationIndex ? ' selected' : ''}`; button.textContent = item.name || `Workflow ${index + 1}`; button.addEventListener('click', () => { automationIndex = index; automationStepIndex = -1; renderAutomationFlow() }); return button }
+function automationNode(title, summary, index, kind) { const button = document.createElement('button'); button.type = 'button'; button.className = `automation-node ${kind}${automationStepIndex === index ? ' selected' : ''}`; const name = document.createElement('span'); name.textContent = title; const detail = document.createElement('small'); detail.textContent = summary; button.append(name, detail); button.addEventListener('click', () => { automationStepIndex = index; renderAutomationFlow() }); return button }
+function triggerSummary(trigger = {}) { return trigger.type === 'timer' ? `Every ${trigger.intervalSeconds || 60}s` : trigger.type === 'chat' ? `Message contains “${trigger.contains || ''}”` : trigger.type === 'health' ? `Health below ${trigger.below || 6}` : `Runs on ${trigger.type || 'manual'}` }
+function stepSummary(step = {}) { return step.message || step.direction || step.destination || (step.type === 'wait' ? `${step.milliseconds || 0} ms` : step.type === 'repeat' ? `${step.count || 1} times` : step.type === 'if' ? step.condition?.type || 'condition' : 'Configured action') }
+
+function renderAutomationPalette() { el['automation-palette'].replaceChildren(...Object.entries(AUTOMATION_STEP_TYPES).map(([type, [label]]) => { const button = document.createElement('button'); button.type = 'button'; button.className = 'automation-palette-item'; button.textContent = `＋ ${label}`; button.addEventListener('click', () => addAutomationStep(type)); return button })) }
+function addAutomationStep(type) { const workflow = automationDraft[automationIndex]; if (!workflow) return; const defaults = structuredClone(AUTOMATION_STEP_TYPES[type]?.[1] || {}); workflow.steps ||= []; workflow.steps.push({ type, ...defaults }); automationStepIndex = workflow.steps.length - 1; renderAutomationFlow() }
+
+function renderAutomationInspector() {
+  const workflow = automationDraft[automationIndex]; el['automation-inspector'].replaceChildren(); if (!workflow) return
+  if (automationStepIndex < 0) {
+    addInspectorField('Workflow name', workflow.name || '', (value) => { workflow.name = value; renderAutomationFlow() })
+    addInspectorSelect('Trigger', ['manual', 'connected', 'disconnected', 'chat', 'health', 'inventory', 'window', 'timer'], workflow.trigger?.type || 'manual', (value) => { workflow.trigger = { type: value }; renderAutomationFlow() })
+    const trigger = workflow.trigger || (workflow.trigger = { type: 'manual' })
+    if (trigger.type === 'chat') addInspectorField('Contains', trigger.contains || '', (value) => { trigger.contains = value })
+    if (trigger.type === 'timer') addInspectorNumber('Interval seconds', trigger.intervalSeconds || 60, 1, 86400, (value) => { trigger.intervalSeconds = value })
+    if (trigger.type === 'health') addInspectorNumber('Health below', trigger.below || 6, 1, 20, (value) => { trigger.below = value })
+    addInspectorToggle('Enabled', workflow.enabled !== false, (value) => { workflow.enabled = value })
+    return
+  }
+  const step = workflow.steps[automationStepIndex]; if (!step) return
+  addInspectorSelect('Action', Object.keys(AUTOMATION_STEP_TYPES), step.type, (value) => { workflow.steps[automationStepIndex] = { type: value, ...structuredClone(AUTOMATION_STEP_TYPES[value]?.[1] || {}) }; renderAutomationFlow() })
+  for (const [key, value] of Object.entries(step).filter(([key]) => key !== 'type')) {
+    if (typeof value === 'number') addInspectorNumber(formatMinecraftName(key), value, 0, 86400000, (next) => { step[key] = next })
+    else if (typeof value === 'boolean') addInspectorToggle(formatMinecraftName(key), value, (next) => { step[key] = next })
+    else if (typeof value === 'string') addInspectorField(formatMinecraftName(key), value, (next) => { step[key] = next })
+    else addInspectorJson(formatMinecraftName(key), value, (next) => { step[key] = next })
+  }
+  const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'button danger'; remove.textContent = 'Remove step'; remove.addEventListener('click', () => { workflow.steps.splice(automationStepIndex, 1); automationStepIndex = -1; renderAutomationFlow() }); el['automation-inspector'].append(remove)
+}
+
+function inspectorRow(label, control) { const row = document.createElement('label'); row.className = 'field'; const caption = document.createElement('span'); caption.textContent = label; row.append(caption, control); el['automation-inspector'].append(row) }
+function addInspectorField(label, value, update) { const input = document.createElement('input'); input.value = value; input.addEventListener('change', () => update(input.value)); inspectorRow(label, input) }
+function addInspectorNumber(label, value, min, max, update) { const input = document.createElement('input'); input.type = 'number'; input.min = min; input.max = max; input.value = value; input.addEventListener('change', () => update(Number(input.value))); inspectorRow(label, input) }
+function addInspectorSelect(label, options, value, update) { const select = document.createElement('select'); select.replaceChildren(...options.map((item) => { const option = document.createElement('option'); option.value = item; option.textContent = formatMinecraftName(item); return option })); select.value = value; select.addEventListener('change', () => update(select.value)); inspectorRow(label, select) }
+function addInspectorToggle(label, value, update) { const input = document.createElement('input'); input.type = 'checkbox'; input.checked = value; input.addEventListener('change', () => update(input.checked)); inspectorRow(label, input) }
+function addInspectorJson(label, value, update) { const input = document.createElement('textarea'); input.rows = 5; input.value = JSON.stringify(value, null, 2); input.addEventListener('change', () => { try { update(JSON.parse(input.value)); input.setCustomValidity('') } catch { input.setCustomValidity('Invalid JSON'); input.reportValidity() } }); inspectorRow(label, input) }
+
+function addAutomation() { automationDraft.push({ id: cryptoId(), name: `Workflow ${automationDraft.length + 1}`, enabled: true, trigger: { type: 'manual' }, steps: [{ type: 'wait', milliseconds: 1000 }] }); automationIndex = automationDraft.length - 1; automationStepIndex = -1; renderAutomationFlow() }
+function deleteAutomation() { if (!automationDraft[automationIndex] || !confirm('Delete this workflow?')) return; automationDraft.splice(automationIndex, 1); automationIndex = Math.max(0, automationIndex - 1); automationStepIndex = -1; renderAutomationFlow() }
+function toggleAutomationJson() { const json = el['automation-json-toggle'].checked; const workspace = document.querySelector('.automation-workspace'); if (json) { el['automation-json'].value = JSON.stringify(automationDraft, null, 2); el['automation-json'].hidden = false; workspace.hidden = true } else { try { const parsed = JSON.parse(el['automation-json'].value); if (!Array.isArray(parsed)) throw new Error('Root must be an array.'); automationDraft = parsed; el['automation-json'].hidden = true; workspace.hidden = false; renderAutomationFlow() } catch (error) { el['automation-json-toggle'].checked = true; toast(cleanError(error), 'error') } } }
+
+async function saveAutomations() {
+  try {
+    if (el['automation-json-toggle'].checked) { const parsed = JSON.parse(el['automation-json'].value); if (!Array.isArray(parsed)) throw new Error('Automation JSON must be an array.'); automationDraft = parsed }
+    const targets = el['automation-scope'].value === 'all' ? state.accounts : [selectedAccount()].filter(Boolean)
+    for (const account of targets) { const saved = await api.saveAccount({ ...account, automations: structuredClone(automationDraft) }); Object.assign(account, saved) }
+    renderAutomationFlow(); toast(`Automations validated and saved to ${targets.length} profile${targets.length === 1 ? '' : 's'}.`)
+  } catch (error) { toast(cleanError(error), 'error') }
+}
+async function testAutomation() { await saveAutomations(); const workflow = automationDraft[automationIndex]; if (workflow) await run(() => api.runAutomation(state.selectedId, workflow.id)) }
+function cryptoId() { return `macro-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}` }
+
+function openPov() {
+  if (!state.accounts.length) return
+  povPaused = false; povFocusId = null; povSnapshots.clear(); povDisplaySnapshots.clear()
+  el['pov-columns'].value = state.settings.povColumns || 3; el['pov-refresh'].value = String(state.settings.povRefreshMs || 1500); el['pov-fps'].value = String(state.settings.povFrameRate || 30); el['pov-view-mode'].value = state.settings.povViewMode || 'perspective'; el['pov-radius'].value = state.settings.povRadius || 6
+  el['pov-dialog'].showModal(); renderPovGrid(); void refreshPov(); startPovPolling(); startPovAnimation()
+}
+function startPovPolling() { stopPovPolling(); if (!povPaused && !document.hidden) povTimer = setInterval(refreshPov, povFocusId ? 75 : 350) }
+function closePov() { closePovInput(); if (el['pov-dialog'].open) el['pov-dialog'].close() }
+function closePovInput() {
+  stopPovPolling(); stopPovAnimation(); releaseAllManualInputs(povFocusId); releasePovActions()
+  if (document.pointerLockElement?.closest?.('#pov-grid')) document.exitPointerLock?.()
+  if (povLookAnimationFrame) cancelAnimationFrame(povLookAnimationFrame)
+  povLookAnimationFrame = null; povLookDelta = { accountId: null, yaw: 0, pitch: 0 }
+}
+function stopPovPolling() { if (povTimer) clearInterval(povTimer); povTimer = null }
+function togglePovPause() { povPaused = !povPaused; el['pov-pause'].textContent = povPaused ? 'Resume' : 'Pause'; el['pov-pause'].setAttribute('aria-pressed', String(povPaused)); if (povPaused) { closePovInput() } else { void refreshPov(); startPovPolling(); startPovAnimation() } }
+async function updatePovOptions() { state.settings = await api.saveSettings({ ...state.settings, povColumns: Number(el['pov-columns'].value), povRefreshMs: Number(el['pov-refresh'].value), povFrameRate: Number(el['pov-fps'].value), povViewMode: el['pov-view-mode'].value, povRadius: Number(el['pov-radius'].value) }); renderPovGrid(); startPovPolling(); startPovAnimation() }
+
+function startPovAnimation() {
+  stopPovAnimation(); povLastAnimationAt = 0
+  const frame = (now) => {
+    if (!el['pov-dialog'].open || povPaused || document.hidden) { povAnimationFrame = null; return }
+    const requested = povFocusId ? Math.min(60, Number(el['pov-fps'].value) || 30) : 10
+    if (!povLastAnimationAt || now - povLastAnimationAt >= 1000 / requested - 1) {
+      const elapsed = povLastAnimationAt ? now - povLastAnimationAt : 1000 / requested
+      povLastAnimationAt = now
+      for (const canvas of el['pov-grid'].querySelectorAll('canvas[data-account-id]')) {
+        const account = state.accounts.find((entry) => entry.id === canvas.dataset.accountId)
+        const target = povSnapshots.get(canvas.dataset.accountId)
+        if (!account) continue
+        if (!target || !['online', 'connected'].includes(getStatus(account.id).status)) { drawPovPlaceholder(canvas, getStatus(account.id)); continue }
+        const display = interpolatePovSnapshot(povDisplaySnapshots.get(account.id), target, elapsed)
+        povDisplaySnapshots.set(account.id, display); drawPov(display, canvas, account)
+      }
+    }
+    povAnimationFrame = requestAnimationFrame(frame)
+  }
+  povAnimationFrame = requestAnimationFrame(frame)
+}
+function stopPovAnimation() { if (povAnimationFrame) cancelAnimationFrame(povAnimationFrame); povAnimationFrame = null }
+function interpolatePovSnapshot(current, target, elapsedMs) {
+  if (!current?.position || !target?.position) return target
+  const alpha = 1 - Math.exp(-Math.max(1, elapsedMs) / 90)
+  const lerp = (from, to) => Number(from) + (Number(to) - Number(from)) * alpha
+  const angle = (from, to) => Number(from) + Math.atan2(Math.sin(Number(to) - Number(from)), Math.cos(Number(to) - Number(from))) * alpha
+  return { ...target, position: { x: lerp(current.position.x, target.position.x), y: lerp(current.position.y, target.position.y), z: lerp(current.position.z, target.position.z) }, yaw: angle(current.yaw || 0, target.yaw || 0), pitch: lerp(current.pitch || 0, target.pitch || 0) }
+}
+function visiblePovAccounts() { const search = el['pov-search'].value.trim().toLowerCase(); return state.accounts.filter((account) => !search || `${account.profileName} ${account.minecraftName} ${account.host}`.toLowerCase().includes(search)).filter((account) => !povFocusId || account.id === povFocusId).slice(0, state.settings.povMaxFeeds || 9) }
+
+async function refreshPov() {
+  if (!el['pov-dialog'].open || povPaused || document.hidden || povRefreshActive) return
+  povRefreshActive = true
+  const accounts = visiblePovAccounts().filter((account) => ['online', 'connected'].includes(getStatus(account.id).status))
+  const results = await Promise.allSettled(accounts.map((account) => api.getWorldSnapshot(account.id, Number(el['pov-radius'].value), Number(el['pov-refresh'].value))))
+  results.forEach((result, index) => { if (result.status === 'fulfilled') povSnapshots.set(accounts[index].id, result.value) })
+  povRefreshActive = false
+  const latest = povSnapshots.get(povFocusId || state.selectedId); if (latest?.position && !el['pov-x'].value) setPovTarget(latest.position)
+  if (!document.pointerLockElement?.closest?.('#pov-grid')) el['pov-detail'].textContent = `${accounts.length} live feed${accounts.length === 1 ? '' : 's'} · updated ${new Date().toLocaleTimeString()} · click a perspective feed for WASD and mouse control.`
+}
+
+function renderPovGrid() {
+  const accounts = visiblePovAccounts(); el['pov-back-grid'].hidden = !povFocusId; el['pov-grid'].classList.toggle('focused', Boolean(povFocusId)); el['pov-grid'].style.setProperty('--pov-columns', String(Math.max(1, Math.min(accounts.length || 1, Number(el['pov-columns'].value) || 3))))
+  el['pov-grid'].replaceChildren(...accounts.map((account) => {
+    const card = document.createElement('article'); card.className = 'pov-card'
+    const header = document.createElement('header'); header.append(createPlayerHead(account, 'account-avatar')); const title = document.createElement('div'); const strong = document.createElement('strong'); strong.textContent = account.minecraftName || account.profileName || account.label; const small = document.createElement('small'); small.textContent = account.host; title.append(strong, small); const expand = document.createElement('button'); expand.type = 'button'; expand.className = 'icon-button pov-expand'; expand.textContent = povFocusId ? '↙' : '↗'; expand.title = povFocusId ? 'Return to grid' : 'Focus this feed'; expand.addEventListener('click', () => { povFocusId = povFocusId ? null : account.id; state.selectedId = account.id; render(); renderPovGrid(); startPovPolling() }); header.append(title, expand)
+    const canvas = document.createElement('canvas'); canvas.width = povFocusId ? 960 : 480; canvas.height = povFocusId ? 540 : 270; canvas.dataset.accountId = account.id; canvas.tabIndex = 0; canvas.setAttribute('aria-label', `${strong.textContent} POV. Click to focus, use WASD and Space to move, and move the mouse to look.`); canvas.addEventListener('click', selectPovTarget)
+    canvas.addEventListener('mousedown', handlePovMouseDown)
+    canvas.addEventListener('contextmenu', (event) => event.preventDefault())
+    canvas.addEventListener('wheel', handlePovWheel, { passive: false })
+    const snapshot = povDisplaySnapshots.get(account.id) || povSnapshots.get(account.id); if (snapshot) requestAnimationFrame(() => drawPov(snapshot, canvas, account)); else drawPovPlaceholder(canvas, getStatus(account.id))
+    card.append(header, canvas); return card
+  }))
+  if (!accounts.length) { const empty = document.createElement('p'); empty.className = 'dialog-copy'; empty.textContent = 'No profiles match this filter.'; el['pov-grid'].append(empty) }
+}
+
+function drawPov(snapshot, canvas, account) { if (el['pov-view-mode'].value === 'map') drawMapPov(snapshot, canvas); else drawPerspectivePov(snapshot, canvas, account) }
+function drawPovPlaceholder(canvas, status) { const context = canvas.getContext('2d'); context.fillStyle = '#070b10'; context.fillRect(0, 0, canvas.width, canvas.height); context.fillStyle = '#8f9baa'; context.font = '16px sans-serif'; context.textAlign = 'center'; context.fillText(['online', 'connected'].includes(status.status) ? 'Loading world…' : status.detail || 'Offline', canvas.width / 2, canvas.height / 2) }
+
+function drawMapPov(snapshot, canvas) {
+  const context = canvas.getContext('2d')
+  const width = canvas.width
+  const height = canvas.height
+  context.clearRect(0, 0, width, height)
+  context.fillStyle = '#070b10'; context.fillRect(0, 0, width, height)
+  if (!snapshot.position) return
+  const radius = Number(snapshot.radius) || 6
+  const scale = Math.min(width, height) / (radius * 2 + 3)
+  const centerX = width / 2
+  const centerY = height / 2
+  const playerY = Math.floor(snapshot.position.y)
+  for (const block of snapshot.blocks || []) {
+    if (Math.abs(block.y - playerY) > 1) continue
+    const x = centerX + (block.x - snapshot.position.x) * scale
+    const y = centerY + (block.z - snapshot.position.z) * scale
+    context.fillStyle = block.water ? '#2577ad' : block.solid ? '#566171' : '#36465a'
+    context.fillRect(x - scale / 2, y - scale / 2, Math.max(2, scale - 1), Math.max(2, scale - 1))
+  }
+  for (const entity of snapshot.entities || []) {
+    const x = centerX + (entity.x - snapshot.position.x) * scale
+    const y = centerY + (entity.z - snapshot.position.z) * scale
+    context.beginPath(); context.fillStyle = entity.type === 'player' ? '#f6c85f' : '#f16e74'; context.arc(x, y, 5, 0, Math.PI * 2); context.fill()
+  }
+  context.save(); context.translate(centerX, centerY); context.rotate(-(Number(snapshot.yaw) || 0)); context.fillStyle = '#60d394'; context.beginPath(); context.moveTo(0, -10); context.lineTo(7, 8); context.lineTo(-7, 8); context.closePath(); context.fill(); context.restore()
+  canvas.dataset.position = JSON.stringify(snapshot.position)
+  canvas.dataset.radius = String(radius)
+}
+
+function selectPovTarget(event) {
+  const canvas = event.currentTarget
+  if (povPaused || document.pointerLockElement === canvas) return
+  const accountId = canvas.dataset.accountId
+  if (accountId) { state.selectedId = accountId; povFocusId ||= accountId }
+  const position = JSON.parse(canvas.dataset.position || 'null')
+  if (el['pov-view-mode'].value !== 'map') {
+    render(); renderPovGrid(); startPovPolling()
+    const focusedCanvas = [...el['pov-grid'].querySelectorAll('canvas')].find((entry) => entry.dataset.accountId === accountId)
+    focusedCanvas?.focus(); focusedCanvas?.requestPointerLock?.()?.catch?.(() => toast('Mouse capture unavailable. Focus the feed for keyboard controls.', 'error'))
+    return
+  }
+  if (!position) return
+  const rectangle = canvas.getBoundingClientRect()
+  const radius = Number(canvas.dataset.radius) || 6
+  const scale = Math.min(canvas.width, canvas.height) / (radius * 2 + 3)
+  const pixelX = (event.clientX - rectangle.left) * canvas.width / rectangle.width
+  const pixelY = (event.clientY - rectangle.top) * canvas.height / rectangle.height
+  setPovTarget({ x: Math.round(position.x + (pixelX - canvas.width / 2) / scale), y: Math.floor(position.y), z: Math.round(position.z + (pixelY - canvas.height / 2) / scale) })
+}
+
+function handlePovMouseMove(event) {
+  const canvas = document.pointerLockElement
+  const accountId = canvas?.closest?.('#pov-grid') ? canvas.dataset.accountId : null
+  if (!accountId || accountId !== povFocusId || povPaused || el['pov-view-mode'].value !== 'perspective') return
+  povLookDelta.accountId = accountId
+  const delta = povMath.mouseLookDelta(event.movementX, event.movementY)
+  povLookDelta.yaw += delta.yaw
+  povLookDelta.pitch += delta.pitch
+  if (!povLookAnimationFrame) povLookAnimationFrame = requestAnimationFrame(flushPovLookDelta)
+}
+
+function flushPovLookDelta() {
+  povLookAnimationFrame = null
+  const delta = povLookDelta; povLookDelta = { accountId: null, yaw: 0, pitch: 0 }
+  if (!delta.accountId || (!delta.yaw && !delta.pitch)) return
+  for (const snapshots of [povSnapshots, povDisplaySnapshots]) {
+    const snapshot = snapshots.get(delta.accountId)
+    if (snapshot) snapshots.set(delta.accountId, { ...snapshot, yaw: Number(snapshot.yaw || 0) + delta.yaw, pitch: Math.max(-1.45, Math.min(1.45, Number(snapshot.pitch || 0) + delta.pitch)) })
+  }
+  api.lookDelta(delta.accountId, delta.yaw, delta.pitch).catch((error) => { document.exitPointerLock?.(); toast(cleanError(error), 'error') })
+}
+
+function handlePovPointerLockChange() {
+  const canvas = document.pointerLockElement
+  const active = Boolean(canvas?.closest?.('#pov-grid'))
+  el['pov-grid'].classList.toggle('pointer-locked', active)
+  if (!active) { releaseAllManualInputs(povFocusId); releasePovActions() }
+  el['pov-detail'].textContent = active
+    ? 'Gameplay control active · WASD move · Space jumps · Mouse looks · Esc releases the mouse.'
+    : 'Click a perspective feed to capture the mouse and enable gameplay controls.'
+}
+
+function drawPerspectivePov(snapshot, canvas, account) {
+  const context = canvas.getContext('2d'), width = canvas.width, height = canvas.height
+  if (!snapshot.position) return drawPovPlaceholder(canvas, { status: 'online', detail: 'Waiting for chunks…' })
+  let cached = povCanvasRenderers.get(canvas)
+  if (!cached) { cached = { renderer: new window.afkVoxelRenderer.VoxelRenderer(), canvas: document.createElement('canvas') }; povCanvasRenderers.set(canvas, cached) }
+  const renderWidth = povFocusId ? (Number(el['pov-fps'].value) === 60 ? 192 : 256) : 128
+  const renderHeight = Math.round(renderWidth * 9 / 16)
+  const frame = cached.renderer.render(snapshot, renderWidth, renderHeight)
+  const lowResolutionCanvas = cached.canvas
+  if (lowResolutionCanvas.width !== renderWidth || lowResolutionCanvas.height !== renderHeight) {
+    lowResolutionCanvas.width = renderWidth; lowResolutionCanvas.height = renderHeight
+    cached.image = new ImageData(frame.data, renderWidth, renderHeight)
+  }
+  lowResolutionCanvas.getContext('2d').putImageData(cached.image, 0, 0)
+  context.imageSmoothingEnabled = false
+  context.clearRect(0, 0, width, height)
+  context.drawImage(lowResolutionCanvas, 0, 0, width, height)
+  drawPovEntities(context, snapshot, canvas)
+  drawCrosshair(context, canvas)
+  if (state.settings.povShowHud !== false) drawPovHud(context, canvas, account)
+  canvas.dataset.position = JSON.stringify(snapshot.position); canvas.dataset.radius = String(snapshot.radius || 6)
+}
+
+function drawCrosshair(context, canvas) { const x = canvas.width / 2, y = canvas.height / 2, arm = Math.max(5, canvas.width / 96); context.save(); context.strokeStyle = '#ffffffdd'; context.lineWidth = Math.max(1, canvas.width / 480); context.beginPath(); context.moveTo(x - arm, y); context.lineTo(x + arm, y); context.moveTo(x, y - arm); context.lineTo(x, y + arm); context.stroke(); context.restore() }
+function drawPovEntities(context, snapshot, canvas) { const yaw = Number(snapshot.yaw) || 0, horizon = canvas.height * .5; context.font = `${Math.max(10, canvas.width / 48)}px sans-serif`; context.textAlign = 'center'; for (const entity of snapshot.entities || []) { const dx = Number(entity.x ?? entity.position?.x) - snapshot.position.x, dz = Number(entity.z ?? entity.position?.z) - snapshot.position.z, { side, depth } = povMath.projectHorizontal(dx, dz, yaw); if (depth <= .3) continue; const x = canvas.width / 2 + side / depth * canvas.width * .55, y = horizon - ((Number(entity.y ?? entity.position?.y) || snapshot.position.y) - snapshot.position.y) / depth * canvas.height * .55; if (x < 0 || x > canvas.width || y < 0 || y > canvas.height) continue; context.fillStyle = entity.type === 'player' ? '#ffe06a' : '#ff7479'; context.fillText(entity.username || entity.name || entity.type || 'entity', x, y) } }
+function drawPovHud(context, canvas, account) {
+  const telemetry = state.telemetry.get(account.id) || {}, snapshot = povSnapshots.get(account.id) || {}
+  const health = Math.max(0, Math.min(20, Number(telemetry.health ?? snapshot.health) || 0)), food = Math.max(0, Math.min(20, Number(telemetry.food ?? snapshot.food) || 0))
+  const box = Math.max(24, Math.min(48, canvas.width / 12)), start = canvas.width / 2 - box * 4.5, bottom = canvas.height - box - 10
+  context.font = `${Math.max(12, canvas.width / 48)}px monospace`; context.textAlign = 'left'
+  context.fillStyle = '#080d12bb'; context.fillRect(start - 8, bottom - 29, box * 9 + 14, box + 36)
+  context.fillStyle = '#f76666'; context.fillText(`♥ ${health}/20`, start, bottom - 10)
+  context.textAlign = 'right'; context.fillStyle = '#e6b55d'; context.fillText(`◆ ${food}/20`, start + box * 9 - 4, bottom - 10)
+  const selected = Number(snapshot.quickBarSlot ?? telemetry.selectedHotbarSlot) || 0
+  const inventory = telemetry.inventory || []
+  const atlas = window.__minecraftItemAtlas
+  for (let i = 0; i < 9; i++) {
+    const x = start + i * box
+    context.fillStyle = i === selected ? '#766849cc' : '#17212cdd'; context.fillRect(x, bottom, box - 2, box - 2)
+    context.strokeStyle = i === selected ? '#ffdf85' : '#89939a'; context.lineWidth = i === selected ? 3 : 1; context.strokeRect(x, bottom, box - 2, box - 2)
+    const item = inventory.find(entry => entry.slot === 36 + i), index = atlas?.items?.[item?.name]
+    if (Number.isInteger(index) && povItemAtlasImage.complete && povItemAtlasImage.naturalWidth) context.drawImage(povItemAtlasImage, index % atlas.columns * atlas.cell, Math.floor(index / atlas.columns) * atlas.cell, atlas.cell, atlas.cell, x + 5, bottom + 5, box - 12, box - 12)
+    context.textAlign = 'left'; context.font = `${Math.max(9, box / 4)}px monospace`; context.fillStyle = '#bac7cc'; context.fillText(String(i + 1), x + 3, bottom + 10)
+    if (item?.count > 1) { context.textAlign = 'right'; context.fillStyle = '#fff'; context.fillText(String(item.count), x + box - 5, bottom + box - 5) }
+  }
+  const held = inventory.find(item => item.slot === 36 + selected) || snapshot.heldItem
+  context.textAlign = 'center'; context.fillStyle = '#f3eedf'; context.font = `${Math.max(11, canvas.width / 52)}px sans-serif`
+  if (held) context.fillText(held.customName || held.displayName || held.name, canvas.width / 2, bottom - 34)
+  context.lineWidth = 1
+}
+
+function handlePovMouseDown(event) {
+  const canvas = event.currentTarget
+  if (povPaused || document.pointerLockElement !== canvas || canvas.dataset.accountId !== povFocusId || ![0, 2].includes(event.button)) return
+  event.preventDefault()
+  const action = event.button === 0 ? 'dig-crosshair' : 'use-crosshair'
+  const key = `${povFocusId}|${event.button}`
+  if (povHeldActions.has(key)) return
+  povHeldActions.add(key)
+  api.worldAction(povFocusId, action, {}).catch(error => toast(cleanError(error), 'error'))
+}
+function releasePovMouse(event) { releasePovActions(event.button) }
+function releasePovActions(button = null, accountId = null) {
+  if (button === null && (!accountId || povLookDelta.accountId === accountId)) {
+    if (povLookAnimationFrame) cancelAnimationFrame(povLookAnimationFrame)
+    povLookAnimationFrame = null; povLookDelta = { accountId: null, yaw: 0, pitch: 0 }
+  }
+  for (const key of [...povHeldActions]) {
+    const [id, mouse] = key.split('|')
+    if (accountId && id !== accountId) continue
+    if (button !== null && Number(mouse) !== button) continue
+    povHeldActions.delete(key)
+    api.worldAction(id, Number(mouse) === 0 ? 'stop-dig' : 'stop-use', {}).catch(() => {})
+  }
+}
+function povInputAllowed(target) {
+  return el['pov-dialog'].open && povFocusId && !povPaused && !target?.closest?.('input, textarea, select, button, [contenteditable="true"]')
+}
+function selectPovHotbar(slot) {
+  const id = povFocusId
+  api.worldAction(id, 'select-hotbar', { slot }).then(() => {
+    const snapshot = povSnapshots.get(id)
+    if (snapshot) snapshot.quickBarSlot = slot
+  }).catch(error => toast(cleanError(error), 'error'))
+}
+function handlePovKey(event) {
+  if (event.code === 'Escape' && el['pov-dialog'].open) { releaseAllManualInputs(); releasePovActions(); return }
+  if (!povInputAllowed(event.target) || event.repeat) return
+  if (/^Digit[1-9]$/.test(event.code)) { event.preventDefault(); selectPovHotbar(Number(event.code.slice(-1)) - 1) }
+  if (event.code === 'KeyE') {
+    event.preventDefault(); closePov()
+    if (state.inventoryCollapsed) toggleInventory()
+    el['toggle-inventory'].focus()
+  }
+}
+function handlePovWheel(event) {
+  if (!povInputAllowed(event.target)) return
+  event.preventDefault()
+  const current = Number(povSnapshots.get(povFocusId)?.quickBarSlot ?? state.telemetry.get(povFocusId)?.selectedHotbarSlot) || 0
+  selectPovHotbar((current + (event.deltaY > 0 ? 1 : 8)) % 9)
+}
+
+function setPovTarget(position) {
+  el['pov-x'].value = Math.floor(position.x)
+  el['pov-y'].value = Math.floor(position.y)
+  el['pov-z'].value = Math.floor(position.z)
+}
+
+async function runWorldAction(action) {
+  const target = { x: Number(el['pov-x'].value), y: Number(el['pov-y'].value), z: Number(el['pov-z'].value), range: 1 }
+  await run(() => api.worldAction(povFocusId || state.selectedId, action, target))
+  await refreshPov()
+}
+
+function syncEditionFields(changePort = true) {
+  const bedrock = el.edition.value === 'bedrock'
+  el.version.disabled = bedrock
+  if (bedrock) el.version.value = ''
+  el['modded-fields'].hidden = bedrock
+  if (changePort && (!el.port.value || ['25565', '19132'].includes(el.port.value))) el.port.value = bedrock ? 19132 : 25565
+  el['proxy-mode'].disabled = bedrock
+  if (bedrock) el['proxy-mode'].value = 'direct'
+  syncProxyFields()
+}
+
+function syncModdedFields() {
+  const loader = el['mod-loader'].value
+  const defaults = { fabric: 'fabric', quilt: 'quilt', forge: 'forge', neoforge: 'neoforge' }
+  if (!el['client-brand'].value || ['vanilla', 'fabric', 'quilt', 'forge', 'neoforge'].includes(el['client-brand'].value)) el['client-brand'].value = defaults[loader] || 'vanilla'
+  el['mod-handshake'].disabled = !['auto', 'forge', 'neoforge'].includes(loader)
+  updateCompatibilityHelp()
+}
+
+function updateCompatibilityHelp() {
+  const capability = window.AfkCompatibility?.describeCompatibility({ modLoader: el['mod-loader'].value, version: el.version.value, modHandshake: el['mod-handshake'].value })
+  const description = document.getElementById('compatibility-summary')
+  if (capability && description) description.textContent = [capability.error, capability.summary, ...capability.limitations].filter(Boolean).join(' ')
 }
 
 function createPlayerHead(account, className) {

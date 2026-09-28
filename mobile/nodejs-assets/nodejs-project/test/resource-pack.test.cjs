@@ -6,6 +6,122 @@ const { ResourcePackLoader, parseResourcePack, normalizePackEvent, resolveItemDe
 
 const PIXEL = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+XfSUWQAAAABJRU5ErkJggg==', 'base64')
 
+test('declared oversized body is cancelled before any pull is consumed', async () => {
+  let cancelled = false
+  const loader = new ResourcePackLoader({ maxPackBytes: 16, fetchImpl: async () => new Response(new ReadableStream({
+    cancel() { cancelled = true }
+  }), { headers: { 'content-length': '17' } }) })
+  await assert.rejects(loader.load('https://packs.example/declared.zip'), /download limit/)
+  assert.equal(cancelled, true)
+})
+
+test('download deadline also bounds a stalled response-header request', async () => {
+  let signal
+  const loader = new ResourcePackLoader({ downloadTimeoutMs: 10, fetchImpl: (_url, options) => {
+    signal = options.signal
+    return new Promise(() => {})
+  } })
+  await assert.rejects(loader.load('https://packs.example/no-headers.zip'), /timed out/)
+  assert.equal(signal.aborted, true)
+  assert.equal(loader.activeDownloads, 0)
+})
+
+test('stream read failure aborts download and removes failed cache entry', async () => {
+  let signal
+  const loader = new ResourcePackLoader({ fetchImpl: async (_url, options) => {
+    signal = options.signal
+    return new Response(new ReadableStream({ pull(controller) { controller.error(new Error('stream failed')) } }))
+  } })
+  await assert.rejects(loader.load('https://packs.example/read-error.zip'), /stream failed/)
+  assert.equal(signal.aborted, true)
+  assert.equal(loader.cache.size, 0)
+  assert.equal(loader.activeDownloads, 0)
+})
+
+
+test('streamed pack rejects lying content length before buffering the oversized body', async () => {
+  let cancelled = false
+  let signal
+  let chunks = 0
+  const loader = new ResourcePackLoader({ maxPackBytes: 16, fetchImpl: async (_url, options) => {
+    signal = options.signal
+    return new Response(new ReadableStream({
+      pull(controller) { chunks++; if (chunks > 4) controller.close(); else controller.enqueue(new Uint8Array(12)) },
+      cancel() { cancelled = true }
+    }), { headers: { 'content-length': '1' } })
+  } })
+  await assert.rejects(loader.load('https://packs.example/oversize.zip'), /download limit/)
+  assert.equal(cancelled, true)
+  assert.equal(signal.aborted, true)
+  assert.ok(chunks <= 3)
+  assert.equal(loader.cache.size, 0)
+})
+
+test('download deadline cancels a stalled stream and releases its cache entry', async () => {
+  let cancelled = false
+  let signal
+  const loader = new ResourcePackLoader({ downloadTimeoutMs: 10, fetchImpl: async (_url, options) => {
+    signal = options.signal
+    return new Response(new ReadableStream({ cancel() { cancelled = true } }))
+  } })
+  await assert.rejects(loader.load('https://packs.example/stalled.zip'), /timed out/)
+  assert.equal(cancelled, true)
+  assert.equal(signal.aborted, true)
+  assert.equal(loader.cache.size, 0)
+})
+
+test('failed HTTP response bodies are cancelled without reading', async () => {
+  let cancelled = false
+  const loader = new ResourcePackLoader({ fetchImpl: async () => new Response(new ReadableStream({
+    cancel() { cancelled = true }
+  }), { status: 500 }) })
+  await assert.rejects(loader.load('https://packs.example/error.zip'), /HTTP 500/)
+  assert.equal(cancelled, true)
+})
+
+test('bounded parsed cache evicts oldest result and download failures allow retry', async () => {
+  let downloads = 0
+  const bytes = fixturePack()
+  const loader = new ResourcePackLoader({ maxCacheEntries: 2, fetchImpl: async () => {
+    downloads++
+    if (downloads === 1) return new Response('invalid zip')
+    return new Response(bytes)
+  } })
+  await assert.rejects(loader.load('https://packs.example/one.zip'))
+  await loader.load('https://packs.example/one.zip')
+  await loader.load('https://packs.example/two.zip')
+  await loader.load('https://packs.example/three.zip')
+  assert.equal(loader.cache.size, 2)
+  await loader.load('https://packs.example/one.zip')
+  assert.equal(downloads, 5)
+})
+
+test('disk cache prunes only owned hash zip files and never caches invalid archives', async (t) => {
+  const fs = require('node:fs')
+  const os = require('node:os')
+  const path = require('node:path')
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'afkdesk-pack-cache-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const oldName = 'a'.repeat(40) + '.zip'
+  fs.writeFileSync(path.join(directory, oldName), 'old')
+  fs.writeFileSync(path.join(directory, 'notes.zip'), 'preserve')
+  fs.mkdirSync(path.join(directory, 'b'.repeat(40) + '.zip'))
+  const bytes = fixturePack()
+  let invalid = true
+  const loader = new ResourcePackLoader({ cacheDir: directory, maxCacheEntries: 1, maxCacheBytes: bytes.length, fetchImpl: async () => new Response(invalid ? 'bad zip' : bytes) })
+  await assert.rejects(loader.load('https://packs.example/bad.zip'))
+  assert.deepEqual(fs.readdirSync(directory).sort(), [oldName, 'b'.repeat(40) + '.zip', 'notes.zip'].sort())
+  invalid = false
+  await loader.load('https://packs.example/good.zip')
+  assert.equal(fs.existsSync(path.join(directory, oldName)), false)
+  assert.equal(fs.readFileSync(path.join(directory, 'notes.zip'), 'utf8'), 'preserve')
+  assert.equal(fs.statSync(path.join(directory, 'b'.repeat(40) + '.zip')).isDirectory(), true)
+  const files = fs.readdirSync(directory).filter(name => /^[a-f0-9]{40}\.zip$/.test(name) && fs.lstatSync(path.join(directory, name)).isFile())
+  assert.equal(files.length, 1)
+  assert.ok(files.reduce((sum, name) => sum + fs.statSync(path.join(directory, name)).size, 0) <= bytes.length)
+})
+
+
 function fixturePack() {
   const zip = new AdmZip()
   zip.addFile('pack.mcmeta', Buffer.from(JSON.stringify({ pack: { pack_format: 34, description: 'AFK Desk test' } })))
@@ -70,7 +186,7 @@ test('loads a bounded HTTP pack, validates its hash, and caches the parsed resul
   let downloads = 0
   const loader = new ResourcePackLoader({ fetchImpl: async () => {
     downloads++
-    return { ok: true, status: 200, headers: { get: () => String(bytes.length) }, arrayBuffer: async () => bytes }
+    return new Response(bytes, { headers: { 'content-length': String(bytes.length) } })
   } })
   const first = await loader.load('https://packs.example/menu.zip?token=secret', hash)
   const second = await loader.load('https://packs.example/menu.zip?token=secret', hash)

@@ -12,42 +12,108 @@ const MAX_PARSED_JSON_BYTES = 100 * 1024 * 1024
 const DOWNLOAD_TIMEOUT_MS = 30_000
 
 class ResourcePackLoader {
-  constructor({ fetchImpl = globalThis.fetch, cacheDir = '' } = {}) {
+  constructor({ fetchImpl = globalThis.fetch, cacheDir = '', maxPackBytes = MAX_PACK_BYTES,
+    downloadTimeoutMs = DOWNLOAD_TIMEOUT_MS, maxCacheEntries = 8, maxCacheBytes = 300 * 1024 * 1024 } = {}) {
     this.fetchImpl = fetchImpl
     this.cacheDir = cacheDir
+    this.maxPackBytes = boundedLimit(maxPackBytes, MAX_PACK_BYTES)
+    this.downloadTimeoutMs = boundedLimit(downloadTimeoutMs, DOWNLOAD_TIMEOUT_MS)
+    this.maxCacheEntries = boundedLimit(maxCacheEntries, 8)
+    this.maxCacheBytes = boundedLimit(maxCacheBytes, 300 * 1024 * 1024)
     this.cache = new Map()
+    this.activeDownloads = 0
   }
 
   async load(urlValue, expectedHash = '') {
     const url = normalizePackUrl(urlValue)
     const hash = normalizeHash(expectedHash)
     const key = `${url.href}|${hash}`
-    if (!this.cache.has(key)) this.cache.set(key, this.#downloadAndParse(url, hash).catch((error) => { this.cache.delete(key); throw error }))
-    return this.cache.get(key)
+    if (this.cache.has(key)) return this.cache.get(key)
+    if (this.activeDownloads >= 4) throw new Error('Too many resource pack downloads in progress. Try again shortly.')
+    while (this.cache.size >= this.maxCacheEntries) this.cache.delete(this.cache.keys().next().value)
+    this.activeDownloads++
+    const task = this.#downloadAndParse(url, hash).catch((error) => {
+      if (this.cache.get(key) === task) this.cache.delete(key)
+      throw error
+    }).finally(() => { this.activeDownloads-- })
+    this.cache.set(key, task)
+    return task
   }
 
   async #downloadAndParse(url, expectedHash) {
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS)
+    const timeoutError = new Error('Resource pack download timed out.')
+    let rejectAbort
+    const aborted = new Promise((_resolve, reject) => { rejectAbort = reject })
+    const onAbort = () => rejectAbort(controller.signal.reason || timeoutError)
+    controller.signal.addEventListener('abort', onAbort, { once: true })
+    const timer = setTimeout(() => controller.abort(timeoutError), this.downloadTimeoutMs)
     let response
+    let reader
     try {
-      response = await this.fetchImpl(url, { signal: controller.signal, redirect: 'follow' })
+      response = await Promise.race([Promise.resolve().then(() => this.fetchImpl(url, { signal: controller.signal, redirect: 'follow' })), aborted])
       if (!response?.ok) throw new Error(`Resource pack download failed with HTTP ${response?.status || 'unknown'}.`)
       const length = Number(response.headers?.get?.('content-length'))
-      if (Number.isFinite(length) && length > MAX_PACK_BYTES) throw new Error('Resource pack exceeds the 100 MB download limit.')
-      const buffer = Buffer.from(await response.arrayBuffer())
-      if (buffer.length > MAX_PACK_BYTES) throw new Error('Resource pack exceeds the 100 MB download limit.')
+      if (Number.isFinite(length) && length > this.maxPackBytes) throw new Error('Resource pack exceeds the download limit (maximum 100 MB).')
+      if (!response.body?.getReader) throw new Error('Resource pack response does not support safe streaming.')
+      reader = response.body.getReader()
+      const chunks = []
+      let total = 0
+      while (true) {
+        const { done, value } = await Promise.race([reader.read(), aborted])
+        if (done) break
+        total += value.byteLength
+        if (total > this.maxPackBytes) throw new Error('Resource pack exceeds the download limit (maximum 100 MB).')
+        chunks.push(Buffer.from(value))
+      }
+      const buffer = Buffer.concat(chunks, total)
       const sha1 = crypto.createHash('sha1').update(buffer).digest('hex')
       if (expectedHash && expectedHash.length === 40 && sha1 !== expectedHash) throw new Error('Resource pack SHA-1 does not match the server hash.')
-      if (this.cacheDir) {
-        fs.mkdirSync(this.cacheDir, { recursive: true })
-        fs.writeFileSync(path.join(this.cacheDir, `${sha1}.zip`), buffer)
-      }
-      return parseResourcePack(buffer, { source: safePackSource(url), sha1 })
+      const parsed = parseResourcePack(buffer, { source: safePackSource(url), sha1 })
+      if (this.cacheDir && buffer.length <= this.maxCacheBytes) this.#cacheToDisk(sha1, buffer)
+      return parsed
+    } catch (error) {
+      controller.abort(error)
+      // Cancellation must not make the deadline depend on a broken stream's cancel promise.
+      try { Promise.resolve(reader ? reader.cancel(error) : response?.body?.cancel(error)).catch(() => {}) } catch {}
+      throw error
     } finally {
       clearTimeout(timer)
+      controller.signal.removeEventListener('abort', onAbort)
+      try { reader?.releaseLock() } catch {}
     }
   }
+
+  #cacheToDisk(sha1, buffer) {
+    fs.mkdirSync(this.cacheDir, { recursive: true })
+    const target = path.join(this.cacheDir, `${sha1}.zip`)
+    const entries = fs.readdirSync(this.cacheDir).filter(name => /^[a-f0-9]{40}\.zip$/.test(name)).flatMap(name => {
+      const file = path.join(this.cacheDir, name)
+      const stat = fs.lstatSync(file)
+      return stat.isFile() ? [{ file, size: stat.size, mtime: stat.mtimeMs }] : []
+    }).sort((a, b) => a.mtime - b.mtime)
+    // Do not follow symlinks or overwrite unrelated directories at the destination.
+    if (fs.existsSync(target) && !fs.lstatSync(target).isFile()) throw new Error('Unsafe resource pack cache destination.')
+    let bytes = entries.reduce((sum, entry) => sum + entry.size, 0)
+    let count = entries.length
+    const previous = entries.find(entry => entry.file === target)
+    if (previous) { bytes -= previous.size; count-- }
+    for (const entry of entries) {
+      if (bytes + buffer.length <= this.maxCacheBytes && count + 1 <= this.maxCacheEntries) break
+      if (entry.file === target) continue
+      fs.unlinkSync(entry.file)
+      bytes -= entry.size
+      count--
+    }
+    // Remove only an already managed hash file, then create exclusively (no symlink following).
+    if (previous) fs.unlinkSync(target)
+    fs.writeFileSync(target, buffer, { flag: 'wx' })
+  }
+}
+
+function boundedLimit(value, maximum) {
+  const number = Number(value)
+  return Number.isFinite(number) && number > 0 ? Math.min(maximum, Math.max(1, Math.floor(number))) : maximum
 }
 
 class ParsedResourcePack {
@@ -110,16 +176,20 @@ class ParsedResourcePack {
     return definition ? resolveItemDefinition(definition.model || definition, customModelData) : null
   }
 
-  #modelTexture(modelKey, seen = new Set(), inherited = {}) {
-    const key = normalizeAssetKey(modelKey)
-    if (!key || seen.has(key)) return null
-    seen.add(key)
-    const model = this.json.get(modelJsonKey(key))
-    if (!model) return key.includes(':item/') ? key : null
-    const textures = { ...inherited, ...(model.textures || {}) }
-    const candidate = textures.layer0 || textures.layer1 || textures.particle || Object.values(textures).find((value) => typeof value === 'string')
-    if (candidate) return resolveTextureVariable(candidate, textures)
-    return model.parent ? this.#modelTexture(model.parent, seen, textures) : null
+  #modelTexture(modelKey) {
+    const seen = new Set()
+    let key = normalizeAssetKey(modelKey)
+    let textures = {}
+    for (let depth = 0; depth < 64 && key && !seen.has(key); depth++) {
+      seen.add(key)
+      const model = this.json.get(modelJsonKey(key))
+      if (!model) return key.includes(':item/') ? key : null
+      textures = { ...textures, ...(model.textures || {}) }
+      const candidate = textures.layer0 || textures.layer1 || textures.particle || Object.values(textures).find((value) => typeof value === 'string')
+      if (candidate) return resolveTextureVariable(candidate, textures)
+      key = model.parent ? normalizeAssetKey(model.parent) : ''
+    }
+    return null
   }
 }
 

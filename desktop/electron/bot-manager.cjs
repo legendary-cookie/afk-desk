@@ -1,4 +1,6 @@
 const path = require('node:path')
+const { isDeepStrictEqual } = require('node:util')
+const { profilePath, validateProfileId } = require('./profile-path.cjs')
 const { applyProtocolFixes } = require('./protocol-fixes.cjs')
 const { createProxyConnect } = require('./proxy-connect.cjs')
 const { ResourcePackLoader, normalizePackEvent } = require('./resource-pack.cjs')
@@ -15,7 +17,10 @@ const {
 } = require('./movement-compatibility.cjs')
 applyProtocolFixes()
 const mineflayer = require('mineflayer')
-const { normalizeVersionSelection, supportedVersionOrEmpty } = require('./version-support.cjs')
+const { Vec3 } = require('vec3')
+const { pathfinder, Movements, goals } = require('mineflayer-pathfinder')
+const { normalizeVersionSelection } = require('./version-support.cjs')
+const { moddedBotOptions, installModdedCompatibility, installCustomChannels, normalizeModdedProfile } = require('./modded-compatibility.cjs')
 
 const CHEST_NAMES = new Set(['chest', 'trapped_chest', 'barrel'])
 const ARMOR_SLOT_TYPES = new Map([[5, 'helmet'], [6, 'chestplate'], [7, 'leggings'], [8, 'boots'], [45, 'off-hand']])
@@ -57,9 +62,12 @@ class BotManager {
     this.sessions = new Map()
     this.reconnects = new Map()
     this.nextAutomaticServerSwitchAt = 0
+    this.nextWorldBlockRevision = 0
   }
 
   connect(account, { reconnecting = false } = {}) {
+    validateProfileId(account?.id)
+    const profilesFolder = profilePath(this.profilesPath, account.identityId || account.id)
     if (this.sessions.has(account.id)) throw new Error('This account is already connecting or online.')
     const reconnectState = this.reconnects.get(account.id) || { attempts: 0, timer: null, manual: false }
     if (reconnectState.timer) this.clearReconnectTimer(reconnectState.timer)
@@ -69,33 +77,33 @@ class BotManager {
     this.reconnects.set(account.id, reconnectState)
 
     const explicitVersion = normalizeVersionSelection(account.version)
-    const rememberedVersion = explicitVersion ? '' : supportedVersionOrEmpty(account.lastSuccessfulVersion)
-    const connectionVersion = explicitVersion || rememberedVersion
+    // Auto must negotiate against the current server. A previously successful
+    // version (including one from a peer account) can become stale after an update.
+    const connectionVersion = explicitVersion
+    const modLog = (message) => this.emit('log', account.id, { kind: 'system', message, at: Date.now() })
     const bot = this.createBot({
       host: account.host,
       port: Number(account.port) || 25565,
       username: account.username,
       auth: 'microsoft',
       version: connectionVersion || false,
-      profilesFolder: path.join(this.profilesPath, account.id),
+      profilesFolder,
       connect: createProxyConnect(account.proxy, { host: account.host, port: Number(account.port) || 25565 }),
       hideErrors: true,
       checkTimeoutInterval: 45_000,
-      onMsaCode: (code) => this.emit('login-code', account.id, normalizeLoginCode(code))
+      onMsaCode: (code) => this.emit('login-code', account.id, normalizeLoginCode(code)),
+      ...moddedBotOptions(account, modLog)
     })
-    if (!explicitVersion && rememberedVersion) {
-      this.emit('log', account.id, {
-        kind: 'system',
-        message: `Auto version: using proven Minecraft ${rememberedVersion} for this server.`,
-        at: Date.now()
-      })
-    }
+    installModdedCompatibility(bot._client, { ...account, version: connectionVersion }, modLog)
+    installCustomChannels(bot._client, account, modLog)
+    bot.loadPlugin?.(pathfinder)
     installMovementPacketCompatibility(bot)
     installModernPlayerInputCompatibility(bot)
 
     const session = {
       bot,
       account: { ...account },
+      moddedProfile: normalizeModdedProfile(account),
       antiAfkTimer: null,
       telemetryTimer: null,
       chestScanTimer: null,
@@ -114,6 +122,7 @@ class BotManager {
       depositRevision: 0,
       activeDepositContainer: null,
       inventoryAction: false,
+      inventoryQueue: Promise.resolve(),
       joinMessageSent: false,
       worldReadyAt: 0,
       nearestChest: null,
@@ -127,6 +136,7 @@ class BotManager {
       identityKey: '',
       telemetryKey: '',
       resourcePack: null,
+      worldBlockCache: null,
       versionReported: false,
       versionConfirmed: false
     }
@@ -144,14 +154,18 @@ class BotManager {
     })
     bot.physicsEnabled = account.environmentalMovement !== false
     this.sessions.set(account.id, session)
+    for (const event of ['blockUpdate', 'chunkColumnLoad', 'chunkColumnUnload', 'respawn']) {
+      bot.on(event, () => this.invalidateWorldSnapshot(account.id, session))
+    }
     this.status(account.id, 'connecting', reconnecting ? `Reconnect attempt ${reconnectState.attempts}…` : `Connecting to ${account.host}…`)
     session.connectionTimer = this.scheduleNetworkTimer(() => {
       session.connectionTimer = null
       if (!this.sessions.has(account.id) || session.ready) return
-      session.lastNetworkReason = 'ETIMEDOUT: The connection did not finish within 60 seconds.'
-      this.emit('log', account.id, { kind: 'error', message: 'Network error (ETIMEDOUT): The connection did not finish within 60 seconds. Auto-reconnect will retry.', at: Date.now() })
+      const seconds = boundedNumber(account.connectTimeoutSeconds, 5, 300, 60)
+      session.lastNetworkReason = `ETIMEDOUT: The connection did not finish within ${seconds} seconds.`
+      this.emit('log', account.id, { kind: 'error', message: `Network error (ETIMEDOUT): The connection did not finish within ${seconds} seconds. Auto-reconnect will retry.`, at: Date.now() })
       bot.end('connectTimeout')
-    }, 60_000)
+    }, boundedNumber(account.connectTimeoutSeconds, 5, 300, 60) * 1000)
 
     bot._client?.on?.('start_configuration', () => {
       session.switching = true
@@ -185,7 +199,7 @@ class BotManager {
             this.emit('version', account.id, { version: String(bot.version).slice(0, 32), automatic: !account.version, stable: true })
           }
         }
-      }, 60_000)
+      }, boundedNumber(account.reconnectResetDelay, 5, 3600, 60) * 1000)
       this.status(account.id, 'online', `Online as ${bot.username}`)
       if (!session.versionReported && bot.version) {
         session.versionReported = true
@@ -352,15 +366,9 @@ class BotManager {
       }
     })
     bot.on('end', (reason) => {
-      const retryWithoutRememberedVersion = !session.ready && !explicitVersion && Boolean(rememberedVersion)
-      this.clearSession(account.id)
-      if (retryWithoutRememberedVersion && !reconnectState.manual) {
-        this.emit('log', account.id, { kind: 'error', message: `Minecraft ${rememberedVersion} did not reach the world. Retrying once with fresh version detection.`, at: Date.now() })
-        this.scheduleReconnect(
-          { ...account, lastSuccessfulVersion: '' },
-          session.lastKickReason || session.lastNetworkReason || reason
-        )
-      } else if (account.autoReconnect !== false && !reconnectState.manual) {
+      if (this.sessions.get(account.id) !== session) return
+      this.clearSession(account.id, session)
+      if (account.autoReconnect !== false && !reconnectState.manual) {
         this.scheduleReconnect(account, session.lastKickReason || session.lastNetworkReason || reason)
       } else {
         this.reconnects.delete(account.id)
@@ -381,10 +389,13 @@ class BotManager {
       this.status(id, 'offline', 'Disconnected')
       return
     }
-    this.clearTimers(session)
-    session.bot.quit('Disconnected from AFK Desk')
-    this.sessions.delete(id)
-    this.status(id, 'offline', 'Disconnected')
+    // Detach before quit: its end event may be synchronous or arrive after a new connection.
+    this.clearSession(id, session)
+    try {
+      session.bot.quit('Disconnected from AFK Desk')
+    } finally {
+      if (!this.sessions.has(id)) this.status(id, 'offline', 'Disconnected')
+    }
   }
 
   scheduleReconnect(account, reason) {
@@ -482,6 +493,15 @@ class BotManager {
     bot.look(bot.entity.yaw + delta, bot.entity.pitch, true)
   }
 
+  lookDelta(id, yawDelta = 0, pitchDelta = 0) {
+    const bot = this.requireOnline(id)
+    const yawChange = Math.max(-0.7, Math.min(0.7, Number(yawDelta) || 0))
+    const pitchChange = Math.max(-0.5, Math.min(0.5, Number(pitchDelta) || 0))
+    const yaw = bot.entity.yaw + yawChange
+    const pitch = Math.max(-1.45, Math.min(1.45, bot.entity.pitch + pitchChange))
+    return bot.look(yaw, pitch, true)
+  }
+
   async dropStack(id, slot) {
     return this.withInventoryAction(id, async (bot, session) => {
       const safeSlot = playerInventorySlot(slot)
@@ -490,6 +510,44 @@ class BotManager {
       if (!item) throw new Error('That inventory stack is no longer available.')
       await bot.tossStack(item)
       this.emit('log', id, { kind: 'sent', message: `Dropped ${item.count} × ${item.displayName || item.name}`, at: Date.now() })
+    })
+  }
+
+  async dropItems(id, slot, requestedCount = 1) {
+    return this.withInventoryAction(id, async (bot, session) => {
+      const safeSlot = playerInventorySlot(slot)
+      if (lockedSlotSet(session.account).has(safeSlot)) throw new Error('That inventory stack is locked.')
+      const item = bot.inventory?.slots?.[safeSlot]
+      if (!item) throw new Error('That inventory stack is no longer available.')
+      const count = Math.max(1, Math.min(Number(requestedCount) || 1, Number(item.count) || 1))
+      if (typeof bot.transfer !== 'function') throw new Error('Exact-slot inventory transfer is unavailable.')
+      await bot.transfer({ window: bot.inventory, itemType: item.type, metadata: item.metadata ?? null,
+        nbt: item.nbt, count, sourceStart: safeSlot, sourceEnd: safeSlot + 1,
+        destStart: -999, destEnd: -999 })
+      this.emit('log', id, { kind: 'sent', message: `Dropped ${count} × ${item.displayName || item.name}`, at: Date.now() })
+      return { slot: safeSlot, count }
+    })
+  }
+
+  async depositSlot(id, slot, requestedCount = 64) {
+    return this.withInventoryAction(id, async (bot, session) => {
+      const safeSlot = playerInventorySlot(slot)
+      if (lockedSlotSet(session.account).has(safeSlot)) throw new Error('That inventory stack is locked.')
+      const item = bot.inventory?.slots?.[safeSlot]
+      if (!item) throw new Error('That inventory stack is no longer available.')
+      const block = findNearestChest(bot, session.account.autoDepositRange)
+      if (!block) throw new Error('No visible chest or barrel is in range.')
+      const count = Math.max(1, Math.min(Number(requestedCount) || item.count, Number(item.count) || 1))
+      const container = await (bot.openContainer || bot.openChest).call(bot, block)
+      let transferred
+      try {
+        if (lockedSlotSet(session.account).has(safeSlot)) throw new Error('That inventory stack is locked.')
+        transferred = await transferPlayerSlot(bot, container, safeSlot, count)
+      }
+      finally { try { container.close() } catch {} }
+      const location = chestLocation(bot, block)
+      this.emit('log', id, { kind: 'sent', message: `Deposited ${transferred} × ${item.displayName || item.name} at ${location.x}, ${location.y}, ${location.z}.`, at: Date.now() })
+      return { slot: safeSlot, count: transferred, location }
     })
   }
 
@@ -523,13 +581,161 @@ class BotManager {
     const session = this.sessions.get(id)
     const bot = this.requireOnline(id)
     if (bot.currentWindow) throw new Error('Close the server menu before managing player inventory.')
-    if (session.depositing || session.inventoryAction) throw new Error('Another inventory action is still running.')
-    session.inventoryAction = true
-    try { return await action(bot, session) }
-    finally {
-      session.inventoryAction = false
-      this.emitTelemetry(id)
+    const execute = async () => {
+      if (!this.sessions.has(id)) throw new Error('This account is no longer online.')
+      while (session.depositing) await delay(50)
+      session.inventoryAction = true
+      try { return await action(bot, session) }
+      finally { session.inventoryAction = false; this.emitTelemetry(id) }
     }
+    const queued = session.inventoryQueue.then(execute, execute)
+    session.inventoryQueue = queued.catch(() => {})
+    return queued
+  }
+
+  worldSnapshot(id, radius = 6, blockRefreshMs = 1000) {
+    const session = this.sessions.get(id)
+    const bot = this.requireOnline(id)
+    const center = bot.entity?.position
+    if (!center) throw new Error('World position is not available yet.')
+    const safeRadius = Math.max(2, Math.min(Math.round(Number(radius) || 6), 12))
+    const anchor = { x: Math.floor(center.x), y: Math.floor(center.y), z: Math.floor(center.z) }
+    const cached = session?.worldBlockCache
+    const cacheLifetime = Math.max(100, Math.min(Number(blockRefreshMs) || 1000, 10000))
+    let blocks = cached && cached.radius === safeRadius && cached.x === anchor.x && cached.y === anchor.y && cached.z === anchor.z && Date.now() - cached.at < cacheLifetime ? cached.blocks : null
+    if (!blocks) {
+      blocks = []
+      for (let y = -4; y <= 4; y += 1) {
+        for (let x = -safeRadius; x <= safeRadius; x += 1) {
+          for (let z = -safeRadius; z <= safeRadius; z += 1) {
+            const block = bot.blockAt?.(new Vec3(anchor.x + x, anchor.y + y, anchor.z + z), false)
+            if (!block || block.name === 'air' || block.name === 'cave_air' || block.name === 'void_air') continue
+            blocks.push({ x: block.position.x, y: block.position.y, z: block.position.z, name: String(block.name).slice(0, 80), solid: block.boundingBox === 'block', water: WATER_NAMES.has(block.name) || WATERLIKE_NAMES.has(block.name), shapes: boundedBlockShapes(block), stateId: Number.isSafeInteger(block.stateId) ? block.stateId : null })
+          }
+        }
+      }
+      // The radius/height loops already cap the volume at 5,625 cells. Slicing
+      // by scan order erased the upper/eastern half of dense nearby worlds.
+      if (session) {
+        session.worldBlockRevision = ++this.nextWorldBlockRevision
+        session.worldBlockCache = { ...anchor, radius: safeRadius, blocks, at: Date.now() }
+      }
+    }
+    const entities = Object.values(bot.entities || {}).filter((entity) => entity?.position && entity !== bot.entity && entity.position.distanceTo(center) <= safeRadius * 2).slice(0, 100).map((entity) => ({
+      id: Number(entity.id), name: String(entity.username || entity.displayName || entity.name || entity.type || 'entity').slice(0, 80), type: String(entity.type || ''),
+      x: roundDiagnostic(entity.position.x), y: roundDiagnostic(entity.position.y), z: roundDiagnostic(entity.position.z), distance: roundDiagnostic(entity.position.distanceTo(center))
+    }))
+    return { edition: 'java', radius: safeRadius, position: vectorSnapshot(center), yaw: Number(bot.entity.yaw) || 0, pitch: Number(bot.entity.pitch) || 0, blocks, entities,
+      blockRevision: session.worldBlockRevision || 0,
+      quickBarSlot: Math.max(0, Math.min(Number(bot.quickBarSlot) || 0, 8)),
+      heldItem: bot.heldItem ? { name: String(bot.heldItem.name || '').slice(0, 80), displayName: String(bot.heldItem.displayName || bot.heldItem.name || '').slice(0, 100), count: Math.max(0, Math.min(Number(bot.heldItem.count) || 0, 999)) } : null,
+      at: Date.now() }
+  }
+
+  async worldAction(id, action, target = {}) {
+    const bot = this.requireOnline(id)
+    const session = this.sessions.get(id)
+    if (action === 'stop-dig') {
+      if (session.worldDigging) session.worldDigging.cancelled = true
+      bot.stopDigging?.()
+      session.worldDigging = null
+      return { stopped: true }
+    }
+    if (action === 'stop-use') {
+      bot.deactivateItem?.()
+      return { stopped: true }
+    }
+    if (action === 'select-hotbar') {
+      const slot = target?.slot
+      if (!Number.isInteger(slot) || slot < 0 || slot > 8) throw new Error('Hotbar slot must be an integer from 0 to 8.')
+      if (session.worldDigging) {
+        session.worldDigging.cancelled = true
+        bot.stopDigging?.()
+        session.worldDigging = null
+      }
+      bot.setQuickBarSlot(slot)
+      this.emitTelemetry(id)
+      return { slot }
+    }
+    if (bot.currentWindow) throw new Error('Close the server menu before interacting with the world.')
+    if (action === 'dig-crosshair') return this.digWorldBlock(id, session, crosshairBlock(bot))
+    if (action === 'use-crosshair') {
+      if (session.worldUsing) throw new Error('A world interaction is already running.')
+      const block = crosshairBlock(bot, false)
+      if (!block) { bot.activateItem(); return { used: true } }
+      const face = blockFaceVector(block.face)
+      session.worldUsing = true
+      try {
+        const heldName = bot.heldItem?.name
+        const heldBlock = heldName && bot.registry?.blocksByName?.[heldName]
+        if (heldBlock && (!isInteractiveBlock(block.name) || bot.controlState?.sneak)) {
+          await bot.placeBlock(block, face)
+          return { placed: true, position: block.position.plus(face), block: heldName }
+        }
+        await bot.activateBlock(block, face)
+        return { used: true, position: block.position, block: block.name }
+      } finally {
+        session.worldUsing = false
+        this.invalidateWorldSnapshot(id, session)
+      }
+    }
+    if (action === 'attack-nearest') {
+      const entity = Object.values(bot.entities || {}).filter((entry) => entry?.position && entry !== bot.entity).sort((a, b) => a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position))[0]
+      if (!entity || entity.position.distanceTo(bot.entity.position) > 3.5) throw new Error('No nearby entity is in attack range.')
+      const aim = entity.position.offset(0, Number(entity.height || 1) / 2, 0)
+      const eye = worldEye(bot)
+      if (!bot.world?.raycast) throw new Error('World raycasting is not available yet.')
+      const obstacle = bot.world.raycast(eye, aim.minus(eye).normalize(), eye.distanceTo(aim))
+      if (obstacle) throw new Error('The nearby entity is not visible.')
+      await bot.lookAt(aim, true)
+      if (this.sessions.get(id) !== session) throw new Error('This account is no longer online.')
+      bot.attack(entity)
+      return { entityId: entity.id }
+    }
+    if (action === 'use-held') { bot.activateItem(); return { used: true } }
+    const point = new Vec3(Math.floor(Number(target.x)), Math.floor(Number(target.y)), Math.floor(Number(target.z)))
+    if (![point.x, point.y, point.z].every(Number.isFinite)) throw new Error('Enter valid target coordinates.')
+    const block = bot.blockAt(point, false)
+    if (action === 'look-at') { await bot.lookAt(point.offset(0.5, 0.5, 0.5), true); return { position: point } }
+    if (action === 'activate-block') { validateVisibleBlock(bot, block); await bot.activateBlock(block); this.invalidateWorldSnapshot(id, session); return { position: point, block: block.name } }
+    if (action === 'dig-block') { validateVisibleBlock(bot, block); return this.digWorldBlock(id, session, block, true) }
+    if (action === 'walk-to') {
+      if (!bot.pathfinder) throw new Error('Pathfinder is not loaded.')
+      bot.pathfinder.setMovements(new Movements(bot))
+      await bot.pathfinder.goto(new goals.GoalNear(point.x, point.y, point.z, Math.max(0, Math.min(Number(target.range) || 1, 8))))
+      return { position: point }
+    }
+    throw new Error('Unknown world action.')
+  }
+
+  async digWorldBlock(id, session, block, turnToTarget = false) {
+    if (session.worldDigging) throw new Error('Digging is already running.')
+    if (!block || ['air', 'cave_air', 'void_air'].includes(block.name)) throw new Error('No visible block is in reach.')
+    const operation = { cancelled: false }
+    session.worldDigging = operation
+    try {
+      if (turnToTarget) {
+        await session.bot.lookAt(block.position.offset(0.5, 0.5, 0.5), true)
+        if (operation.cancelled || this.sessions.get(id) !== session) return { cancelled: true }
+        validateVisibleBlock(session.bot, block)
+      }
+      // Keep the validated crosshair direction. Mineflayer's ignore mode also
+      // installs cancellation synchronously instead of awaiting a look turn.
+      await session.bot.dig(block, 'ignore')
+      return operation.cancelled ? { cancelled: true } : { position: block.position, block: block.name }
+    } catch (error) {
+      if (operation.cancelled) return { cancelled: true }
+      throw error
+    } finally {
+      if (session.worldDigging === operation) session.worldDigging = null
+      this.invalidateWorldSnapshot(id, session)
+    }
+  }
+
+  invalidateWorldSnapshot(id, session) {
+    if (this.sessions.get(id) !== session) return
+    session.worldBlockCache = null
+    session.worldBlockRevision = ++this.nextWorldBlockRevision
   }
 
   setItemLocks(id, slots) {
@@ -594,8 +800,11 @@ class BotManager {
       session.activeDepositContainer = chest
       for (const item of items) {
         if (!isDepositActive(session, depositRevision)) break
-        await chest.deposit(item.type, item.metadata ?? null, item.count, item.nbt)
-        deposited += item.count
+        const slot = Number(item.slot)
+        if (lockedSlotSet(session.account).has(slot)) continue
+        const current = session.bot.inventory?.slots?.[slot]
+        if (!current) continue
+        deposited += await transferPlayerSlot(session.bot, chest, slot, current.count)
       }
       if (deposited > 0) {
         const { x, y, z } = chestLocation(session.bot, block)
@@ -843,13 +1052,18 @@ class BotManager {
     if (account.antiAfk !== false && session.bot.entity) this.enableAntiAfk(id, account)
   }
 
-  clearSession(id) {
+  clearSession(id, expectedSession) {
     const session = this.sessions.get(id)
-    if (session) this.clearTimers(session)
+    if (expectedSession && session !== expectedSession) return
     this.sessions.delete(id)
+    if (session) this.clearTimers(session)
   }
 
   clearTimers(session) {
+    if (session.worldDigging) session.worldDigging.cancelled = true
+    try { session.bot.stopDigging?.() } catch {}
+    try { if (session.bot.usingHeldItem) session.bot.deactivateItem?.() } catch {}
+    session.worldDigging = null
     session.depositRevision += 1
     try { session.activeDepositContainer?.close() } catch {}
     session.activeDepositContainer = null
@@ -887,6 +1101,48 @@ class BotManager {
   }
 }
 
+function worldEye(bot) {
+  const height = Number(bot.entity.eyeHeight) || 1.62
+  return bot.entity.position.offset(0, Math.max(0.1, Math.min(height, 2)), 0)
+}
+
+function crosshairBlock(bot, required = true) {
+  if (!bot.world?.raycast) throw new Error('World raycasting is not available yet.')
+  const yaw = Number(bot.entity.yaw) || 0
+  const pitch = Number(bot.entity.pitch) || 0
+  const direction = new Vec3(-Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch))
+  const block = bot.world.raycast(worldEye(bot), direction, 5)
+  if (block && (!block.intersect || worldEye(bot).distanceTo(block.intersect) > 5.001)) throw new Error('Target is outside interaction range.')
+  if (!block && required) throw new Error('No visible block is in reach.')
+  return block
+}
+
+function validateVisibleBlock(bot, block) {
+  if (!block || ['air', 'cave_air', 'void_air'].includes(block.name)) throw new Error('Target block is empty or unloaded.')
+  const eye = worldEye(bot)
+  const center = block.position.offset(0.5, 0.5, 0.5)
+  if (eye.distanceTo(center) > 5) throw new Error('Target is outside interaction range.')
+  const hit = bot.world?.raycast?.(eye, center.minus(eye).normalize(), 5)
+  if (!hit || !hit.position.equals(block.position)) throw new Error('Target block is not visible.')
+}
+
+function blockFaceVector(face) {
+  const values = [[0, -1, 0], [0, 1, 0], [0, 0, -1], [0, 0, 1], [-1, 0, 0], [1, 0, 0]]
+  if (!Number.isInteger(face) || !values[face]) throw new Error('The target block face is not available.')
+  return new Vec3(...values[face])
+}
+
+function isInteractiveBlock(name) {
+  return /(?:chest|barrel|furnace|hopper|dispenser|dropper|crafting_table|anvil|enchanting_table|lectern|stonecutter|grindstone|loom|smithing_table|beacon|brewing_stand|lever|note_block|bell|(?:^|_)(?:door|trapdoor|button|bed|fence_gate))$/.test(String(name))
+}
+
+function boundedBlockShapes(block) {
+  const shapes = Array.isArray(block.shapes) ? block.shapes : (block.boundingBox === 'block' ? [[0, 0, 0, 1, 1, 1]] : [])
+  return shapes.slice(0, 8).filter(shape => Array.isArray(shape) && shape.length === 6 && shape.every(Number.isFinite))
+    .map(shape => shape.map(value => Math.max(0, Math.min(value, 1))))
+    .filter(shape => shape[3] > shape[0] && shape[4] > shape[1] && shape[5] > shape[2])
+}
+
 function normalizeLoginCode(code) {
   if (typeof code === 'string') return { code }
   return {
@@ -921,11 +1177,19 @@ function describeNetworkError(error) {
 }
 
 function reconnectDelaySeconds(account, reason, attempts) {
-  const base = Math.max(1, Math.min(Number(account?.autoReconnectDelay) || 5, 300))
-  const exponential = Math.min(base * (2 ** Math.min(Math.max(0, Number(attempts) - 1), 6)), 300)
+  const base = boundedNumber(account?.autoReconnectDelay, 1, 3600, 5)
+  const multiplier = boundedNumber(account?.autoReconnectBackoffMultiplier, 1, 10, 2)
+  const maximum = Math.max(base, boundedNumber(account?.autoReconnectMaxDelay, 1, 86400, 300))
+  const exponential = Math.min(base * (multiplier ** Math.min(Math.max(0, Number(attempts) - 1), 12)), maximum)
   const text = String(reason || '')
-  if (/logging in too fast|too many connection attempts|rate.?limit/i.test(text)) return Math.max(exponential, 30)
-  return exponential
+  const rateLimitMinimum = boundedNumber(account?.autoReconnectRateLimitDelay, 1, 86400, 30)
+  const result = /logging in too fast|too many connection attempts|rate.?limit/i.test(text) ? Math.max(exponential, rateLimitMinimum) : exponential
+  return Math.max(1, Math.round(result * 10) / 10)
+}
+
+function boundedNumber(value, minimum, maximum, fallback) {
+  const number = Number(value)
+  return Number.isFinite(number) ? Math.max(minimum, Math.min(number, maximum)) : fallback
 }
 
 function formatReason(reason) {
@@ -1399,7 +1663,7 @@ function buildTelemetry(bot, nearestChest = null, environmentalMovement, fluidMo
     count: Math.max(1, Math.min(Number(item.count) || 1, 127)),
     ...itemDurability(item),
     ...itemTooltipDetails(item, bot?.registry, bot?.__afkDeskEnchantmentsById),
-    ...resourcePack?.itemAppearance?.(item)
+    ...safeItemAppearance(resourcePack, item)
   }))
   const environment = environmentalMovement === undefined ? undefined : {
     enabled: environmentalMovement !== false,
@@ -1562,6 +1826,29 @@ function playerInventorySlot(value) {
   return slot
 }
 
+async function transferPlayerSlot(bot, container, slot, requestedCount) {
+  if (typeof bot.transfer !== 'function') throw new Error('Exact-slot inventory transfer is unavailable.')
+  const inventoryStart = Number(bot.inventory?.inventoryStart)
+  const containerStart = Number(container?.inventoryStart)
+  const containerEnd = Number(container?.inventoryEnd)
+  const source = containerStart + slot - inventoryStart
+  const item = bot.inventory?.slots?.[slot]
+  const windowItem = container?.slots?.[source]
+  if (!Number.isInteger(inventoryStart) || !Number.isInteger(containerStart) || !Number.isInteger(containerEnd) ||
+      !Number.isInteger(source) || source < containerStart || source >= containerEnd ||
+      !item || !windowItem || item.type !== windowItem.type || item.metadata !== windowItem.metadata ||
+      !isDeepStrictEqual(item.nbt, windowItem.nbt) ||
+      !isDeepStrictEqual(item.components, windowItem.components)) throw new Error('The selected inventory stack is no longer available in the container.')
+  const count = Math.min(Number(requestedCount), Number(item.count), Number(windowItem.count))
+  if (!Number.isInteger(count) || count < 1) throw new Error('The selected inventory stack is empty.')
+  await bot.transfer({ window: container, itemType: item.type, metadata: item.metadata ?? null,
+    nbt: item.nbt, count, sourceStart: source, sourceEnd: source + 1,
+    destStart: 0, destEnd: containerStart })
+  return count
+}
+
+function delay(milliseconds) { return new Promise((resolve) => setTimeout(resolve, milliseconds)) }
+
 function resolveEquipmentDestination(item, requested) {
   const allowed = new Set(['auto', 'hand', ...EQUIPMENT_DESTINATION_SLOTS.keys()])
   const destination = String(requested || 'auto')
@@ -1598,12 +1885,20 @@ function buildWindowSnapshot(window, registry, enchantmentsById, resourcePack = 
     count: Math.max(1, Math.min(Number(item.count) || 1, 127)),
     ...itemDurability(item),
     ...itemTooltipDetails(item, registry, enchantmentsById),
-    ...resourcePack?.itemAppearance?.(item)
+    ...safeItemAppearance(resourcePack, item)
   } : null).filter(Boolean)
   const titleSource = window?.title?.json ?? window?.title
-  const resourceTitle = resourcePack?.titleAppearance?.(titleSource)
+  const resourceTitle = safeTitleAppearance(resourcePack, titleSource)
   const title = resourceTitle ? 'Custom server menu' : String(extractText(window?.title) || 'Server menu').slice(0, 100)
   return { open: true, title, ...(resourceTitle ? { resourceTitle } : {}), size: limit, slots }
+}
+
+function safeItemAppearance(resourcePack, item) {
+  try { return resourcePack?.itemAppearance?.(item) || {} } catch { return {} }
+}
+
+function safeTitleAppearance(resourcePack, title) {
+  try { return resourcePack?.titleAppearance?.(title) || null } catch { return null }
 }
 
 function safeUrlHost(value) {

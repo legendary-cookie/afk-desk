@@ -1,9 +1,14 @@
 const protocol = require('minecraft-protocol')
 const minecraftData = require('minecraft-data')
+const { latestSupportedVersion, oldestSupportedVersion } = require('mineflayer')
 
 // node-minecraft-protocol can parse protocols that Mineflayer cannot run as a
 // complete bot. NMP advertises 1.7, but Mineflayer rejects it before login.
-const ENGINE_VERSIONS = Object.freeze(protocol.supportedVersions.filter(version => version !== '1.7'))
+const ENGINE_VERSIONS = Object.freeze(protocol.supportedVersions.filter((version) => {
+  if (version === '1.7') return false
+  const registry = minecraftData(version)
+  return registry?.version?.['>=']?.(oldestSupportedVersion) && registry.version['<='](latestSupportedVersion)
+}))
 const ENGINE_VERSION_SET = new Set(ENGINE_VERSIONS)
 
 function supportedVersions() {
@@ -26,11 +31,13 @@ function supportedVersionOrEmpty(value) {
 function resolvePingVersion(response) {
   const protocolVersion = Number(response?.version?.protocol)
   if (!Number.isInteger(protocolVersion)) return ''
-  const branded = String(response?.version?.name || '').match(/\b\d+\.\d+(?:\.\d+)?\b/g) || []
-  for (const version of branded.reverse()) {
-    if (ENGINE_VERSION_SET.has(version)) return version
-  }
   const candidates = minecraftData.postNettyVersionsByProtocolVersion.pc[protocolVersion] || []
+  const branded = String(response?.version?.name || '').match(/\b\d+\.\d+(?:\.\d+)?\b/g) || []
+  // Several patch releases share one protocol number. A matching name can
+  // disambiguate them, but must never select a different protocol.
+  for (const version of branded.reverse()) {
+    if (ENGINE_VERSION_SET.has(version) && candidates.some(candidate => candidate.minecraftVersion === version)) return version
+  }
   for (const candidate of candidates) {
     if (ENGINE_VERSION_SET.has(candidate.minecraftVersion)) return candidate.minecraftVersion
   }

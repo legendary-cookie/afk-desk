@@ -1,6 +1,7 @@
 from pathlib import Path
 from tempfile import gettempdir
 import base64
+import os
 from playwright.sync_api import sync_playwright
 
 
@@ -12,16 +13,32 @@ window.__controls = [];
 window.__windowClicks = [];
 window.__inventoryMoves = [];
 window.__equips = [];
+window.__worldActions = [];
+window.__lookDeltas = [];
+window.__world = { position: { x: .5, y: 64, z: 2.5 }, yaw: 0, pitch: -.16, radius: 9, blockRevision: 1, blocks: [], entities: [], health: 20, food: 18, quickBarSlot: 0, heldItem: { name: 'diamond_sword', displayName: 'Diamond Sword', count: 1 } };
+for (let x = -8; x <= 8; x++) for (let z = -9; z <= 4; z++) window.__world.blocks.push({ x, y: 63, z, name: x > 4 ? 'water' : 'grass_block', solid: x <= 4, water: x > 4 });
+for (let y = 64; y < 68; y++) window.__world.blocks.push({ x: -3, y, z: -3, name: 'oak_log', solid: true });
+for (let x = -4; x <= -2; x++) for (let z = -4; z <= -2; z++) window.__world.blocks.push({ x, y: 68, z, name: 'oak_leaves', solid: true });
+for (let x = 1; x <= 4; x++) for (let y = 64; y <= 66; y++) window.__world.blocks.push({ x, y, z: -5, name: x === 2 && y === 65 ? 'glass' : y === 64 ? 'stone' : 'oak_planks', solid: true });
+window.__world.blocks.push({ x: 0, y: 64, z: -2, name: 'stone_slab', solid: true, shapes: [[0, 0, 0, 1, .5, 1]] }, { x: -1, y: 64, z: -5, name: 'diamond_ore', solid: true });
 window.__savedAccount = null;
 window.__scale = 100;
 window.__settings = { startWithWindows: false, staggerStartupConnections: true, startupConnectionDelay: 3, uiScale: 100, sidePanelWidth: 300, inventoryHeight: 220, macros: [{ label: 'Town', message: '/server towny' }] };
 window.afkDesk = {
   listAccounts: async () => [{ id: 'one', label: 'TestPlayer', username: 'test@example.com', host: 'play.example.com', port: 25565, antiAfk: true, environmentalMovement: true }],
   getSettings: async () => ({ ...window.__settings }),
-  getAppVersion: async () => '0.7.0-test',
+  getAppVersion: async () => '0.10.0-beta.7-test',
+  getSupportedVersions: async () => ['1.8.8', '1.21.11'],
+  getWorldSnapshot: async () => window.__world,
+  worldAction: async (id, action, target) => { window.__worldActions.push({ id, action, target }); if (action === 'select-hotbar') window.__world.quickBarSlot = target.slot; },
+  lookDelta: async (id, yaw, pitch) => { window.__lookDeltas.push({ id, yaw, pitch }); },
+  listLogs: async () => [], clearLogs: async () => {}, getProxyHealth: async () => [],
+  runAutomation: async () => {}, stopAutomation: async () => {},
+  completeChat: async () => [], duplicateProfile: async () => ({}),
+  dropItems: async () => {}, depositSlot: async () => {},
   saveSettings: async (input) => (window.__settings = { ...window.__settings, ...input }),
   setUiScale: (value) => { window.__scale = value; },
-  onBotEvent: (callback) => { window.__botEvent = callback; setTimeout(() => callback({ type: 'status', id: 'one', payload: { status: 'online', detail: 'Ready', at: Date.now() } }), 0); return () => {}; },
+  onBotEvent: (callback) => { window.__botEvent = callback; setTimeout(() => { callback({ type: 'status', id: 'one', payload: { status: 'online', detail: 'Ready', at: Date.now() } }); callback({ type: 'telemetry', id: 'one', payload: { health: 20, food: 18, selectedHotbarSlot: 0, inventory: [{ slot: 36, name: 'diamond_sword', displayName: 'Diamond Sword', count: 1 }, { slot: 37, name: 'oak_planks', displayName: 'Oak Planks', count: 32 }] } }); }, 0); return () => {}; },
   sendChat: async (_id, message) => { window.__sent.push(message); },
   reorderAccounts: async () => [], control: async () => {}, setControlState: async (_id, control, active) => { window.__controls.push([control, active]); }, look: async () => {},
   connect: async () => {}, disconnect: async () => {}, dropStack: async () => {}, setItemLock: async (_id, slot, locked) => ({ lockedInventorySlots: locked ? [slot] : [] }), setAutoDeposit: async () => {},
@@ -36,10 +53,13 @@ window.afkDesk = {
 
 def run() -> None:
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
+        browser = playwright.chromium.launch(headless=True, executable_path=os.environ.get('AFK_DESK_TEST_BROWSER') or None)
+        errors = []
         page = browser.new_page(viewport={"width": 1366, "height": 768})
+        page.set_default_timeout(10000)
+        page.on('pageerror', lambda error: errors.append(str(error)))
         page.add_init_script(STUB)
-        page.goto(URL, wait_until="domcontentloaded")
+        page.goto(URL, wait_until="networkidle")
         page.locator("#dashboard:not([hidden])").wait_for()
         page.locator("body").click(position={"x": 500, "y": 100})
         page.keyboard.down("w")
@@ -86,7 +106,7 @@ def run() -> None:
         page.mouse.move(box["x"], box["y"] - 30)
         page.mouse.up()
         assert page.evaluate("window.__settings.inventoryHeight > 220")
-        assert page.locator("#app-version").inner_text() == "v0.7.0-test"
+        assert page.locator("#app-version").inner_text() == "v0.10.0-beta.7-test"
         page.locator("#display-menu-trigger").click()
         page.locator("#quick-scale").fill("105")
         assert page.evaluate("window.__scale") == 105
@@ -231,10 +251,75 @@ def run() -> None:
         assert narrow.evaluate("document.documentElement.scrollWidth <= innerWidth")
         narrow_path = str(Path(gettempdir()) / "afkdesk-ui-narrow.png")
         narrow.screenshot(path=narrow_path, full_page=True)
+
+        pov = browser.new_page(viewport={"width": 1366, "height": 768})
+        pov.set_default_timeout(10000)
+        pov.on('pageerror', lambda error: errors.append(str(error)))
+        pov.add_init_script(STUB)
+        pov.goto(URL, wait_until="networkidle")
+        pov.locator("#dashboard:not([hidden])").wait_for()
+        pov.locator("#open-pov").click()
+        pov.locator("#pov-dialog").wait_for(state="visible")
+        pov.locator('#pov-grid canvas[data-position]').wait_for()
+        assert pov.locator(".pov-card").count() == 1
+        pov.locator("#pov-search").fill("no match")
+        assert pov.locator("#pov-grid").inner_text() == "No profiles match this filter."
+        pov.locator("#pov-search").fill("")
+        pov.locator(".pov-expand").click()
+        canvas = pov.locator("#pov-grid canvas")
+        canvas.focus()
+        pov.keyboard.down("w")
+        pov.keyboard.up("w")
+        assert pov.evaluate("window.__controls") == [["forward", True], ["forward", False]]
+        pov.locator("#pov-x").fill("3")
+        pov.locator("#pov-y").fill("64")
+        pov.locator("#pov-z").fill("5")
+        pov.locator('[data-world-action="look-at"]').click()
+        assert pov.evaluate("window.__worldActions[0]") == {"id": "one", "action": "look-at", "target": {"x": 3, "y": 64, "z": 5, "range": 1}}
+        canvas.focus()
+        pov.keyboard.press("Digit2")
+        pov.wait_for_function("window.__world.quickBarSlot === 1")
+        canvas.hover()
+        pov.mouse.wheel(0, 100)
+        pov.wait_for_function("window.__world.quickBarSlot === 2")
+        pov.locator("#pov-x").fill("19")
+        assert pov.evaluate("window.__world.quickBarSlot") == 2
+        canvas.click()
+        pov.wait_for_function("document.pointerLockElement !== null")
+        pov.mouse.down()
+        pov.mouse.up()
+        pov.mouse.down(button="right")
+        pov.mouse.up(button="right")
+        assert pov.evaluate("window.__worldActions.slice(-4).map(entry => entry.action)") == ["dig-crosshair", "stop-dig", "use-crosshair", "stop-use"]
+        pov.evaluate("document.exitPointerLock()")
+        canvas.focus()
+        pov.keyboard.down("w")
+        pov.locator("#pov-pause").click()
+        assert pov.evaluate("window.__controls.slice(-1)") == [["forward", False]]
+        pov.keyboard.up("w")
+        pov.locator("#pov-pause").click()
+        pov.locator("#pov-view-mode").select_option("map")
+        assert pov.evaluate("window.__settings.povViewMode") == "map"
+        pov.locator("#pov-pause").click()
+        assert pov.locator("#pov-pause").inner_text() == "Resume"
+        pov.locator("#pov-pause").click()
+        assert pov.locator("#pov-pause").inner_text() == "Pause"
+        pov.locator("#pov-view-mode").select_option("perspective")
+        pov.locator('#pov-grid canvas[data-position]').wait_for()
+        pov.locator("#pov-grid canvas").focus()
+        pov.keyboard.press("Digit1")
+        pov.wait_for_function("window.__world.quickBarSlot === 0")
+        pov_path = str(Path(gettempdir()) / "afkdesk-ui-pov.png")
+        pov.screenshot(path=pov_path)
+        pov.locator("#pov-grid canvas").focus()
+        pov.keyboard.press("KeyE")
+        pov.locator("#pov-dialog").wait_for(state="hidden")
+        assert not errors, errors
         browser.close()
         print(desktop)
         print(compact_path)
         print(narrow_path)
+        print(pov_path)
 
 
 if __name__ == "__main__":

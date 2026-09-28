@@ -1,14 +1,16 @@
 import React, {useCallback, useEffect, useRef, useState} from 'react';
 import {
-  Alert, FlatList, Image, Linking, Modal, Pressable, SafeAreaView, ScrollView, Share,
+  Alert, FlatList, Image, Modal, Pressable, SafeAreaView, ScrollView, Share,
   StatusBar, StyleSheet, Switch, Text, TextInput, View,
 } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import {loadAccounts, saveAccounts} from './account-storage';
+import {syncForegroundSessions} from './foreground-service';
+import {openExternalUrl, openMicrosoftSignIn} from './external-links';
 import nodejs from 'nodejs-mobile-react-native';
 
 type ProxyConfig = {enabled: boolean; type: 'socks5' | 'http'; host: string; port: string; username: string; password: string};
 type Account = {
-  id: string; username: string; host: string; port: string; version: string; skinUrl?: string;
+  id: string; username: string; minecraftName?: string; host: string; port: string; version: string; skinUrl?: string;
   antiAfk: boolean; antiAfkInterval: string; autoReconnect: boolean; autoReconnectDelay: string;
   autoReconnectMaxAttempts: string; connectOnStartup: boolean; joinMessage: string;
   serverChangeMessage: string; messageDelay: string; autoDepositToChest: boolean;
@@ -24,7 +26,6 @@ type ServerMenu = {open: boolean; title: string; size: number; slots: Item[]; re
 type Telemetry = {health: number; food: number; position: null | {x: number; y: number; z: number}; dimension: string; nearestChest?: null | {type: string; x: number; y: number; z: number; distance: number}; inventory: Item[]};
 type Session = {status: string; detail: string; logs: Log[]; telemetry?: Telemetry; serverWindow?: ServerMenu | null};
 
-const STORAGE_KEY = 'afkdesk.mobile.accounts.v1';
 const SUPPORTED_GAME_VERSIONS = ['1.21.11', '1.21.9', '1.21.8', '1.21.6', '1.21.5', '1.21.4', '1.21.3', '1.21.1', '1.20.6', '1.20.4', '1.20.2', '1.20.1', '1.20', '1.19.4', '1.19.3', '1.19.2', '1.19', '1.18.2', '1.17.1', '1.16.5', '1.15.2', '1.14.4', '1.13.2', '1.12.2', '1.11.2', '1.10.2', '1.9.4', '1.8.8'];
 const EMPTY_PROXY: ProxyConfig = {enabled: false, type: 'socks5', host: '', port: '1080', username: '', password: ''};
 const blankAccount = (): Account => ({
@@ -60,6 +61,7 @@ function engineCommand<T = void>(command: Record<string, unknown>): Promise<T> {
 
 function App(): React.JSX.Element {
   const [accounts, setAccounts] = useState<Account[]>([]);
+  const [accountsLoaded, setAccountsLoaded] = useState(false);
   const [selectedId, setSelectedId] = useState('');
   const [sessions, setSessions] = useState<Record<string, Session>>({});
   const [engineReady, setEngineReady] = useState(false);
@@ -74,6 +76,10 @@ function App(): React.JSX.Element {
   const completionRequest = useRef(0);
   accountsRef.current = accounts;
 
+  useEffect(() => {
+    syncForegroundSessions(sessions).catch(error => Alert.alert('Background service', error.message));
+  }, [sessions]);
+
   const selected = accounts.find(account => account.id === selectedId) || accounts[0];
   const session = selected ? sessions[selected.id] || {status: 'offline', detail: 'Not connected', logs: []} : undefined;
 
@@ -82,10 +88,11 @@ function App(): React.JSX.Element {
   }, []);
 
   useEffect(() => {
-    AsyncStorage.getItem(STORAGE_KEY).then(raw => {
-      const restored: Account[] = (raw ? JSON.parse(raw) : []).map(normalizeAccount);
+    loadAccounts<Account>().then(saved => {
+      const restored = saved.map(normalizeAccount);
       setAccounts(restored);
       if (restored[0]) setSelectedId(restored[0].id);
+      setAccountsLoaded(true);
     }).catch(() => Alert.alert('Storage error', 'Saved accounts could not be loaded.'));
   }, []);
 
@@ -104,26 +111,26 @@ function App(): React.JSX.Element {
       if (type === 'window') updateSession(accountId, old => ({...old, serverWindow: payload.open ? payload : null}));
       if (type === 'login-code') setLoginCode(payload);
       if (type === 'identity') {
-        setAccounts(old => old.map(item => item.id === accountId ? {...item, username: payload.username || item.username, skinUrl: payload.skinUrl || item.skinUrl} : item));
+        setAccounts(old => old.map(item => item.id === accountId ? {...item, minecraftName: payload.username || item.minecraftName, skinUrl: payload.skinUrl || item.skinUrl} : item));
       }
     };
-    nodejs.channel.addListener('engine-ready', onReady);
-    nodejs.channel.addListener('engine-reply', onReply);
-    nodejs.channel.addListener('engine-event', onEvent);
+    const subscriptions = [
+      nodejs.channel.addListener('engine-ready', onReady),
+      nodejs.channel.addListener('engine-reply', onReply),
+      nodejs.channel.addListener('engine-event', onEvent),
+    ] as unknown as {remove: () => void}[];
     if (!engineStarted) {
       engineStarted = true;
       nodejs.start('main.js');
     }
-    return () => {
-      nodejs.channel.removeListener('engine-ready', onReady);
-      nodejs.channel.removeListener('engine-reply', onReply);
-      nodejs.channel.removeListener('engine-event', onEvent);
-    };
+    return () => subscriptions.forEach(subscription => subscription.remove());
   }, [updateSession]);
 
   useEffect(() => {
-    if (accounts.length) AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(accounts)).catch(() => {});
-  }, [accounts]);
+    if (!accountsLoaded) return;
+    saveAccounts(accounts)
+      .catch(() => Alert.alert('Storage error', 'Account changes could not be saved. Please try again before closing the app.'));
+  }, [accounts, accountsLoaded]);
 
   const autoConnected = useRef(false);
   useEffect(() => {
@@ -159,6 +166,10 @@ function App(): React.JSX.Element {
   }, [followLatest, selectedId, session?.logs.length]);
 
   const saveAccount = (input: Account) => {
+    if (!accountsLoaded) {
+      Alert.alert('Storage unavailable', 'Saved accounts have not been loaded. Wait for loading to finish, or restart the app if a storage error was shown. Existing data has been preserved.');
+      return;
+    }
     const account = normalizeAccount(input);
     if (!account.username.trim() || !account.host.trim()) {
       Alert.alert('Missing details', 'Enter an account label/email and server address.');
@@ -214,8 +225,7 @@ function App(): React.JSX.Element {
       return;
     }
     if (click.action === 'open_url') {
-      try { await Linking.openURL(click.value); }
-      catch { await Share.share({message: click.value}); }
+      await openExternalUrl(click.value);
       return;
     }
     await Share.share({message: click.value});
@@ -251,7 +261,7 @@ function App(): React.JSX.Element {
         renderItem={({item, index}) => <View style={[styles.accountCard, item.id === selected?.id && styles.accountCardSelected]}>
           <Pressable style={styles.accountSelect} onPress={() => setSelectedId(item.id)}>
             {item.skinUrl ? <Image source={{uri: item.skinUrl}} style={styles.avatar} /> : <View style={styles.avatarFallback}><Text style={styles.avatarLetter}>{item.username.slice(0, 1).toUpperCase()}</Text></View>}
-            <View style={styles.accountCopy}><Text numberOfLines={1} style={styles.accountName}>{item.username}</Text><Text numberOfLines={1} style={styles.muted}>{item.host}</Text></View>
+            <View style={styles.accountCopy}><Text numberOfLines={1} style={styles.accountName}>{item.minecraftName || item.username}</Text><Text numberOfLines={1} style={styles.muted}>{item.host}</Text></View>
             <View style={[styles.dot, (sessions[item.id]?.status === 'online') && styles.dotOnline]} />
           </Pressable>
           <View style={styles.orderRow}>
@@ -264,7 +274,7 @@ function App(): React.JSX.Element {
 
     {!selected ? <View style={styles.empty}><Text style={styles.title}>Add your first account</Text><Text style={styles.muted}>Microsoft sign-in opens in your browser and returns here.</Text><Pressable style={styles.primary} onPress={() => setEditing(blankAccount())}><Text style={styles.primaryText}>Add account</Text></Pressable></View> :
     <ScrollView style={styles.page} contentContainerStyle={styles.pageContent} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
-      <View style={styles.titleRow}><View style={styles.flex}><Text style={styles.title}>{selected.username}</Text><Text style={styles.status}>{session?.status} · {session?.detail}</Text></View>
+      <View style={styles.titleRow}><View style={styles.flex}><Text style={styles.title}>{selected.minecraftName || selected.username}</Text><Text style={styles.status}>{session?.status} · {session?.detail}</Text></View>
         <Pressable style={styles.smallButton} onPress={() => setEditing({...selected, proxy: {...selected.proxy}})}><Text style={styles.buttonText}>Edit</Text></Pressable>
         {session?.status === 'offline' ? <Pressable style={styles.primarySmall} onPress={connect}><Text style={styles.primaryText}>Connect</Text></Pressable> : <Pressable style={styles.dangerSmall} onPress={disconnect}><Text style={styles.dangerText}>Disconnect</Text></Pressable>}
       </View>
@@ -309,7 +319,7 @@ function App(): React.JSX.Element {
     }} />
     <SettingsModal visible={settingsOpen} accounts={accounts} onClose={() => setSettingsOpen(false)} onChange={setAccounts} />
     <ServerMenuModal value={session?.serverWindow || null} onClick={slot => selected && engineCommand({action: 'window-click', accountId: selected.id, slot}).catch((error: Error) => Alert.alert('Menu action failed', error.message))} onClose={() => selected && engineCommand({action: 'window-close', accountId: selected.id}).catch((error: Error) => Alert.alert('Close menu failed', error.message))} />
-    <Modal transparent visible={Boolean(loginCode)} animationType="fade"><View style={styles.backdrop}><View style={styles.modalCard}><Text style={styles.title}>Microsoft sign-in</Text><Text style={styles.modalHelp}>Open Microsoft, switch to the account you want, then enter this code:</Text><Text selectable style={styles.deviceCode}>{loginCode?.code}</Text><Pressable style={styles.primary} onPress={() => Linking.openURL(loginCode?.verificationUri || 'https://microsoft.com/link')}><Text style={styles.primaryText}>Open Microsoft sign-in</Text></Pressable><Pressable style={styles.modalButton} onPress={() => setLoginCode(null)}><Text style={styles.buttonText}>Close</Text></Pressable></View></View></Modal>
+    <Modal transparent visible={Boolean(loginCode)} animationType="fade"><View style={styles.backdrop}><View style={styles.modalCard}><Text style={styles.title}>Microsoft sign-in</Text><Text style={styles.modalHelp}>Open Microsoft, switch to the account you want, then enter this code:</Text><Text selectable style={styles.deviceCode}>{loginCode?.code}</Text><Pressable style={styles.primary} onPress={openMicrosoftSignIn}><Text style={styles.primaryText}>Open Microsoft sign-in</Text></Pressable><Pressable style={styles.modalButton} onPress={() => setLoginCode(null)}><Text style={styles.buttonText}>Close</Text></Pressable></View></View></Modal>
   </SafeAreaView>;
 }
 
@@ -409,7 +419,7 @@ function AccountModal({value, onClose, onSave, onDelete}: {value: Account | null
       <ScrollView contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled">
         <Text style={styles.sectionTitle}>Connection</Text>
         <Field label="Account label or Microsoft email" value={draft.username} onChange={(v: string) => set('username', v)} />
-        <Text style={styles.help}>After sign-in, the app automatically replaces this with the Minecraft IGN and head.</Text>
+        <Text style={styles.help}>After sign-in, the account card shows your Minecraft name and head. This login value is kept for future sign-ins.</Text>
         <Field label="Server" value={draft.host} onChange={(v: string) => set('host', v)} />
         <Field label="Port" value={draft.port} onChange={(v: string) => set('port', v)} keyboardType="number-pad" />
         <VersionField value={draft.version} onChange={(v: string) => set('version', v)} />

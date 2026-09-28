@@ -12,6 +12,7 @@ import android.os.IBinder
 
 class AfkForegroundService : Service() {
   companion object {
+    const val SESSION_COUNT = "session_count"
     private const val CHANNEL_ID = "afkdesk_connections"
     private const val NOTIFICATION_ID = 7321
   }
@@ -26,6 +27,15 @@ class AfkForegroundService : Service() {
         NotificationManager.IMPORTANCE_LOW
       ).apply { description = "Keeps your selected Minecraft accounts connected" })
     }
+  }
+
+  override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    val count = intent?.getIntExtra(SESSION_COUNT, 0) ?: 0
+    if (count <= 0) {
+      stopForeground(STOP_FOREGROUND_REMOVE)
+      stopSelf()
+      return START_NOT_STICKY
+    }
 
     val openApp = PendingIntent.getActivity(
       this,
@@ -38,9 +48,10 @@ class AfkForegroundService : Service() {
     } else {
       @Suppress("DEPRECATION") Notification.Builder(this)
     }.setSmallIcon(R.mipmap.ic_launcher)
-      .setContentTitle("AFK Desk is ready")
-      .setContentText("On-device Minecraft connections can remain active")
+      .setContentTitle("AFK Desk connections")
+      .setContentText(if (count == 1) "1 active Minecraft session" else "$count active Minecraft sessions")
       .setContentIntent(openApp)
+      .setOnlyAlertOnce(true)
       .setOngoing(true)
       .build()
 
@@ -49,8 +60,14 @@ class AfkForegroundService : Service() {
     } else {
       startForeground(NOTIFICATION_ID, notification)
     }
+    // The JavaScript engine owns live sessions. Android must not restart an
+    // empty service after process death and imply those sessions were restored.
+    return START_NOT_STICKY
   }
 
-  override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
+  override fun onDestroy() {
+    stopForeground(STOP_FOREGROUND_REMOVE)
+    super.onDestroy()
+  }
   override fun onBind(intent: Intent?): IBinder? = null
 }

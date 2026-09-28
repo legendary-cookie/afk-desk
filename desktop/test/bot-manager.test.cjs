@@ -4,7 +4,16 @@ const { EventEmitter } = require('node:events')
 const fs = require('node:fs')
 const path = require('node:path')
 const { Vec3 } = require('vec3')
-const { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, parseInteractiveChat, normalizeSkinUrl, findNearestChest, buildTelemetry, describeNetworkError, reconnectDelaySeconds, inspectFluidCurrent, recordFluidCorrection, installMovementPacketCompatibility, installModernPlayerInputCompatibility } = require('../electron/bot-manager.cjs')
+const { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, parseInteractiveChat, normalizeSkinUrl, findNearestChest, buildTelemetry, buildWindowSnapshot, describeNetworkError, reconnectDelaySeconds, inspectFluidCurrent, recordFluidCorrection, installMovementPacketCompatibility, installModernPlayerInputCompatibility } = require('../electron/bot-manager.cjs')
+
+test('malformed resource-pack art cannot prevent inventory or menu snapshots', () => {
+  const badPack = { itemAppearance: () => { throw new Error('invalid model') }, titleAppearance: () => null }
+  const item = { slot: 9, name: 'stone', type: 1, metadata: 0, nbt: null, count: 4 }
+  const bot = new FakeBot()
+  bot.inventory.items = () => [item]
+  assert.equal(buildTelemetry(bot, null, false, null, badPack).inventory[0].name, 'stone')
+  assert.equal(buildWindowSnapshot({ inventoryStart: 1, slots: [item], title: 'Chest' }, null, null, badPack).slots[0].name, 'stone')
+})
 const { computeSignedChatChecksum } = require('../electron/protocol-fixes.cjs')
 const { snapshotNearbyEntities } = require('../electron/movement-compatibility.cjs')
 
@@ -57,6 +66,36 @@ test('normalizes Microsoft device codes', () => {
   })
 })
 
+test('Forge auto matching performs a fresh ping even with a remembered version', (t) => {
+  const bot = new FakeBot()
+  let options
+  const manager = new BotManager({ profilesPath: 'profiles', emit: () => {}, createBot: input => { options = input; return bot } })
+  t.after(() => manager.disconnect('forge-auto'))
+  manager.connect({id: 'forge-auto', username: 'fixture', host: 'localhost', modLoader: 'forge', version: '', lastSuccessfulVersion: '1.12.2', antiAfk: false, autoReconnect: false})
+  assert.equal(options.version, false)
+})
+
+test('default auto loader performs a fresh ping even with a remembered version', (t) => {
+  let options
+  const manager = new BotManager({ profilesPath: 'profiles', emit: () => {}, createBot: input => { options = input; return new FakeBot() } })
+  t.after(() => manager.disconnect('default-auto'))
+  manager.connect({ id: 'default-auto', username: 'fixture', host: 'localhost', version: '', lastSuccessfulVersion: '1.12.2', antiAfk: false, autoReconnect: false })
+  assert.equal(options.version, false)
+})
+
+test('invalid account or identity paths are rejected before connection state or bot creation', () => {
+  let calls = 0
+  const manager = new BotManager({ profilesPath: 'profiles', emit: () => {}, createBot: () => { calls++; return new FakeBot() } })
+  for (const unsafe of ['../outside', '..\\outside', 'C:\\outside', 'CON', 'account/child']) {
+    for (const fields of [{ id: unsafe }, { id: 'safe', identityId: unsafe }]) {
+      assert.throws(() => manager.connect({ username: 'fixture', host: 'localhost', ...fields }), /Invalid profile identifier/)
+      assert.equal(calls, 0)
+      assert.equal(manager.sessions.size, 0)
+      assert.equal(manager.reconnects.size, 0)
+    }
+  }
+})
+
 test('connects, emits status, sends chat, and disconnects', () => {
   const events = []
   const bot = new FakeBot()
@@ -81,6 +120,45 @@ test('connects, emits status, sends chat, and disconnects', () => {
 
   manager.disconnect('one')
   assert.equal(events.at(-1)[2].status, 'offline')
+})
+
+test('a late end from a disconnected bot cannot clear its replacement session', (t) => {
+  const events = []
+  const oldBot = new FakeBot()
+  oldBot.quit = () => {}
+  const replacement = new FakeBot()
+  const bots = [oldBot, replacement]
+  const manager = new BotManager({ profilesPath: 'profiles', emit: (...event) => events.push(event), createBot: () => bots.shift() })
+  const account = { id: 'late-end', username: 'fixture', host: 'localhost', antiAfk: false, autoReconnect: true }
+  t.after(() => manager.disconnect(account.id))
+  manager.connect(account)
+  manager.disconnect(account.id)
+  manager.connect(account)
+  const session = manager.sessions.get(account.id)
+  const reconnect = manager.reconnects.get(account.id)
+  const count = events.length
+  oldBot.emit('end', 'delayed network close')
+  assert.equal(manager.sessions.get(account.id), session)
+  assert.equal(manager.reconnects.get(account.id), reconnect)
+  assert.equal(events.length, count)
+})
+
+test('disconnect detaches the old session before quit callbacks can connect again', (t) => {
+  const oldBot = new FakeBot()
+  const replacement = new FakeBot()
+  const bots = [oldBot, replacement]
+  const events = []
+  const manager = new BotManager({ profilesPath: 'profiles', emit: (...event) => events.push(event), createBot: () => bots.shift() })
+  const account = { id: 'reentrant-quit', username: 'fixture', host: 'localhost', antiAfk: false, autoReconnect: false }
+  t.after(() => manager.disconnect(account.id))
+  manager.connect(account)
+  oldBot.quit = () => {
+    oldBot.emit('end', 'quit')
+    manager.connect(account)
+  }
+  manager.disconnect(account.id)
+  assert.equal(manager.sessions.get(account.id)?.bot, replacement)
+  assert.equal(events.filter(([type]) => type === 'status').at(-1)[2].status, 'connecting')
 })
 
 test('chat completion returns bounded server suggestions and online player names', async () => {
@@ -135,7 +213,7 @@ test('sends separate join and server-change messages', async (t) => {
   assert.deepEqual(bot.writes, [])
 })
 
-test('auto version reuses the last successful protocol and reports the resolved version', () => {
+test('vanilla Auto detects the current server version even after a previous successful connection', () => {
   const events = []
   const bot = new FakeBot()
   bot.version = '1.21.1'
@@ -147,9 +225,9 @@ test('auto version reuses the last successful protocol and reports the resolved 
   })
   manager.connect({
     id: 'auto-version', username: 'user@example.com', host: 'localhost', port: 25565,
-    version: '', lastSuccessfulVersion: '1.21.1', antiAfk: false, autoReconnect: false
+    modLoader: 'vanilla', version: '', lastSuccessfulVersion: '1.21.1', antiAfk: false, autoReconnect: false
   })
-  assert.equal(options.version, '1.21.1')
+  assert.equal(options.version, false)
   bot.entity = { yaw: 0, pitch: 0 }
   bot.emit('spawn')
   assert.deepEqual(events.find(([type]) => type === 'version'), ['version', 'auto-version', { version: '1.21.1', automatic: true, stable: false }])
@@ -180,7 +258,7 @@ test('an auto-detected version is confirmed only after a stable minute online', 
   manager.disconnect('stable-version')
 })
 
-test('a remembered auto version falls back to fresh detection if it fails before the world loads', () => {
+test('Auto reconnect always detects the current server version', () => {
   const bots = [new FakeBot(), new FakeBot()]
   const versions = []
   let scheduled
@@ -192,15 +270,15 @@ test('a remembered auto version falls back to fresh detection if it fails before
   })
   manager.connect({
     id: 'stale-version', username: 'user@example.com', host: 'localhost', port: 25565,
-    version: '', lastSuccessfulVersion: '1.21.1', antiAfk: false, autoReconnect: true
+    modLoader: 'vanilla', version: '', lastSuccessfulVersion: '1.21.1', antiAfk: false, autoReconnect: true
   })
   bots[0].emit('end', 'unsupported protocol')
   scheduled()
-  assert.deepEqual(versions, ['1.21.1', false])
+  assert.deepEqual(versions, [false, false])
   manager.disconnect('stale-version')
 })
 
-test('Auto retries stale remembered versions once even when general reconnect is off', () => {
+test('Auto does not retry when general reconnect is off', () => {
   const bots = [new FakeBot(), new FakeBot()]
   const versions = []
   let scheduled
@@ -209,10 +287,10 @@ test('Auto retries stale remembered versions once even when general reconnect is
     createBot: (input) => { versions.push(input.version); return bots[versions.length - 1] },
     scheduleReconnectTimer: (callback) => { scheduled = callback; return 'retry' }
   })
-  manager.connect({ id: 'one-shot-auto', username: 'user@example.com', host: 'localhost', version: '', lastSuccessfulVersion: '1.21.1', antiAfk: false, autoReconnect: false })
+  manager.connect({ id: 'one-shot-auto', username: 'user@example.com', host: 'localhost', modLoader: 'vanilla', version: '', lastSuccessfulVersion: '1.21.1', antiAfk: false, autoReconnect: false })
   bots[0].emit('end', 'unsupported protocol')
-  scheduled()
-  assert.deepEqual(versions, ['1.21.1', false])
+  assert.equal(scheduled, undefined)
+  assert.deepEqual(versions, [false])
   manager.disconnect('one-shot-auto')
 })
 
@@ -524,6 +602,8 @@ test('finds the closest chest and deposits all inventory stacks only when enable
     { slot: 37, type: 264, metadata: 0, nbt: null, name: 'diamond', displayName: 'Diamond', count: 2 }
   ]
   bot.inventory.items = () => items
+  bot.inventory.inventoryStart = 9
+  for (const item of items) bot.inventory.slots[item.slot] = item
   bot.entity = { position: { x: 10, y: 64, z: 10 } }
   bot.findBlock = ({ matching, maxDistance }) => {
     assert.equal(maxDistance, 5)
@@ -535,9 +615,12 @@ test('finds the closest chest and deposits all inventory stacks only when enable
   let closed = false
   const depositClosed = Promise.withResolvers()
   bot.openChest = async () => ({
-    deposit: async (...args) => deposits.push(args),
+    inventoryStart: 27,
+    inventoryEnd: 63,
+    slots: Array.from({ length: 63 }, (_, slot) => bot.inventory.slots[slot - 18] || null),
     close: () => { closed = true; depositClosed.resolve() }
   })
+  bot.transfer = async ({ itemType, metadata, count, nbt }) => deposits.push([itemType, metadata, count, nbt])
   const manager = new BotManager({ profilesPath: 'profiles', emit: (...event) => events.push(event), createBot: () => bot })
   manager.connect({ id: 'chest', username: 'user@example.com', host: 'localhost', antiAfk: false, autoReconnect: false, autoDepositToChest: false })
 
@@ -582,10 +665,13 @@ test('turning auto-deposit off cancels the remaining queued stacks and closes th
   const depositClosed = Promise.withResolvers()
   const deposits = []
   let closed = false
-  bot.inventory.items = () => [
+  const items = [
     { slot: 36, type: 4, metadata: 0, nbt: null, count: 64 },
     { slot: 37, type: 264, metadata: 0, nbt: null, count: 2 }
   ]
+  bot.inventory.items = () => items
+  bot.inventory.inventoryStart = 9
+  for (const item of items) bot.inventory.slots[item.slot] = item
   bot.entity = { position: { x: 10, y: 64, z: 10 } }
   bot.canSeeBlock = () => true
   bot.findBlock = ({ useExtraInfo }) => {
@@ -593,15 +679,18 @@ test('turning auto-deposit off cancels the remaining queued stacks and closes th
     return useExtraInfo(block) ? block : null
   }
   bot.openChest = async () => ({
-    deposit: async (...args) => {
-      deposits.push(args)
-      if (deposits.length === 1) {
-        firstDepositStarted.resolve()
-        await releaseFirstDeposit.promise
-      }
-    },
+    inventoryStart: 27,
+    inventoryEnd: 63,
+    slots: Array.from({ length: 63 }, (_, slot) => bot.inventory.slots[slot - 18] || null),
     close: () => { closed = true; depositClosed.resolve() }
   })
+  bot.transfer = async ({ itemType, metadata, count, nbt }) => {
+    deposits.push([itemType, metadata, count, nbt])
+    if (deposits.length === 1) {
+      firstDepositStarted.resolve()
+      await releaseFirstDeposit.promise
+    }
+  }
   const events = []
   const manager = new BotManager({ profilesPath: 'profiles', emit: (...event) => events.push(event), createBot: () => bot })
   t.after(() => manager.disconnect('cancel-deposit'))
@@ -628,6 +717,9 @@ test('auto-deposit supports barrels and leaves locked stacks in inventory', asyn
   const locked = { slot: 36, type: 276, metadata: 0, nbt: null, name: 'diamond_sword', displayName: 'Diamond Sword', count: 1 }
   const unlocked = { slot: 37, type: 4, metadata: 0, nbt: null, name: 'cobblestone', displayName: 'Cobblestone', count: 12 }
   bot.inventory.items = () => [locked, unlocked]
+  bot.inventory.inventoryStart = 9
+  bot.inventory.slots[36] = locked
+  bot.inventory.slots[37] = unlocked
   bot.entity = { position: { x: 10, y: 64, z: 10 } }
   bot.findBlock = ({ matching }) => {
     const block = { name: 'barrel', position: { x: 10, y: 64, z: 11 } }
@@ -638,13 +730,14 @@ test('auto-deposit supports barrels and leaves locked stacks in inventory', asyn
   bot.openContainer = async () => {
     const container = {
       inventoryStart: 27,
-      slots: [],
-      deposit: async (...args) => deposits.push(args),
+      inventoryEnd: 63,
+      slots: Array.from({ length: 63 }, (_, slot) => bot.inventory.slots[slot - 18] || null),
       close: () => bot.emit('windowClose', container)
     }
     bot.emit('windowOpen', container)
     return container
   }
+  bot.transfer = async ({ itemType, metadata, count, nbt }) => deposits.push([itemType, metadata, count, nbt])
   const manager = new BotManager({ profilesPath: 'profiles', emit: (...event) => events.push(event), createBot: () => bot })
   t.after(() => manager.disconnect('barrel'))
   manager.connect({
@@ -657,6 +750,70 @@ test('auto-deposit supports barrels and leaves locked stacks in inventory', asyn
   assert.equal(events.filter(([type]) => type === 'telemetry').at(-1)[2].nearestChest.type, 'barrel')
   assert.match(events.filter(([type]) => type === 'log').at(-1)[2].message, /Deposited 12 items into barrel/i)
   assert.equal(events.some(([type]) => type === 'window'), false)
+})
+
+test('auto-deposit and manual deposit preserve a locked stack when an identical unlocked stack exists', async (t) => {
+  const bot = new FakeBot()
+  bot.entity = { position: { x: 10, y: 64, z: 10 } }
+  bot.inventory.inventoryStart = 9
+  const stone = (slot) => ({ slot, type: 1, metadata: 0, nbt: null, name: 'stone', displayName: 'Stone', count: 64 })
+  bot.inventory.slots[9] = stone(9)
+  bot.inventory.slots[10] = stone(10)
+  bot.inventory.items = () => bot.inventory.slots.filter(Boolean)
+  bot.findBlock = ({ matching }) => {
+    const block = { name: 'chest', position: { x: 11, y: 64, z: 10 } }
+    return matching(block) ? block : null
+  }
+  bot.canSeeBlock = () => true
+  const closed = Promise.withResolvers()
+  bot.openChest = async () => ({
+    inventoryStart: 27,
+    inventoryEnd: 63,
+    slots: Array.from({ length: 63 }, (_, slot) => slot === 27 ? bot.inventory.slots[9] : slot === 28 ? bot.inventory.slots[10] : null),
+    deposit: async (type) => {
+      const slot = bot.inventory.slots.findIndex((item) => item?.type === type)
+      bot.inventory.slots[slot] = null
+    },
+    close: () => closed.resolve()
+  })
+  bot.transfer = async ({ window, itemType, sourceStart, sourceEnd }) => {
+    const source = window.slots.findIndex((item, slot) => slot >= sourceStart && slot < sourceEnd && item?.type === itemType)
+    assert.notEqual(source, -1)
+    bot.inventory.slots[source - (window.inventoryStart - bot.inventory.inventoryStart)] = null
+  }
+  const manager = new BotManager({ profilesPath: 'profiles', emit: () => {}, createBot: () => bot })
+  t.after(() => manager.disconnect('locked-identical'))
+  manager.connect({ id: 'locked-identical', username: 'fixture', host: 'localhost', antiAfk: false, autoReconnect: false, autoDepositToChest: true, lockedInventorySlots: [9] })
+  await manager.refreshChest('locked-identical')
+  await closed.promise
+  assert.equal(bot.inventory.slots[9]?.count, 64)
+  assert.equal(bot.inventory.slots[10], null)
+
+  bot.inventory.slots[10] = stone(10)
+  await manager.depositSlot('locked-identical', 10, 64)
+  assert.equal(bot.inventory.slots[9]?.count, 64)
+  assert.equal(bot.inventory.slots[10], null)
+})
+
+test('dropping part of an unlocked stack cannot consume a matching locked stack', async (t) => {
+  const bot = new FakeBot()
+  bot.entity = { position: { x: 0, y: 64, z: 0 } }
+  bot.inventory.inventoryStart = 9
+  bot.inventory.inventoryEnd = 45
+  bot.inventory.slots[9] = { slot: 9, type: 1, metadata: 0, nbt: null, name: 'stone', count: 64 }
+  bot.inventory.slots[10] = { slot: 10, type: 1, metadata: 0, nbt: null, name: 'stone', count: 64 }
+  bot.toss = async (type, _metadata, count) => {
+    const slot = bot.inventory.slots.findIndex(item => item?.type === type)
+    bot.inventory.slots[slot].count -= count
+  }
+  bot.transfer = async ({ sourceStart, count }) => { bot.inventory.slots[sourceStart].count -= count }
+  const manager = new BotManager({ profilesPath: 'profiles', emit: () => {}, createBot: () => bot })
+  t.after(() => manager.disconnect('locked-partial-drop'))
+  manager.connect({ id: 'locked-partial-drop', username: 'fixture', host: 'localhost', antiAfk: false,
+    autoReconnect: false, lockedInventorySlots: [9] })
+  await manager.dropItems('locked-partial-drop', 10, 5)
+  assert.equal(bot.inventory.slots[9].count, 64)
+  assert.equal(bot.inventory.slots[10].count, 59)
 })
 
 test('emits server container menus and supports safe left-click interaction', async () => {

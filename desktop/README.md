@@ -51,6 +51,8 @@ Use **Sign in with a different account** to open a fresh in-app Microsoft window
 ## Build the Windows installer
 
 ```powershell
+npm ci
+npm ci --prefix ../mobile/nodejs-assets/nodejs-project
 npm run test
 npm run dist
 ```

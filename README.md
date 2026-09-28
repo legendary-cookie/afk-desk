@@ -80,6 +80,7 @@ Requires Node.js 22 or newer.
 ```powershell
 cd desktop
 npm ci
+npm ci --prefix ../mobile/nodejs-assets/nodejs-project
 npm test
 npm start
 ```
