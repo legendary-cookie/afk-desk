@@ -155,6 +155,8 @@ class AppCore {
       clickWindowSlot: (idOrInput, slot) => { const p = unpack(idOrInput, { slot }); return this.botManager.clickWindowSlot(p.id, p.slot) },
       windowClose: (idOrInput) => { const id = typeof idOrInput === 'object' && idOrInput !== null ? idOrInput.id : idOrInput; return this.botManager.closeWindow(id) },
       closeWindow: (idOrInput) => { const id = typeof idOrInput === 'object' && idOrInput !== null ? idOrInput.id : idOrInput; return this.botManager.closeWindow(id) },
+      formRespond: (idOrInput, formId, response) => this._respondForm(unpack(idOrInput, { formId, response })),
+      respondForm: (idOrInput, formId, response) => this._respondForm(unpack(idOrInput, { formId, response })),
       worldSnapshot: (idOrInput, radius, blockRefreshMs) => { const p = unpack(idOrInput, { radius, blockRefreshMs }); return this.botManager.worldSnapshot(p.id, p.radius, p.blockRefreshMs) },
       worldAction: (idOrInput, action, target) => { const p = unpack(idOrInput, { action, target }); return this.botManager.worldAction(p.id, p.action, p.target) },
       autoDeposit: (idOrInput, enabled) => this._setAutoDeposit(unpack(idOrInput, { enabled })),
@@ -528,6 +530,19 @@ class AppCore {
     return publicAccount(updated)
   }
 
+  _respondForm({ id, formId, response } = {}) {
+    validateProfileId(id)
+    const normalizedFormId = typeof formId === 'number' && Number.isInteger(formId) ? String(formId) : typeof formId === 'string' ? formId.trim() : ''
+    if (!normalizedFormId || normalizedFormId.length > 64 || !/^\d+$/.test(normalizedFormId)) {
+      throw new Error('Invalid formId: must be a numeric string up to 64 characters.')
+    }
+    if (response !== null && !(Number.isInteger(response) && response >= 0) && !isValidCustomFormResponse(response)) {
+      throw new Error('Invalid form response.')
+    }
+    const bedrock = this.botManager?.bedrock || this.botManager
+    if (typeof bedrock?.respondForm !== 'function') throw new Error('Bedrock forms are not supported by this bot manager.')
+    return bedrock.respondForm(id, normalizedFormId, response)
+  }
   _removeMacro(id) {
     assertMacroPayload(id)
     const m = this.macroLibrary.get(id)
@@ -700,6 +715,10 @@ function unpack(idOrInput, rest) {
   return { id: idOrInput, ...rest }
 }
 
+function isValidCustomFormResponse(response) {
+  if (!Array.isArray(response) || response.length > 64) return false
+  return response.every((item) => item === null || typeof item === 'boolean' || (typeof item === 'number' && Number.isFinite(item)) || (typeof item === 'string' && item.length <= 512))
+}
 function displayName(a) {
   for (const v of [a?.profileName, a?.minecraftName, a?.label]) {
     const s = String(v || '').trim()

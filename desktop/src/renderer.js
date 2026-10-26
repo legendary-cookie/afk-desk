@@ -1339,6 +1339,20 @@ function renderServerWindow() {
     if (el['server-window-dialog'].open) el['server-window-dialog'].close()
     return
   }
+  const stage = el['server-window-stage']
+  const grid = el['server-window-grid']
+  const help = el['server-window-dialog'].querySelector('.server-window-help')
+  if (menu.kind === 'form') {
+    stage.classList.add('is-bedrock-form')
+    grid.classList.add('bedrock-form-grid')
+    void renderServerWindowArt(null, 0)
+    renderBedrockFormWindow(menu, grid, help)
+    if (!el['server-window-dialog'].open) el['server-window-dialog'].showModal()
+    return
+  }
+  stage.classList.remove('is-bedrock-form')
+  grid.classList.remove('bedrock-form-grid')
+  if (help) help.textContent = 'Select an item to left-click that slot. The server controls what each item does.'
   el['server-window-title'].textContent = menu.title || 'Server menu'
   const slots = new Map((menu.slots || []).map((item) => [item.slot, item]))
   const highestSlot = Math.max(-1, ...slots.keys()) + 1
@@ -1471,9 +1485,170 @@ function loadResourceImage(source) {
   return resourceImageCache.get(source)
 }
 
+function stripSectionCodes(text) {
+  return String(text ?? '').replace(/§[0-9a-gk-or]/gi, '')
+}
+
+// Best-effort Bedrock form renderer (simple/modal/custom_form). Limits: maximum 64 elements/buttons,
+// custom_form submits primitive values (null for labels, boolean for toggle, number for slider,
+// option index for dropdown/step_slider, string <= 512 chars for input); images/icons on buttons are omitted.
+function renderBedrockFormWindow(menu, container, help) {
+  const accountId = state.selectedId
+  const formId = String(menu.formId ?? '')
+  const formType = String(menu.formType || 'form')
+  el['server-window-title'].textContent = stripSectionCodes(menu.title) || 'Server form'
+  if (help) {
+    help.textContent = formType === 'custom_form'
+      ? 'Best-effort custom form (up to 64 controls; labels send null, dropdowns send index).'
+      : 'Choose an option or close to dismiss this Bedrock server form.'
+  }
+  const nodes = []
+  const bodyText = typeof menu.content === 'string' ? stripSectionCodes(menu.content).trim() : ''
+  if (bodyText) {
+    const body = document.createElement('p')
+    body.className = 'bedrock-form-body'
+    body.textContent = bodyText
+    nodes.push(body)
+  }
+  if (formType === 'custom_form') {
+    const elements = (Array.isArray(menu.elements) ? menu.elements : []).slice(0, 64)
+    const readers = []
+    const fieldsWrap = document.createElement('div')
+    fieldsWrap.className = 'bedrock-form-elements'
+    for (const [idx, rawEl] of elements.entries()) {
+      const item = rawEl && typeof rawEl === 'object' ? rawEl : { type: 'label', text: String(rawEl ?? '') }
+      const elType = String(item.type || 'label')
+      const labelText = stripSectionCodes(item.text || item.label || '')
+      if (elType === 'label') {
+        const p = document.createElement('p')
+        p.className = 'bedrock-form-label'
+        p.textContent = labelText
+        fieldsWrap.append(p)
+        readers.push(() => null)
+        continue
+      }
+      const field = document.createElement('label')
+      field.className = 'field bedrock-form-field'
+      const span = document.createElement('span')
+      span.textContent = labelText || `Field ${idx + 1}`
+      field.append(span)
+      if (elType === 'toggle') {
+        const input = document.createElement('input')
+        input.type = 'checkbox'
+        input.className = 'bedrock-form-toggle'
+        input.checked = Boolean(item.default)
+        field.append(input)
+        readers.push(() => Boolean(input.checked))
+      } else if (elType === 'slider') {
+        const min = Number.isFinite(Number(item.min)) ? Number(item.min) : 0
+        const max = Number.isFinite(Number(item.max)) ? Number(item.max) : 100
+        const step = Number.isFinite(Number(item.step)) && Number(item.step) > 0 ? Number(item.step) : 1
+        const def = Number.isFinite(Number(item.default)) ? Number(item.default) : min
+        const input = document.createElement('input')
+        input.type = 'range'
+        input.className = 'bedrock-form-slider'
+        input.min = String(min)
+        input.max = String(max)
+        input.step = String(step)
+        input.value = String(def)
+        const out = document.createElement('small')
+        out.textContent = String(input.value)
+        input.addEventListener('input', () => { out.textContent = String(input.value) })
+        field.append(input, out)
+        readers.push(() => Number(input.value))
+      } else if (elType === 'dropdown' || elType === 'step_slider') {
+        const select = document.createElement('select')
+        select.className = 'bedrock-form-dropdown'
+        const opts = Array.isArray(item.options) ? item.options : Array.isArray(item.steps) ? item.steps : []
+        const defIdx = Number.isInteger(Number(item.default)) ? Number(item.default) : 0
+        opts.slice(0, 64).forEach((opt, optIdx) => {
+          const option = document.createElement('option')
+          option.value = String(optIdx)
+          option.textContent = stripSectionCodes(typeof opt === 'object' && opt !== null ? (opt.text ?? '') : opt)
+          if (optIdx === defIdx) option.selected = true
+          select.append(option)
+        })
+        field.append(select)
+        readers.push(() => Math.max(0, Number(select.value) || 0))
+      } else {
+        const input = document.createElement('input')
+        input.type = 'text'
+        input.className = 'bedrock-form-input'
+        input.maxLength = 512
+        input.placeholder = stripSectionCodes(item.placeholder || '')
+        input.value = stripSectionCodes(item.default || '')
+        field.append(input)
+        readers.push(() => String(input.value || '').slice(0, 512))
+      }
+      fieldsWrap.append(field)
+    }
+    nodes.push(fieldsWrap)
+    const actions = document.createElement('div')
+    actions.className = 'bedrock-form-actions'
+    const submitBtn = document.createElement('button')
+    submitBtn.type = 'button'
+    submitBtn.className = 'button primary bedrock-form-submit'
+    submitBtn.textContent = 'Submit'
+    submitBtn.addEventListener('click', () => void submitBedrockForm(accountId, formId, readers.map((fn) => fn())))
+    const closeBtn = document.createElement('button')
+    closeBtn.type = 'button'
+    closeBtn.className = 'button secondary bedrock-form-close'
+    closeBtn.textContent = 'Close'
+    closeBtn.addEventListener('click', () => void submitBedrockForm(accountId, formId, null))
+    actions.append(submitBtn, closeBtn)
+    nodes.push(actions)
+  } else {
+    const rawButtons = Array.isArray(menu.buttons) && menu.buttons.length
+      ? menu.buttons
+      : formType === 'modal'
+        ? [menu.button1 ?? 'Yes', menu.button2 ?? 'No']
+        : []
+    const buttonsWrap = document.createElement('div')
+    buttonsWrap.className = 'bedrock-form-buttons'
+    rawButtons.slice(0, 64).forEach((btn, index) => {
+      const label = stripSectionCodes(typeof btn === 'object' && btn !== null ? (btn.text ?? '') : btn) || `Option ${index + 1}`
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.className = 'button primary bedrock-form-button'
+      button.dataset.formButtonIndex = String(index)
+      button.textContent = label
+      button.addEventListener('click', () => void submitBedrockForm(accountId, formId, index))
+      buttonsWrap.append(button)
+    })
+    const closeBtn = document.createElement('button')
+    closeBtn.type = 'button'
+    closeBtn.className = 'button secondary bedrock-form-close'
+    closeBtn.textContent = 'Close'
+    closeBtn.addEventListener('click', () => void submitBedrockForm(accountId, formId, null))
+    buttonsWrap.append(closeBtn)
+    nodes.push(buttonsWrap)
+  }
+  container.replaceChildren(...nodes)
+}
+
+async function submitBedrockForm(accountId, formId, response) {
+  if (!accountId) return
+  try {
+    await api.respondForm(accountId, formId, response)
+    const current = state.serverWindows.get(accountId)
+    if (current?.kind === 'form' && String(current.formId) === String(formId)) {
+      state.serverWindows.delete(accountId)
+      if (accountId === state.selectedId) renderServerWindow()
+    }
+  } catch (error) {
+    toast(cleanError(error), 'error')
+  }
+}
+
 async function closeServerWindow() {
   const id = state.selectedId
   if (!id) return
+  if (!id) return
+  const current = state.serverWindows.get(id)
+  if (current?.kind === 'form') {
+    await submitBedrockForm(id, String(current.formId ?? ''), null)
+    return
+  }
   try { await api.closeServerWindow(id) }
   catch (error) { toast(cleanError(error), 'error') }
 }

@@ -454,8 +454,8 @@ class BedrockBotManager {
   }
   openForm(id, session, packet) {
     let form; try { form = JSON.parse(packet.data) } catch { return }
-    const formId = Number(packet.form_id); const type = String(form.type || 'form'); const buttons = Array.isArray(form.buttons) ? form.buttons.map((button) => String(button?.text || '')) : []
-    const stored = { id: formId, type, title: String(form.title || ''), content: String(form.content || ''), buttons, elements: Array.isArray(form.controls) ? form.controls : Array.isArray(form.elements) ? form.elements : [] }
+    const formId = Number(packet.form_id); const type = String(form.type || 'form'); const buttons = Array.isArray(form.buttons) ? form.buttons.map((button) => String(button?.text ?? button ?? '')) : form.button1 !== undefined || form.button2 !== undefined ? [String(form.button1 ?? ''), String(form.button2 ?? '')] : []
+    const stored = { id: formId, type, title: String(form.title || ''), content: typeof form.content === 'string' ? form.content : '', buttons, elements: Array.isArray(form.controls) ? form.controls : Array.isArray(form.elements) ? form.elements : Array.isArray(form.content) ? form.content : [] }
     session.forms.set(formId, stored); session.lastForm = stored
     this.emit('window', id, { open: true, kind: 'form', title: stored.title, buttons, formId, formType: type, content: stored.content, elements: stored.elements, at: Date.now() })
   }

@@ -138,6 +138,7 @@ function registerIpc() {
   handle('bot:equip-item', (_event, input) => core.bots.equipItem(input))
   handle('bot:window-click', (_event, input) => core.bots.windowClick(input))
   handle('bot:window-close', (_event, id) => core.bots.windowClose(id))
+  handle('bot:form-respond', (_event, input) => core.bots.respondForm(input))
   handle('bot:world-snapshot', (_event, input) => core.bots.worldSnapshot(input))
   handle('bot:world-action', (_event, input) => core.bots.worldAction(input))
   handle('logs:list', (_event, input) => core.logs.list(input))

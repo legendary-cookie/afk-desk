@@ -464,6 +464,14 @@ h1, h2, p { margin-top: 0; }
 .minecraft-item-icon.custom-resource { width: 32px; height: 32px; background-position: center; background-repeat: no-repeat; background-size: contain; image-rendering: pixelated; }
 .server-window-empty { min-height: 40px; }
 .server-window-help { margin: 0; padding: 0 16px 16px; color: var(--muted); font-size: 10px; }
+.server-window-stage.is-bedrock-form { background: var(--bg); }
+.server-window-grid.bedrock-form-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; justify-content: stretch; padding: 18px 20px; }
+.bedrock-form-body, .bedrock-form-label { margin: 0; color: var(--text); font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.bedrock-form-elements { display: grid; gap: 12px; }
+.bedrock-form-field { display: grid; gap: 6px; }
+.bedrock-form-toggle { width: 18px; height: 18px; accent-color: var(--accent-strong); }
+.bedrock-form-buttons, .bedrock-form-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.bedrock-form-buttons .button { flex: 1 1 180px; }
 
 @container controls (max-width: 280px) {
   .details-list { grid-template-columns: repeat(2, minmax(0, 1fr)); padding-inline: 8px; }
