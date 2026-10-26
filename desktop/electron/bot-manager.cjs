@@ -4,7 +4,7 @@ const { isDeepStrictEqual } = require('node:util')
 const { profilePath, validateProfileId } = require('./profile-path.cjs')
 const { applyProtocolFixes } = require('./protocol-fixes.cjs')
 const { createProxyConnect } = require('./proxy-connect.cjs')
-const { ResourcePackLoader, normalizePackEvent } = require('./resource-pack.cjs')
+const { ResourcePackLoader, normalizePackEvent, discoverLauncherPackDirs } = require('./resource-pack.cjs')
 const { HostPolicyError } = require('./net-policy.cjs')
 const { INPUTS } = require('./macro/contract.cjs')
 const {
@@ -60,7 +60,10 @@ class BotManager {
     clearAntiAfkTimer = clearTimeout,
     random = Math.random,
     diagnose = () => {},
-    resourcePackLoader
+    resourcePackLoader,
+    appDataPath = path.dirname(profilesPath),
+    userProfile = require('node:os').homedir(),
+    useLauncherPackCache = () => true
   }) {
     this.profilesPath = profilesPath
     this.emit = emit
@@ -73,7 +76,8 @@ class BotManager {
     this.clearAntiAfkTimer = clearAntiAfkTimer
     this.random = random
     this.diagnose = diagnose
-    this.resourcePackLoader = resourcePackLoader || new ResourcePackLoader({ cacheDir: path.join(path.dirname(profilesPath), 'resource-packs') })
+    this.useLauncherPackCache = typeof useLauncherPackCache === 'function' ? useLauncherPackCache : () => useLauncherPackCache !== false
+    this.resourcePackLoader = resourcePackLoader || new ResourcePackLoader({ cacheDir: path.join(path.dirname(profilesPath), 'resource-packs'), externalCacheDirs: discoverLauncherPackDirs({ appData: appDataPath, userProfile }) })
     this.sessions = new Map()
     this.reconnects = new Map()
     this.nextAutomaticServerSwitchAt = 0
@@ -331,7 +335,7 @@ class BotManager {
       }
       this.emit('log', account.id, { kind: 'system', message: `Loading server resource pack from ${host}…`, at: Date.now() })
       try {
-        session.resourcePack = await this.resourcePackLoader.load(pack.url, pack.hash, { allowPrivateHosts: session.account.allowPrivatePackHosts === true })
+        session.resourcePack = await this.resourcePackLoader.load(pack.url, pack.hash, { allowPrivateHosts: session.account.allowPrivatePackHosts === true, useLauncherPackCache: this.useLauncherPackCache() !== false })
         bot.acceptResourcePack?.()
         session.telemetryKey = ''
         emitTelemetry()

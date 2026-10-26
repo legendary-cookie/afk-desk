@@ -13,12 +13,15 @@ const MAX_PARSED_JSON_BYTES = 100 * 1024 * 1024
 const DOWNLOAD_TIMEOUT_MS = 30_000
 
 class ResourcePackLoader {
-  constructor({ fetchImpl = globalThis.fetch, lookup, allowPrivatePackHosts = false, cacheDir = '', maxPackBytes = MAX_PACK_BYTES,
+  constructor({ fetchImpl = globalThis.fetch, lookup, allowPrivatePackHosts = false, cacheDir = '', externalCacheDirs = [], useLauncherPackCache = true, diagnose = () => {}, maxPackBytes = MAX_PACK_BYTES,
     downloadTimeoutMs = DOWNLOAD_TIMEOUT_MS, maxCacheEntries = 8, maxCacheBytes = 300 * 1024 * 1024 } = {}) {
     this.fetchImpl = fetchImpl
     this.lookup = lookup
     this.allowPrivatePackHosts = allowPrivatePackHosts === true
     this.cacheDir = cacheDir
+    this.externalCacheDirs = Array.isArray(externalCacheDirs) ? externalCacheDirs : []
+    this.useLauncherPackCache = useLauncherPackCache !== false
+    this.diagnose = diagnose
     this.maxPackBytes = boundedLimit(maxPackBytes, MAX_PACK_BYTES)
     this.downloadTimeoutMs = boundedLimit(downloadTimeoutMs, DOWNLOAD_TIMEOUT_MS)
     this.maxCacheEntries = boundedLimit(maxCacheEntries, 8)
@@ -27,7 +30,7 @@ class ResourcePackLoader {
     this.activeDownloads = 0
   }
 
-  async load(urlValue, expectedHash = '', { allowPrivateHosts = this.allowPrivatePackHosts } = {}) {
+  async load(urlValue, expectedHash = '', { allowPrivateHosts = this.allowPrivatePackHosts, useLauncherPackCache = this.useLauncherPackCache } = {}) {
     const url = normalizePackUrl(urlValue)
     const hash = normalizeHash(expectedHash)
     const allowPrivate = allowPrivateHosts === true
@@ -36,12 +39,52 @@ class ResourcePackLoader {
     if (this.activeDownloads >= 4) throw new Error('Too many resource pack downloads in progress. Try again shortly.')
     while (this.cache.size >= this.maxCacheEntries) this.cache.delete(this.cache.keys().next().value)
     this.activeDownloads++
-    const task = this.#downloadAndParse(url, hash, allowPrivate).catch((error) => {
+    const task = this.#loadWithCaches(url, hash, allowPrivate, useLauncherPackCache).catch((error) => {
       if (this.cache.get(key) === task) this.cache.delete(key)
       throw error
     }).finally(() => { this.activeDownloads-- })
     this.cache.set(key, task)
     return task
+  }
+
+  async #loadWithCaches(url, hash, allowPrivateHosts, useLauncherPackCache) {
+    if (hash) {
+      const own = this.#readVerifiedCacheFile(this.cacheDir && path.join(this.cacheDir, `${hash}.zip`), hash, true)
+      if (own) {
+        this.diagnose({ event: 'resource_pack_cache_hit', source: 'afkdesk', sha1: hash })
+        return own
+      }
+      if (useLauncherPackCache !== false) {
+        for (const directory of this.externalCacheDirs) {
+          // Minecraft 1.20.3+ stores server packs at downloads/<id>/<id>/<sha1>, so
+          // look up to 3 levels deep for files named exactly by the hash.
+          for (const file of findHashNamedFiles(directory, hash)) {
+            const parsed = this.#readVerifiedCacheFile(file, hash, false)
+            if (!parsed) continue
+            try { if (this.cacheDir) this.#cacheToDisk(hash, fs.readFileSync(file)) } catch {}
+            this.diagnose({ event: 'resource_pack_cache_hit', source: 'launcher', sha1: hash })
+            return parsed
+          }
+        }
+      }
+    }
+    return this.#downloadAndParse(url, hash, allowPrivateHosts)
+  }
+
+  #readVerifiedCacheFile(file, expectedHash, deleteOnMismatch) {
+    if (!file) return null
+    try {
+      const stat = fs.lstatSync(file)
+      if (!stat.isFile() || stat.size > this.maxPackBytes) return null
+      const buffer = fs.readFileSync(file)
+      if (crypto.createHash('sha1').update(buffer).digest('hex') !== expectedHash) {
+        if (deleteOnMismatch) { try { fs.unlinkSync(file) } catch {} }
+        return null
+      }
+      return parseResourcePack(buffer, { source: 'afkdesk://resource-pack-cache', sha1: expectedHash })
+    } catch {
+      return null
+    }
   }
 
   async #downloadAndParse(url, expectedHash, allowPrivateHosts = false) {
@@ -74,7 +117,9 @@ class ResourcePackLoader {
       const sha1 = crypto.createHash('sha1').update(buffer).digest('hex')
       if (expectedHash && expectedHash.length === 40 && sha1 !== expectedHash) throw new Error('Resource pack SHA-1 does not match the server hash.')
       const parsed = parseResourcePack(buffer, { source: safePackSource(url), sha1 })
-      if (this.cacheDir && buffer.length <= this.maxCacheBytes) this.#cacheToDisk(sha1, buffer)
+      if (this.cacheDir && buffer.length <= this.maxCacheBytes) {
+        try { this.#cacheToDisk(sha1, buffer) } catch {}
+      }
       return parsed
     } catch (error) {
       controller.abort(error)
@@ -365,6 +410,32 @@ function normalizeHash(value) {
   return /^[a-f0-9]{40}$/.test(hash) ? hash : ''
 }
 
+function discoverLauncherPackDirs({ appData, userProfile, fs: fileSystem = fs } = {}) {
+  const candidates = []
+  const add = (directory) => {
+    if (!directory || candidates.length >= 50) return
+    try { if (fileSystem.statSync(directory).isDirectory()) candidates.push(directory) } catch {}
+  }
+  const addPackDirs = (root) => {
+    add(path.join(root, 'downloads'))
+    add(path.join(root, 'server-resource-packs'))
+  }
+  if (appData) {
+    addPackDirs(path.join(appData, '.minecraft'))
+    const modrinthProfiles = path.join(appData, 'ModrinthApp', 'profiles')
+    let profiles = []
+    try { profiles = fileSystem.readdirSync(modrinthProfiles, { withFileTypes: true }).filter((entry) => entry.isDirectory()).slice(0, 50) } catch {}
+    for (const profile of profiles) addPackDirs(path.join(modrinthProfiles, profile.name))
+  }
+  if (userProfile && candidates.length < 50) {
+    const instances = path.join(userProfile, 'curseforge', 'minecraft', 'Instances')
+    let profiles = []
+    try { profiles = fileSystem.readdirSync(instances, { withFileTypes: true }).filter((entry) => entry.isDirectory()).slice(0, 50) } catch {}
+    for (const profile of profiles) addPackDirs(path.join(instances, profile.name))
+  }
+  return candidates.slice(0, 50)
+}
+
 function safePackSource(url) {
   return `${url.protocol}//${url.host}${url.pathname}`.slice(0, 300)
 }
@@ -455,4 +526,23 @@ function pngDimensions(buffer) {
   return { width, height }
 }
 
-module.exports = { ResourcePackLoader, ParsedResourcePack, parseResourcePack, normalizePackEvent, itemComponents, resolveItemDefinition, flattenComponentText }
+// Bounded, read-only search for `<sha1>` or `<sha1>.zip` up to `maxDepth` levels
+// below `root` (never follows symlinks; caps visited directories).
+function findHashNamedFiles(root, hash, { maxDepth = 3, maxDirs = 400 } = {}) {
+  const names = new Set([hash, `${hash}.zip`])
+  const found = []
+  const queue = [{ dir: root, depth: 0 }]
+  let visited = 0
+  while (queue.length && visited < maxDirs) {
+    const { dir, depth } = queue.shift()
+    visited++
+    let entries = []
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { continue }
+    for (const entry of entries) {
+      if (entry.isFile() && names.has(entry.name)) found.push(path.join(dir, entry.name))
+      else if (entry.isDirectory() && !entry.isSymbolicLink() && depth < maxDepth) queue.push({ dir: path.join(dir, entry.name), depth: depth + 1 })
+    }
+  }
+  return found
+}
+module.exports = { ResourcePackLoader, ParsedResourcePack, parseResourcePack, normalizePackEvent, itemComponents, resolveItemDefinition, flattenComponentText, discoverLauncherPackDirs }

@@ -104,6 +104,8 @@ class AppCore {
     const profilesPath = path.join(userDataPath, 'profiles')
     const managerOptions = {
       profilesPath,
+      appDataPath: userDataPath,
+      useLauncherPackCache: () => this.settingsStore.get().useLauncherPackCache,
       emit: this.emitBotEvent.bind(this),
       diagnose: (entry) => {
         this.diagnosticLog.write(entry)

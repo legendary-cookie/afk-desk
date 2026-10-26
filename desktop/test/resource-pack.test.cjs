@@ -1,11 +1,123 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const crypto = require('node:crypto')
+const fs = require('node:fs')
+const os = require('node:os')
+const path = require('node:path')
 const AdmZip = require('adm-zip')
-const { ResourcePackLoader, parseResourcePack, normalizePackEvent, resolveItemDefinition } = require('../electron/resource-pack.cjs')
+const { ResourcePackLoader, parseResourcePack, normalizePackEvent, resolveItemDefinition, discoverLauncherPackDirs } = require('../electron/resource-pack.cjs')
 
 const PUBLIC_LOOKUP = async () => [{ address: '93.184.216.34', family: 4 }]
 const PIXEL = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+XfSUWQAAAABJRU5ErkJggg==', 'base64')
+
+async function withTempDir(callback) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'afk-pack-cache-'))
+  try { return await callback(directory) } finally { fs.rmSync(directory, { recursive: true, force: true }) }
+}
+
+test('verified AFK Desk cache hit avoids fetching', async () => withTempDir(async (directory) => {
+  const bytes = fixturePack()
+  const hash = crypto.createHash('sha1').update(bytes).digest('hex')
+  const cacheDir = path.join(directory, 'cache')
+  fs.mkdirSync(cacheDir)
+  fs.writeFileSync(path.join(cacheDir, `${hash}.zip`), bytes)
+  let calls = 0
+  const diagnostics = []
+  const loader = new ResourcePackLoader({ cacheDir, diagnose: (entry) => diagnostics.push(entry), fetchImpl: async () => { calls++; throw new Error('unexpected fetch') } })
+  const pack = await loader.load('https://packs.example/a.zip', hash)
+  assert.equal(pack.sha1, hash)
+  assert.equal(calls, 0)
+  assert.deepEqual(diagnostics.map((entry) => [entry.event, entry.source]), [['resource_pack_cache_hit', 'afkdesk']])
+}))
+
+test('mismatched AFK Desk cache file is deleted and download proceeds', async () => withTempDir(async (directory) => {
+  const bytes = fixturePack()
+  const hash = crypto.createHash('sha1').update(bytes).digest('hex')
+  const cacheDir = path.join(directory, 'cache')
+  fs.mkdirSync(cacheDir)
+  const cached = path.join(cacheDir, `${hash}.zip`)
+  fs.writeFileSync(cached, Buffer.from('wrong'))
+  let calls = 0
+  const loader = new ResourcePackLoader({ cacheDir, lookup: PUBLIC_LOOKUP, fetchImpl: async () => { calls++; return new Response(bytes) } })
+  assert.equal((await loader.load('https://packs.example/a.zip', hash)).sha1, hash)
+  assert.equal(calls, 1)
+  assert.equal(fs.readFileSync(cached).equals(bytes), true)
+}))
+
+test('AFK Desk cache ignores symlink entries', async () => withTempDir(async (directory) => {
+  const bytes = fixturePack()
+  const hash = crypto.createHash('sha1').update(bytes).digest('hex')
+  const cacheDir = path.join(directory, 'cache')
+  fs.mkdirSync(cacheDir)
+  const link = path.join(cacheDir, `${hash}.zip`)
+  fs.writeFileSync(link, bytes)
+  let calls = 0
+  const loader = new ResourcePackLoader({ cacheDir, lookup: PUBLIC_LOOKUP, fetchImpl: async () => { calls++; return new Response(bytes) } })
+  const originalLstat = fs.lstatSync
+  fs.lstatSync = function (file, ...args) {
+    if (file === link) return { isFile: () => false, isSymbolicLink: () => true }
+    return originalLstat.call(this, file, ...args)
+  }
+  try { await loader.load('https://packs.example/a.zip', hash) } finally { fs.lstatSync = originalLstat }
+  assert.equal(calls, 1)
+  assert.equal(fs.readFileSync(link).equals(bytes), true)
+}))
+
+for (const suffix of ['', '.zip']) test(`launcher cache hit for ${suffix || 'bare hash'} is copied without changing source`, async () => withTempDir(async (directory) => {
+  const bytes = fixturePack()
+  const hash = crypto.createHash('sha1').update(bytes).digest('hex')
+  const external = path.join(directory, 'launcher')
+  const cacheDir = path.join(directory, 'afk-cache')
+  fs.mkdirSync(external)
+  const source = path.join(external, `${hash}${suffix}`)
+  fs.writeFileSync(source, bytes)
+  let calls = 0
+  const diagnostics = []
+  const loader = new ResourcePackLoader({ cacheDir, externalCacheDirs: [external], diagnose: (entry) => diagnostics.push(entry), fetchImpl: async () => { calls++; throw new Error('unexpected fetch') } })
+  assert.equal((await loader.load('https://packs.example/a.zip', hash)).sha1, hash)
+  assert.equal(calls, 0)
+  assert.equal(fs.readFileSync(source).equals(bytes), true)
+  assert.equal(fs.readFileSync(path.join(cacheDir, `${hash}.zip`)).equals(bytes), true)
+  assert.deepEqual(diagnostics.map((entry) => entry.source), ['launcher'])
+}))
+
+test('hashless load skips all cache lookups', async () => withTempDir(async (directory) => {
+  const bytes = fixturePack()
+  const hash = crypto.createHash('sha1').update(bytes).digest('hex')
+  const cacheDir = path.join(directory, 'cache')
+  const external = path.join(directory, 'launcher')
+  fs.mkdirSync(cacheDir); fs.mkdirSync(external)
+  fs.writeFileSync(path.join(cacheDir, `${hash}.zip`), bytes)
+  fs.writeFileSync(path.join(external, hash), bytes)
+  let calls = 0
+  const loader = new ResourcePackLoader({ cacheDir, externalCacheDirs: [external], lookup: PUBLIC_LOOKUP, fetchImpl: async () => { calls++; return new Response(bytes) } })
+  await loader.load('https://packs.example/a.zip')
+  assert.equal(calls, 1)
+}))
+
+test('disabled launcher setting skips launcher lookup', async () => withTempDir(async (directory) => {
+  const bytes = fixturePack()
+  const hash = crypto.createHash('sha1').update(bytes).digest('hex')
+  const external = path.join(directory, 'launcher')
+  fs.mkdirSync(external)
+  fs.writeFileSync(path.join(external, hash), bytes)
+  let calls = 0
+  const loader = new ResourcePackLoader({ externalCacheDirs: [external], useLauncherPackCache: false, lookup: PUBLIC_LOOKUP, fetchImpl: async () => { calls++; return new Response(bytes) } })
+  await loader.load('https://packs.example/a.zip', hash)
+  assert.equal(calls, 1)
+}))
+
+test('launcher cache discovery enumerates Minecraft, Modrinth, and CurseForge directories one level deep', () => withTempDir((directory) => {
+  const appData = path.join(directory, 'appdata')
+  const userProfile = path.join(directory, 'user')
+  for (const relative of ['.minecraft/downloads', '.minecraft/server-resource-packs', 'ModrinthApp/profiles/one/downloads', 'ModrinthApp/profiles/one/server-resource-packs', 'ModrinthApp/profiles/two/downloads', 'curseforge/minecraft/Instances/world/downloads', 'curseforge/minecraft/Instances/world/server-resource-packs']) fs.mkdirSync(path.join(relative.startsWith('curseforge') ? userProfile : appData, relative), { recursive: true })
+  fs.mkdirSync(path.join(appData, 'ModrinthApp/profiles/not-a-profile/nested/downloads'), { recursive: true })
+  const found = discoverLauncherPackDirs({ appData, userProfile })
+  assert.equal(found.length, 7)
+  assert.ok(found.includes(path.join(appData, 'ModrinthApp/profiles/one/downloads')))
+  assert.ok(found.includes(path.join(userProfile, 'curseforge/minecraft/Instances/world/server-resource-packs')))
+  assert.equal(found.some((entry) => entry.includes('not-a-profile/nested')), false)
+}))
 
 test('a long chain of distinct model parents falls back without overflowing the stack', () => {
   const zip = new AdmZip()

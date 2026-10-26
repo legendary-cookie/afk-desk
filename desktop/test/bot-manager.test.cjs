@@ -874,7 +874,7 @@ test('loads and accepts a server resource pack before refreshing custom menu art
   bot.emit('resourcePack', '0123456789012345678901234567890123456789', 'https://packs.example/menu.zip?token=private')
   await new Promise((resolve) => setImmediate(resolve))
 
-  assert.deepEqual(loaded, ['https://packs.example/menu.zip?token=private', '0123456789012345678901234567890123456789', { allowPrivateHosts: false }])
+  assert.deepEqual(loaded, ['https://packs.example/menu.zip?token=private', '0123456789012345678901234567890123456789', { allowPrivateHosts: false, useLauncherPackCache: true }])
   assert.equal(accepted, 1)
   const menu = events.filter(([type]) => type === 'window').at(-1)[2]
   assert.equal(menu.title, 'Custom server menu')
@@ -1786,5 +1786,5 @@ test('allowPrivatePackHosts from the account config is passed to the pack loader
   const harness = packHarness({ allowPrivatePackHosts: true })
   harness.bot.emit('resourcePack', '0123456789012345678901234567890123456789', 'http://192.168.1.5/a.zip')
   await new Promise((resolve) => setImmediate(resolve))
-  assert.deepEqual(harness.getLoaded()[2], { allowPrivateHosts: true })
+  assert.deepEqual(harness.getLoaded()[2], { allowPrivateHosts: true, useLauncherPackCache: true })
 })
