@@ -1,4 +1,5 @@
 const path = require('node:path')
+const { randomUUID } = require('node:crypto')
 const { isDeepStrictEqual } = require('node:util')
 const { profilePath, validateProfileId } = require('./profile-path.cjs')
 const { applyProtocolFixes } = require('./protocol-fixes.cjs')
@@ -103,6 +104,9 @@ class BotManager {
 
     const session = {
       bot,
+      sessionId: randomUUID(),
+      inputClaims: new Map(),
+      inputActionTimers: new Map(),
       account: { ...account },
       moddedProfile: normalizeModdedProfile(account),
       antiAfkTimer: null,
@@ -524,12 +528,86 @@ class BotManager {
         this.temporarilyEnablePhysics(session, 200)
       }
     }
-    bot.setControlState(control, active)
+    if (active) this.claimInput(id, control, 'manual')
+    else this.releaseInput(id, control, 'manual')
     this.diagnose({
       event: 'manual_control', accountId: id, control, active,
       position: vectorSnapshot(bot.entity?.position), velocity: vectorSnapshot(bot.entity?.velocity), at: Date.now()
     })
   }
+
+  claimInput(id, input, owner) {
+    const session = this.sessions.get(id)
+    const bot = this.requireOnline(id)
+    if (!['forward','back','left','right','jump','sprint','sneak','leftClick','rightClick'].includes(input)) throw new Error('Unknown input.')
+    if (typeof owner !== 'string' || !owner) throw new Error('Input owner is required.')
+    const owners = session.inputClaims.get(input) || new Set()
+    if (owners.has(owner)) return
+    const wasEmpty = owners.size === 0
+    owners.add(owner); session.inputClaims.set(input, owners)
+    if (wasEmpty) {
+      if (input === 'leftClick') this.repeatOwnedDig(id, session)
+      else if (input === 'rightClick') { try { bot.activateItem() } catch {} }
+      else {
+        if (owner === 'manual') { if (session.physicsRestoreTimer) this.clearAntiAfkTimer(session.physicsRestoreTimer); session.physicsRestoreTimer = null; bot.physicsEnabled = true }
+        bot.setControlState(input, true)
+      }
+    }
+  }
+
+  releaseInput(id, input, owner) {
+    const session = this.sessions.get(id)
+    if (!session) return
+    const owners = session.inputClaims.get(input)
+    if (!owners?.delete(owner)) return
+    if (!owners.size) {
+      session.inputClaims.delete(input)
+      const clickTimer = session.inputActionTimers?.get(input)
+      if (clickTimer) { this.clearAntiAfkTimer(clickTimer); session.inputActionTimers.delete(input) }
+      if (input === 'leftClick') void this.worldAction(id, 'stop-dig').catch(() => {})
+      else if (input === 'rightClick') void this.worldAction(id, 'stop-use').catch(() => {})
+      else {
+        try { session.bot.setControlState(input, false) } catch {}
+        if (session.inputClaims.size === 0) this.temporarilyEnablePhysics(session, 200)
+      }
+    }
+  }
+
+  releaseOwner(id, owner) { const session = this.sessions.get(id); if (!session) return; for (const input of [...session.inputClaims.keys()]) this.releaseInput(id, input, owner) }
+  inputOwners(id, input) { return [...(this.sessions.get(id)?.inputClaims.get(input) || [])] }
+
+  repeatOwnedDig(id, session) {
+    if (this.sessions.get(id) !== session || !(session.inputClaims.get('leftClick')?.size)) return
+    void this.worldAction(id, 'dig-crosshair').catch(() => {}).finally(() => {
+      if (this.sessions.get(id) !== session || !(session.inputClaims.get('leftClick')?.size)) return
+      const timer = this.scheduleAntiAfkTimer(() => { session.inputActionTimers.delete('leftClick'); this.repeatOwnedDig(id, session) }, 100)
+      session.inputActionTimers.set('leftClick', timer)
+    })
+  }
+
+  lookAbsolute(id, yaw, pitch) { const bot = this.requireOnline(id); return bot.look(Number(yaw), Math.max(-1.45, Math.min(1.45, Number(pitch))), true) }
+
+  holdItemByName(id, name) {
+    const bot = this.requireOnline(id); const needle = String(name || '').toLowerCase()
+    const item = (bot.inventory?.items?.() || []).find((entry) => String(entry.name || '').toLowerCase().includes(needle) || String(entry.displayName || '').toLowerCase().includes(needle))
+    if (!item) throw new Error('Item not found.')
+    if (item.slot < 36 || item.slot > 44) { const target = 36 + (Number(bot.quickBarSlot) || 0); return this.moveInventorySlot(id, item.slot, target).then(() => { bot.setQuickBarSlot(target - 36); return { slot: target } }) }
+    bot.setQuickBarSlot(item.slot - 36); return { slot: item.slot }
+  }
+
+  findWindowSlot(id, selector = {}) {
+    const bot = this.requireOnline(id); const win = bot.currentWindow; if (!win) return -1
+    const end = Math.max(0, Number(win.slots?.length) || Number(win.inventoryStart) || 0)
+    for (let i=0;i<end;i++) { const item=win.slots?.[i]; if (!item) continue; if (selector.slot != null && i===Number(selector.slot)) return i; if (selector.name && String(item.name||'').toLowerCase().includes(String(selector.name).toLowerCase())) return i; if (selector.lore && JSON.stringify(item.customLore||item.lore||'').toLowerCase().includes(String(selector.lore).toLowerCase())) return i }
+    return -1
+  }
+
+  waitForWindow(id, { title, giveUpAfterMs = 10000, signal } = {}) {
+    const session=this.sessions.get(id); this.requireOnline(id)
+    return new Promise((resolve,reject)=>{ let timer; const cleanup=()=>{clearTimeout(timer);session.bot.removeListener('windowOpen',opened);signal?.removeEventListener('abort',aborted)}; const opened=w=>{const t=String(w?.title?.json||w?.title||'');if(!title||t.includes(title)){cleanup();resolve(w)}}; const aborted=()=>{cleanup();reject(Object.assign(new Error('Aborted'),{code:'ABORTED'}))}; session.bot.on('windowOpen',opened); if(signal?.aborted)return aborted(); signal?.addEventListener('abort',aborted,{once:true}); timer=setTimeout(()=>{cleanup();reject(Object.assign(new Error('Timed out waiting for window'),{code:'TIMEOUT'}))},Math.max(0,Number(giveUpAfterMs)||0)); if(session.bot.currentWindow)opened(session.bot.currentWindow) })
+  }
+
+  async dropAll(id, { filter } = {}) { const session=this.sessions.get(id); const locked=lockedSlotSet(session?.account); const matching=(session?.bot.inventory?.items?.()||[]).filter(x=>!filter||String(x.name).toLowerCase().includes(String(filter).toLowerCase())); if(matching.length && matching.every(x=>locked.has(Number(x.slot)))) throw new Error('All matching inventory stacks are locked.'); const items=matching.filter(x=>!locked.has(Number(x.slot))); for(const item of items) await this.dropItems(id,item.slot,item.count); return { dropped: items.length } }
 
   look(id, direction) {
     const bot = this.requireOnline(id)
@@ -679,6 +757,23 @@ class BotManager {
   async worldAction(id, action, target = {}) {
     const bot = this.requireOnline(id)
     const session = this.sessions.get(id)
+    if (action === 'walk') {
+      const control = target.control
+      const distance = Number(target.distance)
+      const owner = target.owner
+      if (!['forward','back','left','right'].includes(control) || !Number.isFinite(distance) || distance <= 0 || !owner) throw new Error('A movement control, positive distance, and input owner are required.')
+      const start = { x: Number(bot.entity.position.x), z: Number(bot.entity.position.z) }
+      this.claimInput(id, control, owner)
+      try {
+        while (true) {
+          if (target.signal?.aborted) throw Object.assign(new Error('Macro run was aborted.'), { code: 'ABORTED' })
+          if (this.sessions.get(id) !== session) throw Object.assign(new Error('Account session changed.'), { code: 'SESSION_CHANGED' })
+          const position = bot.entity?.position
+          if (position && Math.hypot(Number(position.x) - start.x, Number(position.z) - start.z) >= distance) return { distance }
+          await delay(50)
+        }
+      } finally { this.releaseInput(id, control, owner) }
+    }
     if (action === 'stop-dig') {
       if (session.worldDigging) session.worldDigging.cancelled = true
       bot.stopDigging?.()
@@ -1001,6 +1096,7 @@ class BotManager {
   runAntiAfkCycle(id) {
     const session = this.sessions.get(id)
     if (!session?.bot?.entity) return
+    if ([...session.inputClaims.entries()].some(([input, owners]) => ['forward','back','left','right','jump','sprint','sneak'].includes(input) && [...owners].some(owner => owner.startsWith('macro:')))) return
     const { bot } = session
     const settings = session.antiAfkSettings
     const duration = Math.round(settings.duration * 1000)
@@ -1031,24 +1127,24 @@ class BotManager {
   }
 
   holdAntiAfkControl(session, control, duration) {
-    session.bot.setControlState(control, true)
+    this.claimInput(session.account.id, control, 'antiAfk')
     const timer = this.scheduleAntiAfkTimer(() => {
       session.antiAfkActionTimers.delete(timer)
-      if (this.sessions.get(session.account.id) === session) session.bot.setControlState(control, false)
+      if (this.sessions.get(session.account.id) === session) this.releaseInput(session.account.id, control, 'antiAfk')
     }, duration)
     session.antiAfkActionTimers.add(timer)
   }
 
   walkAntiAfkDistance(session, control, distance, duration) {
     const start = { x: Number(session.bot.entity.position.x), z: Number(session.bot.entity.position.z) }
-    session.bot.setControlState(control, true)
+    this.claimInput(session.account.id, control, 'antiAfk')
     const startedAt = Date.now()
     const check = () => {
       if (this.sessions.get(session.account.id) !== session) return
       const position = session.bot.entity?.position
       const moved = position ? Math.hypot(Number(position.x) - Number(start.x), Number(position.z) - Number(start.z)) : 0
       if (moved >= distance || Date.now() - startedAt >= duration) {
-        session.bot.setControlState(control, false)
+        this.releaseInput(session.account.id, control, 'antiAfk')
         return
       }
       const timer = this.scheduleAntiAfkTimer(() => {
@@ -1088,10 +1184,7 @@ class BotManager {
     if (session.antiAfkTimer) this.clearAntiAfkTimer(session.antiAfkTimer)
     for (const timer of session.antiAfkActionTimers) this.clearAntiAfkTimer(timer)
     session.antiAfkActionTimers.clear()
-    session.bot.setControlState('jump', false)
-    session.bot.setControlState('sneak', false)
-    session.bot.setControlState('forward', false)
-    session.bot.setControlState('back', false)
+    this.releaseOwner(id, 'antiAfk')
     session.antiAfkTimer = null
     if (account.antiAfk !== false && session.bot.entity) this.enableAntiAfk(id, account)
   }
@@ -1100,7 +1193,7 @@ class BotManager {
     const session = this.sessions.get(id)
     if (expectedSession && session !== expectedSession) return
     this.sessions.delete(id)
-    if (session) this.clearTimers(session)
+    if (session) { session.inputClaims?.clear(); session.inputActionTimers?.forEach(timer => this.clearAntiAfkTimer(timer)); session.inputActionTimers?.clear(); this.clearTimers(session) }
   }
 
   clearTimers(session) {
