@@ -33,7 +33,7 @@
     }
   },
   "devDependencies": {
-    "electron": "^43.2.0",
+    "electron": "^43.8.3",
     "electron-builder": "^26.0.12",
     "patch-package": "8.0.1"
   },
