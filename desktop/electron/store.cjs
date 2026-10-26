@@ -108,13 +108,20 @@ class SettingsStore {
     return normalizeSettings(readStore(this.file, isObject, {}))
   }
 
+  getNotifyChannels() {
+    const raw = readStore(this.file, isObject, {})
+    return normalizeNotifyChannels(raw.notifyChannels)
+  }
+
   save(input) {
     this.get()
     if (!isObject(input)) throw new TypeError('Settings must be an object')
+    const current = readStore(this.file, isObject, {})
     const settings = normalizeSettings(input)
+    const notifyChannels = normalizeNotifyChannels(Object.prototype.hasOwnProperty.call(input, 'notifyChannels') ? input.notifyChannels : current.notifyChannels)
     fs.mkdirSync(path.dirname(this.file), { recursive: true })
     const temporaryFile = `${this.file}.tmp`
-    fs.writeFileSync(temporaryFile, JSON.stringify(settings, null, 2), 'utf8')
+    fs.writeFileSync(temporaryFile, JSON.stringify({ ...settings, notifyChannels }, null, 2), 'utf8')
     fs.renameSync(temporaryFile, this.file)
     return settings
   }
@@ -143,6 +150,17 @@ function normalizeSettings(input = {}) {
   }
 }
 
+function normalizeNotifyChannels(input) {
+  return Array.isArray(input) ? input.slice(0, 10).filter(isObject).map((channel) => ({
+    id: String(channel.id || '').slice(0, 80), type: channel.type === 'telegram' ? 'telegram' : 'discord',
+    name: String(channel.name || '').slice(0, 40), enabled: channel.enabled !== false,
+    events: Array.isArray(channel.events) ? channel.events.slice(0, 10).map(String) : [],
+    accountIds: Array.isArray(channel.accountIds) ? channel.accountIds.slice(0, 500).map(String) : null,
+    includeTimestamp: channel.includeTimestamp === true, chatId: String(channel.chatId || '').slice(0, 100),
+    secretEncrypted: String(channel.secretEncrypted || '').slice(0, 10000)
+  })) : []
+}
+
 function normalizeMacros(input) {
   if (!Array.isArray(input)) return []
   return input.slice(0, 1000).flatMap((macro) => {
@@ -158,4 +176,4 @@ function startupConnectionDelay(settings, index) {
   return base + (settings?.staggerStartupConnections === false ? 0 : Math.max(1, Number(settings?.startupConnectionDelay) || 3) * 1000 * index)
 }
 
-module.exports = { AccountStore, SettingsStore, normalizeSettings, normalizeMacros, startupConnectionDelay }
+module.exports = { AccountStore, SettingsStore, normalizeSettings, normalizeMacros, normalizeNotifyChannels, startupConnectionDelay }

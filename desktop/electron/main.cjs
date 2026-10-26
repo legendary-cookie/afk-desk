@@ -16,11 +16,21 @@ const { BedrockBotManager } = require('./bedrock-bot-manager.cjs')
 const { MultiEditionBotManager } = require('./multi-edition-manager.cjs')
 const { sendToWindow } = require('./window-events.cjs')
 const { DiagnosticLog } = require('./diagnostic-log.cjs')
+const { MacroLibraryStore, writeBackV1: writeBackMigratedMacro } = require('./macro/library-store.cjs')
+const macroModel = require('./macro/model.cjs')
+const macroTriggers = require('./macro/triggers.cjs')
+const { MacroEngine: V2MacroEngine } = require('./macro/engine.cjs')
+const { createFacade } = require('./macro/facade.cjs')
+const { TriggerMatcher } = require('./macro/triggers.cjs')
+const { createBotEventAdapter } = require('./macro/bot-events.cjs')
+const { IPC: MACRO_IPC, LIMITS: MACRO_LIMITS } = require('./macro/contract.cjs')
+const { NotifySettings, classifyKickReason, crossedLowHealth } = require('./notify/settings.cjs')
+const { fetchWithPolicy } = require('./net-policy.cjs')
 const { rememberedVersionState } = require('./version-compatibility.cjs')
 const { supportedVersions, normalizeVersionSelection } = require('./version-support.cjs')
 const { normalizeModdedProfile } = require('./modded-compatibility.cjs')
 const {
-  AlertManager, MacroEngine, PersistentEventStore, SmartProxyManager,
+  AlertManager, PersistentEventStore, SmartProxyManager,
   identityIdFor, normalizeAutomations, normalizeEdition
 } = require('./beta-core.cjs')
 const movementDiagnosticsEnabled = process.env.AFK_DESK_MOVEMENT_DIAGNOSTICS === '1'
@@ -33,6 +43,10 @@ let diagnosticLog
 let eventStore
 let alerts
 let macroEngine
+let macroLibrary
+let notifySettings
+let notifier
+let botEventAdapter
 let smartProxies
 let storageErrorShown = false
 const runtime = new Map()
@@ -81,12 +95,12 @@ function createWindow() {
   }
   mainWindow.loadFile(documentPath)
 }
-
 app.whenReady().then(async () => {
   store = new AccountStore(app.getPath('userData'))
   settingsStore = new SettingsStore(app.getPath('userData'))
   diagnosticLog = new DiagnosticLog(app.getPath('userData'))
   eventStore = new PersistentEventStore(app.getPath('userData'))
+  notifySettings = new NotifySettings(settingsStore, safeStorage)
   alerts = new AlertManager(({ title, body }) => {
     try {
       if (settingsStore.get().notificationsEnabled === true && Notification.isSupported()) {
@@ -107,13 +121,27 @@ app.whenReady().then(async () => {
     java: new BotManager(managerOptions),
     bedrock: new BedrockBotManager({ profilesPath: managerOptions.profilesPath, emit: emitBotEvent })
   })
-  macroEngine = new MacroEngine({
-    getAccount: (id) => store.list().find((item) => item.id === id),
-    getState: getRuntime,
-    execute: executeMacroStep,
-    emit: emitBotEvent
-  })
-  for (const account of store.list()) macroEngine.sync(account)
+  macroLibrary = new MacroLibraryStore(app.getPath('userData'))
+  const accounts = store.list()
+  macroLibrary.load(accounts)
+  for (const warning of macroLibrary.warnings) diagnosticLog.write({ event: 'warning', at: Date.now(), message: warning })
+  const migration = macroModel.migrateV1(accounts, macroLibrary.library)
+  if (migration.migratedAccountIds.length) macroLibrary.write(migration.library)
+  macroLibrary.library = migration.library
+  for (const warning of migration.warnings) diagnosticLog.write({ event: 'warning', at: Date.now(), message: warning })
+  const resolveTargets = (macro) => {
+    const all = store.list()
+    if (macro.targets.mode === 'all') return all.map((a) => a.id)
+    if (macro.targets.mode === 'accounts') { const ids = new Set(all.map((a) => a.id)); return macro.targets.accountIds.filter((id) => ids.has(id)) }
+    const tags = new Set(macro.targets.tags)
+    return all.filter((a) => Array.isArray(a.tags) && a.tags.some((tag) => tags.has(tag))).map((a) => a.id)
+  }
+  botEventAdapter = createBotEventAdapter({ sessionId: (id) => facade?.sessionId(id), isManualDisconnect: (id) => bots?.manager(id)?.reconnects?.get(id)?.manual === true })
+  let facade
+  try { notifier = require('./notify/notifier.cjs').createNotifier({ fetchWithPolicy, getChannels: () => notifySettings.getDecrypted(), onLog: (entry) => diagnosticLog.write(entry) }) } catch { notifier = null }
+  facade = createFacade({ bots, getEdition: (id) => store.list().find((a) => a.id === id)?.edition || 'java', notify: (event) => notifyMacro(event) })
+  macroEngine = new V2MacroEngine({ facade, matcher: new TriggerMatcher({}), now: Date.now, emit: emitMacroRunEvent, getAccountState: facade.state, resolveTargets, nextScheduleTime: macroTriggers.nextScheduleTime })
+  macroEngine.setLibrary(macroLibrary.list())
   registerIpc()
   createWindow()
   if (!smokeTest) autoConnectConfiguredAccounts()
@@ -131,10 +159,11 @@ app.on('before-quit', () => {
   for (const timer of startupTimers.values()) clearTimeout(timer)
   startupTimers.clear()
   for (const id of runtime.keys()) {
-    macroEngine?.stop(id)
-    macroEngine?.cancelTimers(id)
+    void macroEngine?.stop(id, 'shutdown')
     bots?.disconnect(id)
   }
+  void macroEngine?.shutdown()
+  void notifier?.flush?.()
 })
 
 function registerIpc() {
@@ -144,7 +173,7 @@ function registerIpc() {
     const existing = store.list().find((account) => account.id === input?.id)
     const account = validateAccount(input, existing)
     const saved = store.save(account)
-    macroEngine.sync(saved)
+    macroEngine.setLibrary(macroLibrary.list())
     if (existing && (existing.autoDepositToChest !== saved.autoDepositToChest || existing.autoDepositRange !== saved.autoDepositRange)) {
       bots.setAutoDeposit(saved.id, saved.autoDepositToChest, saved.autoDepositRange)
     }
@@ -159,9 +188,9 @@ function registerIpc() {
   handle('accounts:delete', (_event, id) => {
     cancelStartupConnection(id)
     bots.disconnect(id)
-    macroEngine.stop(id)
-    macroEngine.cancelTimers(id)
+    void macroEngine.stop(id, 'account-deleted')
     store.delete(id)
+    macroEngine.setLibrary(macroLibrary.list())
   })
   handle('accounts:duplicate-profile', (_event, id) => {
     const source = store.list().find((account) => account.id === id)
@@ -173,7 +202,7 @@ function registerIpc() {
       connectOnStartup: false,
       autoDepositToChest: false
     })
-    macroEngine.sync(copy)
+    macroEngine.setLibrary(macroLibrary.list())
     return publicAccount(copy)
   })
   handle('accounts:reorder', (_event, orderedIds) => store.reorder(orderedIds).map(publicAccount))
@@ -222,8 +251,19 @@ function registerIpc() {
   handle('bot:world-action', (_event, { id, action, target }) => bots.worldAction(id, action, target))
   handle('logs:list', (_event, { id, limit, kinds }) => eventStore.list(id, { limit, kinds }))
   handle('logs:clear', (_event, id) => eventStore.clear(id))
-  handle('macro:run', (_event, { id, macroId }) => macroEngine.run(id, macroId))
-  handle('macro:stop', (_event, id) => macroEngine.stop(id))
+  handle(MACRO_IPC.list, () => macroListResult())
+  handle(MACRO_IPC.save, (_event, input) => saveMacro(input))
+  handle(MACRO_IPC.remove, (_event, id) => removeMacro(id))
+  handle(MACRO_IPC.setEnabled, (_event, input) => setMacroEnabled(input))
+  handle(MACRO_IPC.run, (_event, input) => { assertMacroPayload(input); return macroEngine.run(input.accountId, input.macroId) })
+  handle(MACRO_IPC.stop, (_event, input) => { assertMacroPayload(input); return macroEngine.stop(input.accountId) })
+  handle(MACRO_IPC.runs, (_event, id) => { assertMacroPayload(id); return macroEngine.runLog(id) })
+  handle(MACRO_IPC.importJson, (_event, json) => { assertMacroPayload(json); const result = macroModel.importMacros(json, { accountIds: store.list().map((a) => a.id), editionOf: (id) => store.list().find((a) => a.id === id)?.edition }); if (result.errors.length) return result; const merged = [...macroLibrary.list(), ...result.macros].slice(0, MACRO_LIMITS.maxMacros); macroLibrary.replaceAll(merged); macroEngine.setLibrary(macroLibrary.list()); return { ...result, macros: result.macros } })
+  handle(MACRO_IPC.exportJson, (_event, ids) => { assertMacroPayload(ids); const set = new Set(Array.isArray(ids) ? ids : []); return macroModel.exportMacros(macroLibrary.list().filter((m) => !set.size || set.has(m.id))) })
+  handle('notify:list', () => notifySettings.list())
+  handle('notify:save', (_event, input) => notifySettings.save(input))
+  handle('notify:delete', (_event, id) => notifySettings.delete(id))
+  handle('notify:test', async (_event, id) => notifier ? notifier.test(id) : { ok: false, error: 'Notifier unavailable' })
   handle('proxy:health', () => smartProxies.snapshot())
   handle('bot:auto-deposit', async (_event, { id, enabled }) => {
     const account = store.list().find((item) => item.id === id)
@@ -238,19 +278,19 @@ function registerIpc() {
     if (!['https:', 'http:'].includes(parsed.protocol)) throw new Error('Unsupported link.')
     return shell.openExternal(parsed.toString())
   })
-  handle('settings:get', () => ({
-    startWithWindows: app.getLoginItemSettings().openAtLogin,
-    ...settingsStore.get()
-  }))
+  handle('settings:get', () => {
+    return { startWithWindows: app.getLoginItemSettings().openAtLogin, ...settingsStore.get() }
+  })
   handle('app:version', () => app.getVersion())
   handle('app:supported-versions', () => supportedVersions())
   handle('settings:save', (_event, input) => {
     const startWithWindows = input?.startWithWindows === true
     const settings = settingsStore.save(input)
     app.setLoginItemSettings({ openAtLogin: startWithWindows })
+    const { notifyChannels: _privateChannels, ...publicSettings } = settings
     return {
       startWithWindows: app.getLoginItemSettings().openAtLogin,
-      ...settings
+      ...publicSettings
     }
   })
 }
@@ -341,6 +381,21 @@ function emitBotEvent(type, id, payload) {
     storageErrorShown = false
   } catch (error) { reportRuntimeStorageError(error) }
   if (accountForEvent) alerts?.handle(accountForEvent, type, payload)
+  for (const event of botEventAdapter?.(type, id, payload) || []) {
+    macroEngine?.onBotEvent(event)
+    notifyForBotEvent(event, accountForEvent)
+  }
+  if (type === 'log' && payload.kind === 'error' && /kicked:/i.test(payload.message || '')) {
+    const reason = String(payload.message).replace(/^.*?kicked:\s*/i, '')
+    const kind = classifyKickReason(reason)
+    const displayName = accountDisplayName(accountForEvent)
+    sendNotification({ kind, accountId: id, accountName: displayName, message: `${displayName} was ${kind}.`, payload: { reason }, at: Number(payload.at) || Date.now() })
+  }
+  if (type === 'status' && payload.status === 'reconnecting' && accountForEvent) {
+    const delaySeconds = Number(String(payload.detail || '').match(/in\s+([\d.]+)s/i)?.[1]) || undefined
+    const name = accountDisplayName(accountForEvent)
+    sendNotification({ kind: 'reconnecting', accountId: id, accountName: name, message: `${name} is reconnecting.`, payload: { delaySeconds }, at: Number(payload.at) || Date.now() })
+  }
   if (type === 'status' && payload.status === 'online') smartProxies?.report(assignedProxies.get(id), true)
   if (type === 'status' && payload.status === 'offline') {
     smartProxies?.release(assignedProxies.get(id))
@@ -386,9 +441,82 @@ function emitBotEvent(type, id, payload) {
   }
   sendToWindow(mainWindow, 'bot:event', { type, id, payload })
   if (persistEvent) persistEventSafely(id, type, payload)
-  macroEngine?.handleEvent(id, type, payload).catch((error) => {
-    if (type !== 'macro') emitBotEvent('macro', id, { status: 'failed', error: String(error?.message || error).slice(0, 200), at: Date.now() })
-  })
+}
+
+function sendNotification(event) { try { notifier?.notify(event) } catch {} }
+function notifyForBotEvent(event, account) {
+  if (!account) return
+  const name = accountDisplayName(account)
+  if (event.type === 'connected') sendNotification({ kind: 'connected', accountId: account.id, accountName: name, message: `${name} connected.`, at: event.at })
+  if (event.type === 'disconnected') sendNotification({ kind: 'disconnected', accountId: account.id, accountName: name, message: `${name} disconnected: ${event.payload.reason}`, payload: event.payload, at: event.at })
+  if (event.type === 'disconnected') { healthEdges.delete(account.id); previousInventoryFull.delete(account.id) }
+  if (event.type === 'telemetry') {
+    const previous = healthEdges.get(account.id)
+    const health = Number(event.payload.health)
+    if (crossedLowHealth(previous, health)) sendNotification({ kind: 'lowHealth', accountId: account.id, accountName: name, message: `${name} health is ${health}/20.`, payload: { health }, at: event.at })
+    if (event.payload.inventoryFull && previousInventoryFull.get(account.id) !== true) sendNotification({ kind: 'inventoryFull', accountId: account.id, accountName: name, message: `${name} inventory is full.`, at: event.at })
+    healthEdges.set(account.id, health); previousInventoryFull.set(account.id, event.payload.inventoryFull === true)
+  }
+  if (event.type === 'death') sendNotification({ kind: 'death', accountId: account.id, accountName: name, message: `${name} died.`, at: event.at })
+}
+const healthEdges = new Map()
+const previousInventoryFull = new Map()
+function notifyMacro(event) {
+  const account = store.list().find((item) => item.id === event.accountId)
+  const name = account?.profileName || account?.label || 'Minecraft account'
+  const message = String(event.message || event.error || 'Macro notification').slice(0, 500)
+  try { if (event.desktop !== false && settingsStore.get().notificationsEnabled && Notification.isSupported()) new Notification({ title: accountDisplayName(account) === 'Minecraft account' ? 'AFK Desk macro' : accountDisplayName(account), body: message }).show() } catch {}
+  sendNotification({ kind: 'macro', accountId: event.accountId, accountName: name, message, payload: { macroName: event.macroName || 'Macro', status: event.status || 'notify' }, at: Date.now() })
+}
+function accountDisplayName(account) {
+  for (const candidate of [account?.profileName, account?.minecraftName, account?.label]) {
+    const value = String(candidate || '').trim()
+    if (value && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) return value.slice(0, 60)
+  }
+  return 'Minecraft account'
+}
+function emitMacroRunEvent(event) {
+  sendToWindow(mainWindow, MACRO_IPC.event, event)
+  if (event.accountId) persistEventSafely(event.accountId, 'macro', event)
+  if (event.status === 'failed') notifyMacro({ accountId: event.accountId, macroName: macroLibrary?.get(event.macroId)?.name, status: 'failed', error: event.error?.message || event.reason || 'Macro failed' })
+}
+
+function assertMacroPayload(value) {
+  let json
+  try { json = JSON.stringify(value) } catch { throw new Error('Macro payload must be JSON serializable.') }
+  if (Buffer.byteLength(json === undefined ? 'null' : json, 'utf8') > MACRO_LIMITS.maxIpcPayloadBytes) throw new Error('Macro payload exceeds 256 KB.')
+}
+function macroValidationOptions() { const accounts = store.list(); return { accountIds: accounts.map((a) => a.id), editionOf: (id) => accounts.find((a) => a.id === id)?.edition } }
+function macroListResult() {
+  const validation = {}
+  for (const macro of macroLibrary.list()) validation[macro.id] = macroModel.validateMacro(macro, macroValidationOptions())
+  return { macros: macroLibrary.list(), validation }
+}
+function writeBackV1(macro, deleted = false) {
+  return writeBackMigratedMacro(store, macro, deleted)
+}
+function saveMacro(input) {
+  assertMacroPayload(input)
+  const previous = macroLibrary.get(input?.id)
+  const macro = macroModel.normalizeMacro({ ...input, origin: input?.origin || previous?.origin })
+  const errors = macroModel.validateMacro(macro, macroValidationOptions())
+  if (errors.length) { const error = new Error(errors.map((e) => `${e.path}: ${e.message}`).join(' ')); error.validation = errors; throw error }
+  writeBackV1(macro)
+  macroLibrary.save(macro); macroEngine.setLibrary(macroLibrary.list()); return macro
+}
+function setMacroEnabled(input) {
+  assertMacroPayload(input)
+  const macro = macroLibrary.get(input?.macroId)
+  if (!macro) throw new Error('Macro not found.')
+  const updated = macroModel.normalizeMacro({ ...macro, enabled: input.enabled === true })
+  const errors = macroModel.validateMacro(updated, macroValidationOptions())
+  if (updated.enabled && errors.length) { const error = new Error(errors.map((e) => e.message).join(' ')); error.validation = errors; throw error }
+  writeBackV1(updated); macroLibrary.save(updated); macroEngine.setLibrary(macroLibrary.list()); return updated
+}
+function removeMacro(id) {
+  assertMacroPayload(id)
+  const macro = macroLibrary.get(id); if (!macro) return false
+  writeBackV1(macro, true); macroLibrary.remove(id); macroEngine.setLibrary(macroLibrary.list()); return true
 }
 
 // History persistence is best effort: a failing disk must not block live delivery or throw into bot callbacks.
@@ -464,6 +592,7 @@ function validateAccount(input, existing) {
     identityId: validateProfileId(existing?.identityId || identityIdFor(edition, username)),
     edition,
     profileName: String(input?.profileName || existing?.profileName || host).trim().slice(0, 60),
+    tags: [...new Set((Array.isArray(input?.tags) ? input.tags : existing?.tags || []).filter((tag) => typeof tag === 'string').map((tag) => tag.trim().slice(0, 24)).filter(Boolean))].slice(0, 10),
     label: minecraftName || String(input?.label || username.split('@')[0] || 'Minecraft account').trim().slice(0, 50),
     username,
     host,
@@ -610,24 +739,4 @@ function withProxyPassword(account) {
 function publicAccount(account) {
   const { passwordEncrypted, password, ...proxy } = account.proxy || {}
   return { ...account, proxy: { ...proxy, hasPassword: Boolean(passwordEncrypted) } }
-}
-
-async function executeMacroStep(id, step) {
-  if (step.type === 'chat') return bots.sendChat(id, step.message)
-  if (step.type === 'move') return bots.control(id, step.control, step.duration)
-  if (step.type === 'look') return bots.look(id, step.direction)
-  if (step.type === 'drop') return bots.dropItems(id, step.slot, step.count)
-  if (step.type === 'deposit') return bots.depositSlot(id, step.slot, step.count)
-  if (step.type === 'equip') return bots.equipInventoryItem(id, step.slot, step.destination)
-  if (step.type === 'clickGui') return bots.clickWindowSlot(id, step.slot)
-  if (step.type === 'attackNearest') return bots.worldAction(id, 'attack-nearest')
-  if (step.type === 'useHeld') return bots.worldAction(id, 'use-held')
-  if (step.type === 'notify') {
-    const account = store.list().find((item) => item.id === id)
-    try {
-      if (settingsStore.get().notificationsEnabled === true && Notification.isSupported()) {
-        new Notification({ title: account?.profileName || 'AFK Desk automation', body: step.message || 'Automation notification' }).show()
-      }
-    } catch {}
-  }
 }

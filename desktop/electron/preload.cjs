@@ -27,8 +27,19 @@ contextBridge.exposeInMainWorld('afkDesk', {
   worldAction: (id, action, target) => ipcRenderer.invoke('bot:world-action', { id, action, target }),
   listLogs: (id, options = {}) => ipcRenderer.invoke('logs:list', { id, ...options }),
   clearLogs: (id) => ipcRenderer.invoke('logs:clear', id),
-  runAutomation: (id, macroId) => ipcRenderer.invoke('macro:run', { id, macroId }),
-  stopAutomation: (id) => ipcRenderer.invoke('macro:stop', id),
+  runAutomation: (id, macroId) => ipcRenderer.invoke('macros:run', { accountId: id, macroId }),
+  stopAutomation: (id) => ipcRenderer.invoke('macros:stop', { accountId: id }),
+  macros: {
+    list: () => ipcRenderer.invoke('macros:list'),
+    save: (macro) => ipcRenderer.invoke('macros:save', macro),
+    remove: (id) => ipcRenderer.invoke('macros:delete', id),
+    setEnabled: (macroId, enabled) => ipcRenderer.invoke('macros:set-enabled', { macroId, enabled }),
+    run: (accountId, macroId) => ipcRenderer.invoke('macros:run', { accountId, macroId }),
+    stop: (accountId) => ipcRenderer.invoke('macros:stop', { accountId }),
+    runs: (macroId) => ipcRenderer.invoke('macros:runs', macroId),
+    importJson: (json) => ipcRenderer.invoke('macros:import', json),
+    exportJson: (ids) => ipcRenderer.invoke('macros:export', ids)
+  },
   getProxyHealth: () => ipcRenderer.invoke('proxy:health'),
   openIsolatedLogin: (id, url, code) => ipcRenderer.invoke('auth:open-isolated', { id, url, code }),
   openExternal: (url) => ipcRenderer.invoke('system:open-external', url),
@@ -41,5 +52,10 @@ contextBridge.exposeInMainWorld('afkDesk', {
     const listener = (_event, data) => callback(data)
     ipcRenderer.on('bot:event', listener)
     return () => ipcRenderer.removeListener('bot:event', listener)
+  }
+  ,onMacroRun: (callback) => {
+    const listener = (_event, data) => callback(data)
+    ipcRenderer.on('macro-run', listener)
+    return () => ipcRenderer.removeListener('macro-run', listener)
   }
 })
