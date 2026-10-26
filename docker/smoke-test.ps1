@@ -33,9 +33,16 @@ try {
         '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges:true', '--volume', "${volume}:/data")
     $password | & docker run --rm -i @runtime $image init --password-stdin
     if ($LASTEXITCODE -ne 0) { throw "Admin initialization failed (exit $LASTEXITCODE)" }
-    Invoke-Docker run --detach --name $container @runtime `
-        --env AFKDESK_BIND=0.0.0.0 --env AFKDESK_ALLOWED_HOSTS=localhost,127.0.0.1 `
-        --publish 127.0.0.1::8787 $image start --i-understand-plain-http | Out-Null
+    # Build the argument list explicitly: passing these through a helper's
+    # automatic $args lost the --publish flag on PowerShell 7 (CI saw
+    # "pull access denied for 127.0.0.1").
+    $runArgs = @('run', '--detach', '--name', $container) + $runtime + @(
+        '--env', 'AFKDESK_BIND=0.0.0.0',
+        '--env', 'AFKDESK_ALLOWED_HOSTS=localhost,127.0.0.1',
+        '--publish', '127.0.0.1::8787',
+        $image, 'start', '--i-understand-plain-http')
+    & docker @runArgs | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "docker run failed (exit $LASTEXITCODE)" }
     $containerCreated = $true
     $healthy = $false
     for ($attempt = 0; $attempt -lt 90; $attempt++) {
