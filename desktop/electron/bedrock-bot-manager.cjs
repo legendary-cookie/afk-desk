@@ -2,18 +2,23 @@ const path = require('node:path')
 const { profilePath, validateProfileId } = require('./profile-path.cjs')
 const bedrock = require('bedrock-protocol')
 const minecraftData = require('minecraft-data')
+const { MacroActionError } = require('./macro/contract.cjs')
 const SUPPORTED_VERSION = minecraftData.versions.bedrock.filter((entry) => entry.releaseType === 'release').sort((a, b) => b.version - a.version)[0].minecraftVersion
+const EYE_HEIGHT = 1.62
+const STATIONARY_INPUTS = new Set(['jump', 'sneak', 'sprint', 'leftClick'])
+const WALK_INPUTS = new Set(['forward', 'back', 'left', 'right'])
 
 function raknetBackend () {
   try { require('raknet-native'); return 'raknet-native' } catch { return 'jsp-raknet' }
 }
 
 class BedrockBotManager {
-  constructor({ profilesPath, emit, createClient = bedrock.createClient, timers = globalThis } = {}) {
+  constructor({ profilesPath, emit, createClient = bedrock.createClient, timers = globalThis, random = Math.random } = {}) {
     this.profilesPath = profilesPath
     this.emit = emit
     this.createClient = createClient
     this.timers = timers
+    this.random = random
     this.sessions = new Map()
     this.reconnects = new Map()
   }
@@ -44,12 +49,14 @@ class BedrockBotManager {
       onMsaCode: (code) => this.emit('login-code', account.id, normalizeLoginCode(code))
     })
     const session = { client, account: { ...account }, ready: false, closing: false, runtimeEntityId: null, position: null, yaw: 0, pitch: 0, health: 20, food: 20, saturation: 5, players: new Map(), inventory: [], itemNames: new Map(), itemLocks: new Set(), forms: new Map(), lastForm: null, lastTelemetry: '', disconnectReason: '', connectTimer: null, resetTimer: null }
+    Object.assign(session, { movementTimer: null, tick: 0n, inputClaims: new Map(), previousInputs: {}, jumpArc: null, swingTicks: 0, handledTeleport: false, lastMovement: null, antiAfkTimer: null, antiAfkActionTimers: new Set(), manualControlTimers: new Map() })
     this.sessions.set(account.id, session)
     const timeoutSeconds = bound(account.connectTimeoutSeconds, 5, 300, 60)
     session.connectTimer = this.timers.setTimeout(() => { if (!session.ready && this.sessions.get(account.id) === session) { session.disconnectReason = `Connection timed out after ${timeoutSeconds}s`; try { client.close() } catch {} } }, timeoutSeconds * 1000)
 
     client.on('join', () => this.status(account.id, 'connected', 'Bedrock authenticated. Waiting for spawn…'))
     client.on('spawn', () => {
+      if (this.sessions.get(account.id) !== session || session.closing || session.ready) return
       session.ready = true
       if (session.connectTimer) this.timers.clearTimeout(session.connectTimer)
       session.connectTimer = null
@@ -59,6 +66,8 @@ class BedrockBotManager {
       this.emit('identity', account.id, { username: client.profile?.name || client.username || account.label, uuid: client.profile?.id || '', edition: 'bedrock', at: Date.now() })
       this.emit('version', account.id, { version: client.version || account.version || 'auto', stable: true, edition: 'bedrock', at: Date.now() })
       this.emitTelemetry(account.id)
+      this.startMovementLoop(account.id, session)
+      this.setAntiAfk(account.id, session.account)
       const joinMessage = session.account.joinMessage
       if (joinMessage) {
         if (session.joinTimer) this.timers.clearTimeout(session.joinTimer)
@@ -72,19 +81,38 @@ class BedrockBotManager {
       }
     })
     client.on('start_game', (packet) => {
+      if (this.sessions.get(account.id) !== session || session.closing) return
       session.runtimeEntityId = packet.runtime_entity_id
-      session.position = vector(packet.player_position)
-      session.yaw = Number(packet.rotation?.y) || 0
+      session.position = feetPosition(packet.player_position)
+      session.yaw = Number(packet.rotation?.z ?? packet.rotation?.y) || 0
       session.pitch = Number(packet.rotation?.x) || 0
+      session.protocol = minecraftData('bedrock_' + (client.version || session.account.version || SUPPORTED_VERSION)).protocol.types
+      // 1.21.90+ dropped the start_game authority choice. Older servers choose it.
+      session.canChooseAuthority = packetFields(session.protocol, 'start_game').has('movement_authority')
+      session.serverAuthoritative = !session.canChooseAuthority || serverAuthority(packet.movement_authority)
+      session.tick = newerTick(session.tick, packet.current_tick)
+      session.lastMovement = null
       this.rememberItems(session, packet.itemstates)
       this.emitTelemetry(account.id)
+      this.startMovementLoop(account.id, session)
     })
     client.on('move_player', (packet) => {
-      if (session.runtimeEntityId != null && String(packet.runtime_id) !== String(session.runtimeEntityId)) return
-      session.position = vector(packet.position)
-      session.yaw = Number(packet.yaw) || session.yaw
-      session.pitch = Number(packet.pitch) || session.pitch
-      this.emitTelemetry(account.id)
+      if (session.runtimeEntityId == null || String(packet.runtime_id) !== String(session.runtimeEntityId)) return
+      this.adoptCorrection(account.id, session, packet.position, packet.yaw, packet.pitch, ['teleport', 'reset', 1, 2].includes(packet.mode))
+    })
+    client.on('correct_player_move_prediction', (packet) => {
+      if (packet.prediction_type === 'vehicle' || packet.prediction_type === 1) return
+      this.adoptCorrection(account.id, session, packet.position, packet.rotation?.z ?? packet.rotation?.y, packet.rotation?.x, true)
+    })
+    client.on('set_movement_authority', (packet) => {
+      if (!session.canChooseAuthority || this.sessions.get(account.id) !== session || session.closing) return
+      session.serverAuthoritative = serverAuthority(packet.movement_authority)
+      if (session.movementTimer != null) this.timers.clearTimeout(session.movementTimer)
+      session.movementTimer = null
+      session.lastMovement = null
+      session.previousInputs = {}
+      if (!session.serverAuthoritative) for (const input of ['jump', 'sneak', 'sprint']) if (session.inputClaims.get(input)?.size) this.sendLegacyControl(session, input, true)
+      this.startMovementLoop(account.id, session)
     })
     client.on('set_health', (packet) => { this.updateHealth(account.id, session, packet.health) })
     client.on('update_attributes', (packet) => {
@@ -148,10 +176,95 @@ class BedrockBotManager {
   }
 
   clearSessionTimers(session) {
-    for (const name of ['connectTimer', 'resetTimer', 'joinTimer', 'respawnTimer']) {
-      if (session[name]) this.timers.clearTimeout(session[name])
+    session.ready = false
+    for (const name of ['connectTimer', 'resetTimer', 'joinTimer', 'respawnTimer', 'movementTimer', 'antiAfkTimer']) {
+      if (session[name] != null) this.timers.clearTimeout(session[name])
       session[name] = null
     }
+    for (const timer of session.antiAfkActionTimers) this.timers.clearTimeout(timer)
+    for (const timer of session.manualControlTimers.values()) this.timers.clearTimeout(timer)
+    session.antiAfkActionTimers.clear()
+    session.manualControlTimers.clear()
+    session.inputClaims.clear()
+    session.jumpArc = null
+  }
+
+  startMovementLoop(id, session) {
+    if (this.sessions.get(id) !== session || !session.ready || session.closing || !session.protocol || session.movementTimer != null) return
+    // Recursive timeouts also work with the Phase 1 injected timer interface. There
+    // is exactly one outstanding movement callback, fenced to this session and handle.
+    const timer = this.timers.setTimeout(() => {
+      if (this.sessions.get(id) !== session || session.closing || !session.ready || session.movementTimer !== timer) return
+      session.movementTimer = null
+      try { this.sendMovementTick(id, session) } catch (error) {
+        session.disconnectReason = `Bedrock movement failed: ${error.message}`
+        this.clearSessionTimers(session)
+        this.emit('log', id, { kind: 'error', message: session.disconnectReason, at: Date.now() })
+        try { session.client.close() } catch {}
+        return
+      }
+      this.startMovementLoop(id, session)
+    }, session.serverAuthoritative ? 50 : 250)
+    session.movementTimer = timer
+  }
+
+  sendMovementTick(id, session) {
+    if (!session.position || session.runtimeEntityId == null) return
+    const held = Object.fromEntries(['jump', 'sneak', 'sprint'].map((input) => [input, Boolean(session.inputClaims.get(input)?.size)]))
+    const previous = session.previousInputs
+    const startJump = held.jump && !previous.jump
+    if (startJump) session.jumpArc = { height: 0, velocity: 0.42 }
+    if (session.jumpArc) {
+      session.jumpArc.height += session.jumpArc.velocity
+      session.jumpArc.velocity = (session.jumpArc.velocity - 0.08) * 0.98
+      if (session.jumpArc.height <= 0) session.jumpArc = null
+    }
+    const inputData = {
+      jump_down: held.jump, jumping: held.jump, start_jumping: startJump,
+      sneaking: held.sneak, sneak_down: held.sneak,
+      start_sneaking: held.sneak && !previous.sneak, stop_sneaking: !held.sneak && Boolean(previous.sneak),
+      sprinting: held.sprint, sprint_down: held.sprint,
+      start_sprinting: held.sprint && !previous.sprint, stop_sprinting: !held.sprint && Boolean(previous.sprint),
+      handled_teleport: session.handledTeleport
+    }
+    const position = eyePosition(session.position)
+    const rotation = { yaw: session.yaw, pitch: session.pitch, head_yaw: session.yaw }
+    session.tick += 1n
+    if (session.serverAuthoritative) {
+      // Only input flags request a jump: this arc is bookkeeping, never a guessed
+      // position/delta. Without chunk collision, the server owns vertical motion.
+      session.client.queue('player_auth_input', {
+        ...rotation, position, move_vector: { x: 0, z: 0 },
+        input_data: inputData, input_mode: 'mouse', play_mode: 'normal', interaction_model: 'crosshair',
+        interact_rotation: { x: session.pitch, z: session.yaw },
+        tick: session.tick, delta: { x: 0, y: 0, z: 0 },
+        analogue_move_vector: { x: 0, z: 0 }, raw_move_vector: { x: 0, z: 0 },
+        camera_orientation: cameraDirection(session.yaw, session.pitch)
+      })
+    } else {
+      const key = JSON.stringify({ position, ...rotation })
+      if (key !== session.lastMovement) {
+        session.client.queue('move_player', { runtime_id: Number(session.runtimeEntityId), position, ...rotation, mode: 'normal', on_ground: true, ridden_runtime_id: 0, tick: session.tick })
+        session.lastMovement = key
+      }
+    }
+    if (session.inputClaims.get('leftClick')?.size && session.swingTicks <= 0) {
+      this.swingArm(id)
+      session.swingTicks = session.serverAuthoritative ? 4 : 1
+    }
+    session.swingTicks = Math.max(0, session.swingTicks - 1)
+    session.previousInputs = held
+    session.handledTeleport = false
+  }
+
+  adoptCorrection(id, session, position, yaw, pitch, teleport) {
+    if (this.sessions.get(id) !== session || session.closing) return
+    const feet = feetPosition(position)
+    if (feet) session.position = feet
+    session.yaw = finite(yaw, session.yaw)
+    session.pitch = finite(pitch, session.pitch)
+    if (teleport && feet) { session.handledTeleport = true; session.jumpArc = null; session.lastMovement = null }
+    this.emitTelemetry(id)
   }
 
   // Replaces the config used by retry/reconnect for this profile after a settings save.
@@ -215,10 +328,89 @@ class BedrockBotManager {
     return [...session.players.values()].map((player) => player.name).filter((name) => name.toLowerCase().startsWith(prefix)).slice(0, 20).map((name) => ({ value: name, label: name, source: 'player' }))
   }
 
-  control() { throw experimental('movement') }
-  setControlState() { throw experimental('held movement') }
-  look() { throw experimental('camera control') }
-  lookDelta() { throw experimental('camera control') }
+  claimInput(id, input, owner) {
+    const session = this.requireOnline(id)
+    assertStationaryInput(input)
+    if (typeof owner !== 'string' || !owner) throw new MacroActionError('INVALID', 'Input owner is required.')
+    const owners = session.inputClaims.get(input) || new Set()
+    if (owners.has(owner)) return
+    const firstClaim = owners.size === 0
+    owners.add(owner)
+    session.inputClaims.set(input, owners)
+    if (firstClaim) this.sendLegacyControl(session, input, true)
+    // Any macro input (including swing) pauses autonomous actions immediately.
+    if (owner.startsWith('macro:')) this.clearAntiAfkActions(id, session)
+  }
+
+  releaseInput(id, input, owner) {
+    const session = this.sessions.get(id)
+    const owners = session?.inputClaims.get(input)
+    if (!owners?.delete(owner) || owners.size > 0) return
+    session.inputClaims.delete(input)
+    if (input === 'leftClick') session.swingTicks = 0
+    this.sendLegacyControl(session, input, false)
+  }
+
+  releaseOwner(id, owner) {
+    const session = this.sessions.get(id)
+    if (!session) return
+    for (const input of [...session.inputClaims.keys()]) this.releaseInput(id, input, owner)
+  }
+
+  inputOwners(id, input) { return [...(this.sessions.get(id)?.inputClaims.get(input) || [])] }
+
+  sendLegacyControl(session, input, enabled) {
+    if (!session.protocol || session.serverAuthoritative || session.runtimeEntityId == null || !session.ready || session.closing) return
+    const action = input === 'jump' ? (enabled ? 'jump' : null) : ['sneak', 'sprint'].includes(input) ? `${enabled ? 'start' : 'stop'}_${input}` : null
+    if (!action) return
+    const position = blockPosition(session.position || {})
+    const entityType = session.protocol.packet_player_action[1].find((field) => field.name === 'runtime_entity_id').type
+    session.client.queue('player_action', { runtime_entity_id: entityType === 'varint' ? Number(session.runtimeEntityId) : session.runtimeEntityId, action, position, result_position: position, face: 0 })
+  }
+
+  setControlState(id, input, enabled) {
+    const session = this.requireOnline(id)
+    assertStationaryInput(input)
+    const timer = session.manualControlTimers.get(input)
+    if (timer != null) this.timers.clearTimeout(timer)
+    session.manualControlTimers.delete(input)
+    if (enabled) this.claimInput(id, input, 'manual')
+    else this.releaseInput(id, input, 'manual')
+  }
+
+  control(id, input, duration = 350) {
+    this.setControlState(id, input, true)
+    const session = this.sessions.get(id)
+    const timer = this.timers.setTimeout(() => {
+      if (this.sessions.get(id) !== session || session.manualControlTimers.get(input) !== timer) return
+      session.manualControlTimers.delete(input)
+      this.releaseInput(id, input, 'manual')
+    }, bound(duration, 100, 3000, 350))
+    session.manualControlTimers.set(input, timer)
+  }
+
+  // Like Java, the public camera API takes radians. Bedrock stores/sends degrees:
+  // minecraft-data data/bedrock/latest/proto.yml:629-636; protocol.json uses lf32
+  // directly (bedrock-protocol's serializer does no angular conversion).
+  lookAbsolute(id, yaw, pitch) {
+    const session = this.requireOnline(id)
+    if (!Number.isFinite(Number(yaw)) || !Number.isFinite(Number(pitch))) throw new MacroActionError('INVALID', 'Yaw and pitch must be numbers.')
+    session.yaw = Number(yaw) * 180 / Math.PI
+    session.pitch = Math.max(-1.45, Math.min(1.45, Number(pitch))) * 180 / Math.PI
+  }
+
+  lookDelta(id, yawDelta = 0, pitchDelta = 0) {
+    const session = this.requireOnline(id)
+    return this.lookAbsolute(id, session.yaw * Math.PI / 180 + bound(yawDelta, -0.7, 0.7, 0), session.pitch * Math.PI / 180 + bound(pitchDelta, -0.5, 0.5, 0))
+  }
+
+  look(id, direction) { return this.lookDelta(id, direction === 'left' ? -0.45 : 0.45, 0) }
+
+  swingArm(id) {
+    const session = this.requireOnline(id)
+    if (session.runtimeEntityId == null) return
+    session.client.queue('animate', { action_id: 'swing_arm', runtime_entity_id: session.runtimeEntityId, data: 0, has_swing_source: false })
+  }
   dropStack() { throw experimental('inventory transactions') }
   dropItems() { throw experimental('inventory transactions') }
   moveInventorySlot() { throw experimental('inventory transactions') }
@@ -253,7 +445,7 @@ class BedrockBotManager {
     const timer = this.timers.setTimeout(() => {
       session.respawnTimer = null
       if (this.sessions.get(id) !== session || session.closing) return
-      const position = packet.position || session.position || { x: 0, y: 0, z: 0 }
+      const position = packet.position || (session.position && eyePosition(session.position)) || { x: 0, y: 0, z: 0 }
       const entityId = packet.runtime_entity_id ?? session.runtimeEntityId ?? 0n
       session.client.queue('respawn', { position, state: 2, runtime_entity_id: entityId })
       session.client.queue('player_action', { runtime_entity_id: entityId, action: 'respawn', position: blockPosition(position), result_position: blockPosition(position), face: 0 })
@@ -268,7 +460,60 @@ class BedrockBotManager {
     this.emit('window', id, { open: true, kind: 'form', title: stored.title, buttons, formId, formType: type, content: stored.content, elements: stored.elements, at: Date.now() })
   }
   setEnvironmentalMovement() {}
-  setAntiAfk() {}
+  setAntiAfk(id, account) {
+    const session = this.sessions.get(id)
+    if (!session) return
+    Object.assign(session.account, account)
+    if (session.antiAfkTimer != null) this.timers.clearTimeout(session.antiAfkTimer)
+    session.antiAfkTimer = null
+    this.clearAntiAfkActions(id, session)
+    session.antiAfkSettings = normalizeAntiAfkSettings(account)
+    if (session.antiAfkSettings.walk && !session.loggedAntiAfkWalk) {
+      session.loggedAntiAfkWalk = true
+      this.emit('log', id, { kind: 'system', message: 'Bedrock anti-AFK walk is ignored: walking is not supported yet.', at: Date.now() })
+    }
+    if (session.account.antiAfk !== false && session.ready) this.scheduleAntiAfk(id, session)
+  }
+
+  clearAntiAfkActions(id, session) {
+    for (const timer of session.antiAfkActionTimers) this.timers.clearTimeout(timer)
+    session.antiAfkActionTimers.clear()
+    this.releaseOwner(id, 'antiAfk')
+  }
+
+  scheduleAntiAfk(id, session) {
+    const settings = session.antiAfkSettings
+    const seconds = settings.minDelay + this.random() * (settings.maxDelay - settings.minDelay)
+    const timer = this.timers.setTimeout(() => {
+      if (this.sessions.get(id) !== session || session.closing || !session.ready || session.antiAfkTimer !== timer) return
+      session.antiAfkTimer = null
+      this.runAntiAfkCycle(id)
+      if (this.sessions.get(id) === session && session.ready && !session.closing && session.account.antiAfk !== false) this.scheduleAntiAfk(id, session)
+    }, Math.round(seconds * 1000))
+    session.antiAfkTimer = timer
+  }
+
+  runAntiAfkCycle(id) {
+    const session = this.sessions.get(id)
+    if (!session?.ready || session.closing || !session.position || session.account.antiAfk === false) return
+    for (const owners of session.inputClaims.values()) if ([...owners].some((owner) => owner.startsWith('macro:'))) return
+    const settings = session.antiAfkSettings
+    const actions = ['jump', 'look', 'sneak', 'swing'].filter((action) => settings[action])
+    if (!actions.length) return
+    const action = actions[Math.min(actions.length - 1, Math.floor(this.random() * actions.length))]
+    if (action === 'look') this.lookAbsolute(id, (session.yaw + (this.random() < 0.5 ? -1 : 1) * settings.lookDegrees) * Math.PI / 180, session.pitch * Math.PI / 180)
+    else {
+      const input = action === 'swing' ? 'leftClick' : action
+      this.claimInput(id, input, 'antiAfk')
+      // Swing once per cycle, through the same ownership used by held clicks.
+      if (action === 'swing') { this.swingArm(id); this.releaseInput(id, input, 'antiAfk'); return }
+      const timer = this.timers.setTimeout(() => {
+        if (!session.antiAfkActionTimers.delete(timer) || this.sessions.get(id) !== session || session.closing) return
+        this.releaseInput(id, input, 'antiAfk')
+      }, Math.round(settings.duration * 1000))
+      session.antiAfkActionTimers.add(timer)
+    }
+  }
 
   worldSnapshot(id, radius = 6) {
     const session = this.requireOnline(id)
@@ -296,7 +541,29 @@ class BedrockBotManager {
   status(id, status, detail) { this.emit('status', id, { status, detail, edition: 'bedrock', at: Date.now() }) }
 }
 
-function bedrockCapabilities() { return { chat: true, reconnect: true, position: true, players: true, health: true, hunger: true, death: true, autoRespawn: true, serverSwitch: true, inventoryView: true, itemLocksStored: true, forms: true, containerWindows: true, movement: false, inventoryActions: false, worldBlocks: false, macros: 'chat/wait/notify only' } }
+function bedrockCapabilities() { return { chat: true, reconnect: true, position: true, players: true, health: true, hunger: true, death: true, autoRespawn: true, serverSwitch: true, inventoryView: true, itemLocksStored: true, forms: true, containerWindows: true, movement: 'stationary', antiAfk: ['look', 'jump', 'sneak', 'swing'], inventoryActions: false, worldBlocks: false, macros: 'chat/wait/notify only' } }
+function assertStationaryInput(input) {
+  if (WALK_INPUTS.has(input)) throw new MacroActionError('UNSUPPORTED', 'Bedrock walking is not supported yet')
+  if (!STATIONARY_INPUTS.has(input)) throw new MacroActionError('UNSUPPORTED', `Bedrock input ${input} is not supported yet`)
+}
+function packetFields(protocol, name) { return new Set((protocol['packet_' + name]?.[1] || []).map((field) => field.name)) }
+function serverAuthority(value) { return value === 1 || value === 2 || ['server', 'server_with_rewind', 'server_v2_rewind'].includes(value) }
+function newerTick(current, value) { try { const tick = BigInt(value); return tick > current ? tick : current } catch { return current } }
+// Movement packet positions are eyes; telemetry/session coordinates are feet.
+// Keep full precision here: the Phase 1 display vector() rounds to 0.1 blocks.
+function feetPosition(value) { return value && [value.x, value.y, value.z].every(Number.isFinite) ? { x: value.x, y: value.y - EYE_HEIGHT, z: value.z } : null }
+function eyePosition(value) { return { x: value.x, y: value.y + EYE_HEIGHT, z: value.z } }
+function cameraDirection(yaw, pitch) {
+  const y = yaw * Math.PI / 180; const p = pitch * Math.PI / 180
+  return { x: -Math.sin(y) * Math.cos(p), y: -Math.sin(p), z: Math.cos(y) * Math.cos(p) }
+}
+// Mirror bot-manager.cjs without loading Java physics and protocol patches here.
+function normalizeAntiAfkSettings(input) {
+  const legacyInterval = typeof input === 'number' ? input : input?.antiAfkInterval
+  const minDelay = bound(input?.antiAfkMinDelay ?? legacyInterval, 2, 3600, 45)
+  const maxDelay = Math.max(minDelay, bound(input?.antiAfkMaxDelay ?? legacyInterval, 2, 3600, minDelay))
+  return { minDelay, maxDelay, duration: bound(input?.antiAfkActionDuration, 0.1, 10, 0.25), walkDistance: bound(input?.antiAfkWalkDistance, 0.1, 8, 0.5), lookDegrees: bound(input?.antiAfkLookDegrees, 5, 180, 12), jump: input?.antiAfkJump !== false, look: input?.antiAfkLook !== false, sneak: input?.antiAfkSneak === true, swing: input?.antiAfkSwing === true, walk: input?.antiAfkWalk === true }
+}
 function bound(value, minimum, maximum, fallback) { return Number.isFinite(Number(value)) ? Math.max(minimum, Math.min(Number(value), maximum)) : fallback }
 function reconnectDelaySeconds(account, reason, attempts) {
   const base = bound(account?.autoReconnectDelay, 1, 3600, 5)

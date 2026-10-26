@@ -129,13 +129,13 @@ test('surfaces Bedrock container windows and can close the open container', () =
   assert.deepEqual(client.queued.at(-1), ['container_close', { window_id: 3, window_type: 'chest', server: false }])
 })
 
-test('advertises Phase 1 capabilities only', () => {
+test('keeps Phase 1 capabilities (movement is extended by Phase 2)', () => {
   const capabilities = bedrockCapabilities()
   assert.equal(capabilities.forms, true)
   assert.equal(capabilities.containerWindows, true)
   assert.equal(capabilities.inventoryView, true)
   assert.equal(capabilities.inventoryActions, false)
-  assert.equal(capabilities.movement, false)
+  assert.equal(capabilities.movement, 'stationary') // Phase 2; walking still unsupported
 })
 
 test('offline Bedrock server and client exchange spawn, text, chat, and disconnect', { timeout: 25_000, skip: nativeRaknetAvailable ? false : 'raknet-native is unavailable; loopback requires the native backend' }, async (t) => {
