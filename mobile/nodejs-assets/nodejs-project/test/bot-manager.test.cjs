@@ -1,7 +1,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const { EventEmitter } = require('node:events')
-const { BotManager, findNearestChest, parseInteractiveChat, installConfigurationPacketGuard } = require('../bot-manager.cjs')
+const { BotManager, findNearestChest, parseInteractiveChat, extractText, installConfigurationPacketGuard } = require('../bot-manager.cjs')
 
 class FakeBot extends EventEmitter {
   constructor() {
@@ -20,6 +20,18 @@ class FakeBot extends EventEmitter {
   tabComplete() { return Promise.resolve([{ match: 'server', tooltip: 'Switch server' }]) }
   closeWindow(window) { this.closedWindow = window; this.currentWindow = null; this.emit('windowClose') }
 }
+
+test('chat component walkers cap deeply nested and wide server trees', () => {
+  let deep = { text: 'tail' }
+  for (let i = 0; i < 12000; i++) deep = { extra: [deep] }
+  deep.text = 'kept'
+  assert.equal(extractText(deep), 'kept')
+  assert.equal(parseInteractiveChat(deep).length, 1)
+  const wide = { extra: Array.from({ length: 100000 }, (_, index) => ({ text: index === 0 ? 'first' : 'x' })) }
+  assert.equal(extractText(wide).startsWith('firstx'), true)
+  const parsed = parseInteractiveChat(wide)
+  assert.ok(parsed.length <= 256)
+})
 
 test('mobile completes commands and player names and preserves clickable chat actions', async (t) => {
   const bot = new FakeBot()

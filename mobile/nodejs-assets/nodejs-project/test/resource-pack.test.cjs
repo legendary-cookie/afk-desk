@@ -2,13 +2,13 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const crypto = require('node:crypto')
 const AdmZip = require('adm-zip')
-const { ResourcePackLoader, parseResourcePack, normalizePackEvent, resolveItemDefinition } = require('../resource-pack.cjs')
+const { ResourcePackLoader, parseResourcePack, normalizePackEvent, resolveItemDefinition, flattenComponentText } = require('../resource-pack.cjs')
 
 const PIXEL = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+XfSUWQAAAABJRU5ErkJggg==', 'base64')
 
 test('declared oversized body is cancelled before any pull is consumed', async () => {
   let cancelled = false
-  const loader = new ResourcePackLoader({ maxPackBytes: 16, fetchImpl: async () => new Response(new ReadableStream({
+  const loader = new ResourcePackLoader({ maxPackBytes: 16, lookup: async () => [{ address: '93.184.216.34' }], fetchImpl: async () => new Response(new ReadableStream({
     cancel() { cancelled = true }
   }), { headers: { 'content-length': '17' } }) })
   await assert.rejects(loader.load('https://packs.example/declared.zip'), /download limit/)
@@ -17,7 +17,7 @@ test('declared oversized body is cancelled before any pull is consumed', async (
 
 test('download deadline also bounds a stalled response-header request', async () => {
   let signal
-  const loader = new ResourcePackLoader({ downloadTimeoutMs: 10, fetchImpl: (_url, options) => {
+  const loader = new ResourcePackLoader({ downloadTimeoutMs: 10, lookup: async () => [{ address: '93.184.216.34' }], fetchImpl: (_url, options) => {
     signal = options.signal
     return new Promise(() => {})
   } })
@@ -28,7 +28,7 @@ test('download deadline also bounds a stalled response-header request', async ()
 
 test('stream read failure aborts download and removes failed cache entry', async () => {
   let signal
-  const loader = new ResourcePackLoader({ fetchImpl: async (_url, options) => {
+  const loader = new ResourcePackLoader({ lookup: async () => [{ address: '93.184.216.34' }], fetchImpl: async (_url, options) => {
     signal = options.signal
     return new Response(new ReadableStream({ pull(controller) { controller.error(new Error('stream failed')) } }))
   } })
@@ -43,7 +43,7 @@ test('streamed pack rejects lying content length before buffering the oversized 
   let cancelled = false
   let signal
   let chunks = 0
-  const loader = new ResourcePackLoader({ maxPackBytes: 16, fetchImpl: async (_url, options) => {
+  const loader = new ResourcePackLoader({ maxPackBytes: 16, lookup: async () => [{ address: '93.184.216.34' }], fetchImpl: async (_url, options) => {
     signal = options.signal
     return new Response(new ReadableStream({
       pull(controller) { chunks++; if (chunks > 4) controller.close(); else controller.enqueue(new Uint8Array(12)) },
@@ -60,7 +60,7 @@ test('streamed pack rejects lying content length before buffering the oversized 
 test('download deadline cancels a stalled stream and releases its cache entry', async () => {
   let cancelled = false
   let signal
-  const loader = new ResourcePackLoader({ downloadTimeoutMs: 10, fetchImpl: async (_url, options) => {
+  const loader = new ResourcePackLoader({ downloadTimeoutMs: 10, lookup: async () => [{ address: '93.184.216.34' }], fetchImpl: async (_url, options) => {
     signal = options.signal
     return new Response(new ReadableStream({ cancel() { cancelled = true } }))
   } })
@@ -72,7 +72,7 @@ test('download deadline cancels a stalled stream and releases its cache entry', 
 
 test('failed HTTP response bodies are cancelled without reading', async () => {
   let cancelled = false
-  const loader = new ResourcePackLoader({ fetchImpl: async () => new Response(new ReadableStream({
+  const loader = new ResourcePackLoader({ lookup: async () => [{ address: '93.184.216.34' }], fetchImpl: async () => new Response(new ReadableStream({
     cancel() { cancelled = true }
   }), { status: 500 }) })
   await assert.rejects(loader.load('https://packs.example/error.zip'), /HTTP 500/)
@@ -82,7 +82,7 @@ test('failed HTTP response bodies are cancelled without reading', async () => {
 test('bounded parsed cache evicts oldest result and download failures allow retry', async () => {
   let downloads = 0
   const bytes = fixturePack()
-  const loader = new ResourcePackLoader({ maxCacheEntries: 2, fetchImpl: async () => {
+  const loader = new ResourcePackLoader({ maxCacheEntries: 2, lookup: async () => [{ address: '93.184.216.34' }], fetchImpl: async () => {
     downloads++
     if (downloads === 1) return new Response('invalid zip')
     return new Response(bytes)
@@ -108,7 +108,7 @@ test('disk cache prunes only owned hash zip files and never caches invalid archi
   fs.mkdirSync(path.join(directory, 'b'.repeat(40) + '.zip'))
   const bytes = fixturePack()
   let invalid = true
-  const loader = new ResourcePackLoader({ cacheDir: directory, maxCacheEntries: 1, maxCacheBytes: bytes.length, fetchImpl: async () => new Response(invalid ? 'bad zip' : bytes) })
+  const loader = new ResourcePackLoader({ cacheDir: directory, maxCacheEntries: 1, maxCacheBytes: bytes.length, lookup: async () => [{ address: '93.184.216.34' }], fetchImpl: async () => new Response(invalid ? 'bad zip' : bytes) })
   await assert.rejects(loader.load('https://packs.example/bad.zip'))
   assert.deepEqual(fs.readdirSync(directory).sort(), [oldName, 'b'.repeat(40) + '.zip', 'notes.zip'].sort())
   invalid = false
@@ -184,7 +184,7 @@ test('loads a bounded HTTP pack, validates its hash, and caches the parsed resul
   const bytes = fixturePack()
   const hash = crypto.createHash('sha1').update(bytes).digest('hex')
   let downloads = 0
-  const loader = new ResourcePackLoader({ fetchImpl: async () => {
+  const loader = new ResourcePackLoader({ lookup: async () => [{ address: '93.184.216.34' }], fetchImpl: async () => {
     downloads++
     return new Response(bytes, { headers: { 'content-length': String(bytes.length) } })
   } })
@@ -194,6 +194,47 @@ test('loads a bounded HTTP pack, validates its hash, and caches the parsed resul
   assert.equal(downloads, 1)
   assert.equal(first.source, 'https://packs.example/menu.zip')
   await assert.rejects(loader.load('file:///tmp/menu.zip'), /HTTP or HTTPS/)
+})
+
+test('rejects private DNS answers and revalidates every manually followed redirect', async () => {
+  let fetches = 0
+  const loader = new ResourcePackLoader({ lookup: async () => [{ address: '93.184.216.34' }, { address: '10.2.3.4' }], fetchImpl: async () => { fetches++; return new Response(fixturePack()) } })
+  await assert.rejects(loader.load('https://packs.example/blocked.zip'), /private or non-routable/)
+  assert.equal(fetches, 0)
+  for (const address of ['127.0.0.1', '0.1.2.3', '172.31.1.2', '192.168.1.2', '169.254.1.2', '100.64.0.1', '224.0.0.1', '::1', 'fe80::1', 'fc00::1', 'ff02::1', '::ffff:10.0.0.1', '::ffff:169.254.0.1']) {
+    const blocked = new ResourcePackLoader({ lookup: async () => [{ address }], fetchImpl: async () => { throw new Error('must not fetch a restricted address') } })
+    await assert.rejects(blocked.load('https://packs.example/restricted.zip'), /private or non-routable/, address)
+  }
+  const destinations = []
+  let hop = 0
+  const redirecting = new ResourcePackLoader({ lookup: async hostname => [{ address: hostname === 'packs.example' ? '93.184.216.34' : '127.0.0.1' }], fetchImpl: async url => {
+    destinations.push(String(url))
+    hop++
+    return new Response(null, { status: 302, headers: { location: 'http://localhost/private.zip' } })
+  } })
+  await assert.rejects(redirecting.load('https://packs.example/start.zip'), /private or non-routable/)
+  assert.deepEqual(destinations, ['https://packs.example/start.zip'])
+  assert.equal(hop, 1)
+  const allowed = new ResourcePackLoader({ lookup: async () => [{ address: '127.0.0.1' }], fetchImpl: async () => new Response(fixturePack()) })
+  assert.ok(await allowed.load('http://localhost/allowed.zip', '', { allowPrivatePackHosts: true }))
+})
+
+test('parsed pack survives an optional disk cache failure', async () => {
+  const warnings = []
+  const fsImpl = { mkdirSync() { throw new Error('injected disk failure') } }
+  const loader = new ResourcePackLoader({ cacheDir: 'unused', fsImpl, logger: { warn: message => warnings.push(message) }, lookup: async () => [{ address: '93.184.216.34' }], fetchImpl: async () => new Response(fixturePack()) })
+  const pack = await loader.load('https://packs.example/cache-failure.zip')
+  assert.equal(typeof pack.titleAppearance, 'function')
+  assert.match(warnings[0], /injected disk failure/)
+  assert.ok(warnings[0].length < 220)
+})
+
+test('component flattening caps deep and wide hostile trees without recursion', () => {
+  let deep = { text: 'kept', extra: [] }
+  for (let i = 0; i < 12000; i++) deep = { extra: [deep] }
+  deep.text = 'kept'
+  assert.equal(flattenComponentText(deep), 'kept')
+  assert.equal(flattenComponentText({ extra: Array.from({ length: 100000 }, (_, i) => String(i === 0 ? 'first' : 'x')) }).startsWith('firstx'), true)
 })
 
 test('normalizes Mineflayer resource-pack argument order and modern item definitions', () => {

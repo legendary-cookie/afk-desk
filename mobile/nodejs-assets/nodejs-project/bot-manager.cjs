@@ -182,7 +182,9 @@ class BotManager {
       const host = safeUrlHost(pack.url)
       this.emit('log', account.id, { kind: 'system', message: `Loading server resource pack from ${host}…`, at: Date.now() })
       try {
-        const loaded = await this.resourcePackLoader.load(pack.url, pack.hash)
+        const loaded = account.allowPrivatePackHosts === true
+          ? await this.resourcePackLoader.load(pack.url, pack.hash, { allowPrivatePackHosts: true })
+          : await this.resourcePackLoader.load(pack.url, pack.hash)
         if (this.sessions.get(account.id) !== session) return
         session.resourcePack = loaded
         bot.acceptResourcePack?.()
@@ -524,15 +526,34 @@ function formatReason(reason) {
 
 function extractText(value) {
   if (typeof value === 'string') {
-    try { return extractText(JSON.parse(value)) || value } catch { return value }
+    try { value = JSON.parse(value) } catch { return value }
   }
-  if (!value || typeof value !== 'object') return ''
-  if (value.type === 'string' && typeof value.value === 'string') return value.value
-  const source = value.type === 'compound' && value.value ? value.value : value
-  const text = extractText(source.text)
-  const extrasValue = source.extra?.value?.value || source.extra?.value || source.extra
-  const extras = Array.isArray(extrasValue) ? extrasValue.map(extractText).join('') : ''
-  return `${text}${extras}`.trim()
+  const parts = []
+  const stack = [{ value, depth: 0 }]
+  let nodes = 0
+  while (stack.length && nodes++ < 4096) {
+    const { value: current, depth } = stack.pop()
+    if (depth > 64) continue
+    if (typeof current === 'string') {
+      try { stack.push({ value: JSON.parse(current), depth: depth + 1 }) } catch { parts.push(current) }
+      continue
+    }
+    if (Array.isArray(current)) {
+      const count = Math.min(current.length, Math.max(0, 4096 - nodes - stack.length))
+      for (let i = count - 1; i >= 0; i--) stack.push({ value: current[i], depth: depth + 1 })
+      continue
+    }
+    if (!current || typeof current !== 'object') continue
+    if (current.type === 'string' && typeof current.value === 'string') { parts.push(current.value); continue }
+    const source = current.type === 'compound' && current.value ? current.value : current
+    const extrasValue = source.extra?.value?.value || source.extra?.value || source.extra
+    if (Array.isArray(extrasValue)) {
+      const count = Math.min(extrasValue.length, Math.max(0, 4096 - nodes - stack.length - 1))
+      for (let i = count - 1; i >= 0; i--) stack.push({ value: extrasValue[i], depth: depth + 1 })
+    }
+    stack.push({ value: source.text, depth: depth + 1 })
+  }
+  return parts.join('').trim()
 }
 
 const CHAT_COLORS = {
@@ -694,24 +715,34 @@ function parseInteractiveChat(originalMessage, fallbackMessage = '', formattedMe
 }
 
 function appendInteractiveComponent(segments, component, inherited) {
-  if (typeof component === 'string') { if (component) segments.push({ text: component, ...inherited }); return }
-  if (!component || typeof component !== 'object' || segments.length >= 256) return
-  const source = component.json && typeof component.json === 'object' ? component.json : component
-  const colorName = String(component.color ?? source.color ?? '')
-  const color = /^#[0-9a-f]{6}$/i.test(colorName) ? colorName.toLowerCase() : CHAT_NAMED_COLORS[colorName]
-  const style = { ...inherited, ...(color ? { color } : {}) }
-  for (const name of ['bold', 'italic', 'underlined', 'strikethrough']) {
-    const value = component[name] ?? source[name]
-    if (typeof value === 'boolean') style[name] = value
+  const stack = [{ component, inherited, depth: 0 }]
+  let nodes = 0
+  while (stack.length && nodes++ < 4096 && segments.length < 256) {
+    const current = stack.pop()
+    if (current.depth > 64) continue
+    const { component: item } = current
+    if (typeof item === 'string') { if (item) segments.push({ text: item.slice(0, 8192), ...current.inherited }); continue }
+    if (!item || typeof item !== 'object') continue
+    const source = item.json && typeof item.json === 'object' ? item.json : item
+    const colorName = String(item.color ?? source.color ?? '')
+    const color = /^#[0-9a-f]{6}$/i.test(colorName) ? colorName.toLowerCase() : CHAT_NAMED_COLORS[colorName]
+    const style = { ...current.inherited, ...(color ? { color } : {}) }
+    for (const name of ['bold', 'italic', 'underlined', 'strikethrough']) {
+      const value = item[name] ?? source[name]
+      if (typeof value === 'boolean') style[name] = value
+    }
+    const click = normalizeChatClick(item.clickEvent || item.click_event || source.clickEvent || source.click_event)
+    const hoverEvent = item.hoverEvent || item.hover_event || source.hoverEvent || source.hover_event
+    const hover = String(hoverEvent?.action === 'show_text' ? extractText(hoverEvent.value ?? hoverEvent.contents) : '').slice(0, 500)
+    const actionStyle = { ...style, ...(click ? { click } : {}), ...(hover ? { hover } : {}) }
+    const text = item.text ?? source.text
+    if (typeof text === 'string' && text) segments.push({ text: text.slice(0, 8192), ...actionStyle })
+    const children = item.extra || source.extra || item.with || source.with
+    if (Array.isArray(children)) {
+      const count = Math.min(children.length, Math.max(0, 4096 - nodes - stack.length))
+      for (let i = count - 1; i >= 0; i--) stack.push({ component: children[i], inherited: actionStyle, depth: current.depth + 1 })
+    }
   }
-  const click = normalizeChatClick(component.clickEvent || component.click_event || source.clickEvent || source.click_event)
-  const hoverEvent = component.hoverEvent || component.hover_event || source.hoverEvent || source.hover_event
-  const hover = String(hoverEvent?.action === 'show_text' ? extractText(hoverEvent.value ?? hoverEvent.contents) : '').slice(0, 500)
-  const actionStyle = { ...style, ...(click ? { click } : {}), ...(hover ? { hover } : {}) }
-  const text = component.text ?? source.text
-  if (typeof text === 'string' && text) segments.push({ text: text.slice(0, 8192), ...actionStyle })
-  const children = component.extra || source.extra || component.with || source.with
-  if (Array.isArray(children)) for (const child of children) appendInteractiveComponent(segments, child, actionStyle)
 }
 
 function normalizeChatClick(event) {

@@ -1,6 +1,8 @@
 const AdmZip = require('adm-zip')
 const crypto = require('crypto')
+const dns = require('node:dns').promises
 const fs = require('node:fs')
+const net = require('node:net')
 const path = require('node:path')
 const zlib = require('node:zlib')
 
@@ -13,8 +15,12 @@ const DOWNLOAD_TIMEOUT_MS = 30_000
 
 class ResourcePackLoader {
   constructor({ fetchImpl = globalThis.fetch, cacheDir = '', maxPackBytes = MAX_PACK_BYTES,
-    downloadTimeoutMs = DOWNLOAD_TIMEOUT_MS, maxCacheEntries = 8, maxCacheBytes = 300 * 1024 * 1024 } = {}) {
+    downloadTimeoutMs = DOWNLOAD_TIMEOUT_MS, maxCacheEntries = 8, maxCacheBytes = 300 * 1024 * 1024,
+    lookup = dns.lookup, fsImpl = fs, logger = console } = {}) {
     this.fetchImpl = fetchImpl
+    this.lookup = lookup
+    this.fs = fsImpl
+    this.logger = logger
     this.cacheDir = cacheDir
     this.maxPackBytes = boundedLimit(maxPackBytes, MAX_PACK_BYTES)
     this.downloadTimeoutMs = boundedLimit(downloadTimeoutMs, DOWNLOAD_TIMEOUT_MS)
@@ -24,7 +30,7 @@ class ResourcePackLoader {
     this.activeDownloads = 0
   }
 
-  async load(urlValue, expectedHash = '') {
+  async load(urlValue, expectedHash = '', { allowPrivatePackHosts = false } = {}) {
     const url = normalizePackUrl(urlValue)
     const hash = normalizeHash(expectedHash)
     const key = `${url.href}|${hash}`
@@ -32,7 +38,7 @@ class ResourcePackLoader {
     if (this.activeDownloads >= 4) throw new Error('Too many resource pack downloads in progress. Try again shortly.')
     while (this.cache.size >= this.maxCacheEntries) this.cache.delete(this.cache.keys().next().value)
     this.activeDownloads++
-    const task = this.#downloadAndParse(url, hash).catch((error) => {
+    const task = this.#downloadAndParse(url, hash, allowPrivatePackHosts).catch((error) => {
       if (this.cache.get(key) === task) this.cache.delete(key)
       throw error
     }).finally(() => { this.activeDownloads-- })
@@ -40,18 +46,31 @@ class ResourcePackLoader {
     return task
   }
 
-  async #downloadAndParse(url, expectedHash) {
+  async #downloadAndParse(url, expectedHash, allowPrivatePackHosts) {
     const controller = new AbortController()
     const timeoutError = new Error('Resource pack download timed out.')
     let rejectAbort
     const aborted = new Promise((_resolve, reject) => { rejectAbort = reject })
+    aborted.catch(() => {})
     const onAbort = () => rejectAbort(controller.signal.reason || timeoutError)
     controller.signal.addEventListener('abort', onAbort, { once: true })
     const timer = setTimeout(() => controller.abort(timeoutError), this.downloadTimeoutMs)
     let response
     let reader
     try {
-      response = await Promise.race([Promise.resolve().then(() => this.fetchImpl(url, { signal: controller.signal, redirect: 'follow' })), aborted])
+      let currentUrl = url
+      for (let redirects = 0; ; redirects++) {
+        await validatePackDestination(currentUrl, allowPrivatePackHosts, this.lookup)
+        response = await Promise.race([Promise.resolve().then(() => this.fetchImpl(currentUrl, { signal: controller.signal, redirect: 'manual' })), aborted])
+        if (![301, 302, 303, 307, 308].includes(response?.status)) break
+        if (redirects >= 5) throw new Error('Resource pack has too many redirects.')
+        const location = response.headers?.get?.('location')
+        if (!location) throw new Error('Resource pack redirect is missing its destination.')
+        const nextUrl = new URL(location, currentUrl)
+        if (!['http:', 'https:'].includes(nextUrl.protocol)) throw new Error('Resource pack URL must use HTTP or HTTPS.')
+        try { Promise.resolve(response.body?.cancel?.()).catch(() => {}) } catch {}
+        currentUrl = nextUrl
+      }
       if (!response?.ok) throw new Error(`Resource pack download failed with HTTP ${response?.status || 'unknown'}.`)
       const length = Number(response.headers?.get?.('content-length'))
       if (Number.isFinite(length) && length > this.maxPackBytes) throw new Error('Resource pack exceeds the download limit (maximum 100 MB).')
@@ -70,7 +89,11 @@ class ResourcePackLoader {
       const sha1 = crypto.createHash('sha1').update(buffer).digest('hex')
       if (expectedHash && expectedHash.length === 40 && sha1 !== expectedHash) throw new Error('Resource pack SHA-1 does not match the server hash.')
       const parsed = parseResourcePack(buffer, { source: safePackSource(url), sha1 })
-      if (this.cacheDir && buffer.length <= this.maxCacheBytes) this.#cacheToDisk(sha1, buffer)
+      if (this.cacheDir && buffer.length <= this.maxCacheBytes) {
+        try { this.#cacheToDisk(sha1, buffer) } catch (error) {
+          try { this.logger?.warn?.(`Resource pack disk cache failed: ${String(error?.message || error).slice(0, 160)}`) } catch {}
+        }
+      }
       return parsed
     } catch (error) {
       controller.abort(error)
@@ -85,15 +108,15 @@ class ResourcePackLoader {
   }
 
   #cacheToDisk(sha1, buffer) {
-    fs.mkdirSync(this.cacheDir, { recursive: true })
+    this.fs.mkdirSync(this.cacheDir, { recursive: true })
     const target = path.join(this.cacheDir, `${sha1}.zip`)
-    const entries = fs.readdirSync(this.cacheDir).filter(name => /^[a-f0-9]{40}\.zip$/.test(name)).flatMap(name => {
+    const entries = this.fs.readdirSync(this.cacheDir).filter(name => /^[a-f0-9]{40}\.zip$/.test(name)).flatMap(name => {
       const file = path.join(this.cacheDir, name)
-      const stat = fs.lstatSync(file)
+      const stat = this.fs.lstatSync(file)
       return stat.isFile() ? [{ file, size: stat.size, mtime: stat.mtimeMs }] : []
     }).sort((a, b) => a.mtime - b.mtime)
     // Do not follow symlinks or overwrite unrelated directories at the destination.
-    if (fs.existsSync(target) && !fs.lstatSync(target).isFile()) throw new Error('Unsafe resource pack cache destination.')
+    if (this.fs.existsSync(target) && !this.fs.lstatSync(target).isFile()) throw new Error('Unsafe resource pack cache destination.')
     let bytes = entries.reduce((sum, entry) => sum + entry.size, 0)
     let count = entries.length
     const previous = entries.find(entry => entry.file === target)
@@ -101,19 +124,53 @@ class ResourcePackLoader {
     for (const entry of entries) {
       if (bytes + buffer.length <= this.maxCacheBytes && count + 1 <= this.maxCacheEntries) break
       if (entry.file === target) continue
-      fs.unlinkSync(entry.file)
+      this.fs.unlinkSync(entry.file)
       bytes -= entry.size
       count--
     }
     // Remove only an already managed hash file, then create exclusively (no symlink following).
-    if (previous) fs.unlinkSync(target)
-    fs.writeFileSync(target, buffer, { flag: 'wx' })
+    if (previous) this.fs.unlinkSync(target)
+    this.fs.writeFileSync(target, buffer, { flag: 'wx' })
   }
 }
 
 function boundedLimit(value, maximum) {
   const number = Number(value)
   return Number.isFinite(number) && number > 0 ? Math.min(maximum, Math.max(1, Math.floor(number))) : maximum
+}
+
+async function validatePackDestination(url, allowPrivatePackHosts, lookup) {
+  if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Resource pack URL must use HTTP or HTTPS.')
+  if (allowPrivatePackHosts === true) return
+  const hostname = url.hostname.replace(/^\[|\]$/g, '').toLowerCase()
+  const addresses = net.isIP(hostname) ? [{ address: hostname }] : await lookup(hostname, { all: true, verbatim: true })
+  if (!Array.isArray(addresses) || !addresses.length) throw new Error('Resource pack host did not resolve to an address.')
+  if (addresses.some(({ address }) => isRestrictedAddress(address))) throw new Error('Resource pack host resolves to a private or non-routable address.')
+}
+
+function isRestrictedAddress(address) {
+  const family = net.isIP(address)
+  if (family === 4) {
+    const [a, b] = address.split('.').map(Number)
+    return a === 0 || a === 10 || a === 127 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) ||
+      (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127) || a >= 224
+  }
+  if (family !== 6) return true
+  let value = address.toLowerCase()
+  if (value.includes('.')) {
+    const split = value.lastIndexOf(':')
+    const octets = value.slice(split + 1).split('.').map(Number)
+    if (octets.length !== 4 || octets.some(n => !Number.isInteger(n) || n < 0 || n > 255)) return true
+    value = `${value.slice(0, split)}:${((octets[0] << 8) | octets[1]).toString(16)}:${((octets[2] << 8) | octets[3]).toString(16)}`
+  }
+  const [left, right = ''] = value.split('::')
+  const l = left ? left.split(':') : []
+  const r = right ? right.split(':') : []
+  const words = [...l, ...Array(Math.max(0, 8 - l.length - r.length)).fill('0'), ...r].map(part => parseInt(part || '0', 16))
+  if (words.length !== 8 || words.some(n => !Number.isFinite(n))) return true
+  if (words.slice(0, 5).every(n => n === 0) && words[5] === 0xffff) return isRestrictedAddress(`${words[6] >> 8}.${words[6] & 255}.${words[7] >> 8}.${words[7] & 255}`)
+  return words.every(n => n === 0) || (words.slice(0, 7).every(n => n === 0) && words[7] === 1) ||
+    (words[0] & 0xfe00) === 0xfc00 || (words[0] & 0xffc0) === 0xfe80 || (words[0] & 0xff00) === 0xff00
 }
 
 class ParsedResourcePack {
@@ -414,16 +471,29 @@ function firstBoolean(value) {
 }
 
 function flattenComponentText(value) {
-  if (typeof value === 'string') {
-    try { return flattenComponentText(JSON.parse(value)) } catch { return value }
+  const parts = []
+  const stack = [{ value, depth: 0 }]
+  let nodes = 0
+  while (stack.length && nodes++ < 4096) {
+    const { value: current, depth } = stack.pop()
+    if (depth > 64) continue
+    if (typeof current === 'string') {
+      try { stack.push({ value: JSON.parse(current), depth: depth + 1 }) } catch { parts.push(current) }
+      continue
+    }
+    if (Array.isArray(current)) {
+      const count = Math.min(current.length, Math.max(0, 4096 - nodes - stack.length))
+      for (let i = count - 1; i >= 0; i--) stack.push({ value: current[i], depth: depth + 1 })
+      continue
+    }
+    if (!current || typeof current !== 'object') continue
+    if (current.type === 'string') { stack.push({ value: current.value, depth: depth + 1 }); continue }
+    const source = current.type === 'compound' && current.value ? current.value : current
+    const extra = source.extra?.value?.value ?? source.extra?.value ?? source.extra ?? []
+    stack.push({ value: extra, depth: depth + 1 })
+    stack.push({ value: source.text?.value ?? source.text ?? '', depth: depth + 1 })
   }
-  if (Array.isArray(value)) return value.map(flattenComponentText).join('')
-  if (!value || typeof value !== 'object') return ''
-  if (value.type === 'string') return flattenComponentText(value.value)
-  const source = value.type === 'compound' && value.value ? value.value : value
-  const text = flattenComponentText(source.text?.value ?? source.text ?? '')
-  const extra = source.extra?.value?.value ?? source.extra?.value ?? source.extra ?? []
-  return text + flattenComponentText(extra)
+  return parts.join('')
 }
 
 function pngDimensions(buffer) {
