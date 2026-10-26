@@ -198,6 +198,8 @@ test('desktop bridge exposes inventory actions and accounts default automatic de
   assert.match(preload, /equipInventoryItem:.*bot:equip-item/)
   assert.match(preload, /clickWindowSlot:.*bot:window-click/)
   assert.match(preload, /closeServerWindow:.*bot:window-close/)
+  assert.match(preload, /respondForm:.*bot:form-respond/)
+  assert.match(main, /handle\('bot:form-respond'/)
   assert.match(main, /lockedInventorySlots:/)
   assert.match(main, /autoDepositToChest:\s*input\?\.autoDepositToChest === true/)
   assert.match(main, /autoDepositRange:/)

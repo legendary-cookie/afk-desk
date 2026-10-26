@@ -31,6 +31,7 @@ const ORIGINAL_IPC_CHANNELS = Object.freeze([
   'bot:equip-item',
   'bot:window-click',
   'bot:window-close',
+  'bot:form-respond',
   'bot:world-snapshot',
   'bot:world-action',
   'logs:list',
@@ -217,4 +218,53 @@ test('AppCore start and shutdown with fake managers disconnects bots, flushes no
   assert.equal(core.started, false)
   assert.deepEqual(disconnected, ['acc-1'])
   assert.equal(flushed, 1)
+})
+
+test('AppCore bots.respondForm validates formId and response payloads and delegates to Bedrock manager', (t) => {
+  const { AppCore } = require('../core/app-core.cjs')
+  const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'afk-core-form-'))
+  t.after(() => fs.rmSync(userDataPath, { recursive: true, force: true }))
+
+  const formCalls = []
+  const core = new AppCore({
+    userDataPath,
+    secretBox: { available: () => true, encrypt: (s) => s, decrypt: (s) => s },
+    managers: {
+      java: { sessions: new Map(), reconnects: new Map() },
+      bedrock: {
+        sessions: new Map(),
+        reconnects: new Map(),
+        respondForm: (id, formId, response) => { formCalls.push({ id, formId, response }); return { ok: true } }
+      }
+    }
+  })
+
+  assert.deepEqual(core.bots.respondForm({ id: 'acc-1', formId: '42', response: 0 }), { ok: true })
+  assert.deepEqual(core.bots.respondForm({ id: 'acc-1', formId: 7, response: null }), { ok: true })
+  assert.deepEqual(core.bots.respondForm('acc-1', '99', [null, true, 12.5, 'hello']), { ok: true })
+  assert.deepEqual(formCalls, [
+    { id: 'acc-1', formId: '42', response: 0 },
+    { id: 'acc-1', formId: '7', response: null },
+    { id: 'acc-1', formId: '99', response: [null, true, 12.5, 'hello'] }
+  ])
+
+  for (const bad of [
+    { id: '', formId: '1', response: 0 },
+    { id: '../bad', formId: '1', response: 0 },
+    { id: 'acc-1', formId: '', response: 0 },
+    { id: 'acc-1', formId: '1'.repeat(65), response: 0 },
+    { id: 'acc-1', formId: {}, response: 0 },
+    { id: 'acc-1', formId: '1', response: -1 },
+    { id: 'acc-1', formId: '1', response: 1.5 },
+    { id: 'acc-1', formId: '1', response: NaN },
+    { id: 'acc-1', formId: '1', response: undefined },
+    { id: 'acc-1', formId: '1', response: 'not-an-array-or-int' },
+    { id: 'acc-1', formId: '1', response: { nested: true } },
+    { id: 'acc-1', formId: '1', response: [{ bad: 1 }] },
+    { id: 'acc-1', formId: '1', response: [[1]] },
+    { id: 'acc-1', formId: '1', response: new Array(65).fill(0) }
+  ]) {
+    assert.throws(() => core.bots.respondForm(bad), /Invalid|profile/i, JSON.stringify(bad))
+  }
+  assert.equal(formCalls.length, 3)
 })

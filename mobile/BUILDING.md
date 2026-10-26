@@ -32,7 +32,16 @@ Keep `applicationId` as `com.afkdeskmobile`, retain the original signing identit
 
 Use an in-place package update, not uninstall/reinstall. If Android reports a signature mismatch, stop and recover the original signing key. Never uninstall or clear app storage to bypass that error. The account storage key remains `afkdesk.mobile.accounts.v1`; secure proxy-password migration preserves the old snapshot until encrypted storage is verified and the new snapshot commits.
 
-Before distributing, test an old-version install containing disposable accounts, update it with the new signed APK, then confirm accounts, proxy authentication, and reconnect settings survive. This device-level upgrade has not yet been verified. September's local Gradle check was blocked before configuration because its wrapper distribution was unavailable and the network download was denied.
+Before distributing, test an old-version install containing disposable accounts, update it with the new signed APK, then confirm accounts, proxy authentication, and reconnect settings survive. A debug build was launched on an Android 14 emulator (2026-10-27) and the embedded engine reached Microsoft device-code sign-in; upgrade over 0.9.2 and ARM hardware remain unverified.
+
+### Windows build troubleshooting
+
+- Use a short `TMP`/`TEMP` (for example `C:\afktmp`) or Gradle fails with `"Unable to establish loopback connection"`.
+- Pass JVM options via `GRADLE_OPTS` / `-Dorg.gradle.jvmargs`, never `JAVA_TOOL_OPTIONS` (its `"Picked up JAVA_TOOL_OPTIONS"` stderr line makes prefab fail with `CXX1210` `"No compatible library found"`).
+- npm 11 blocks `nodejs-mobile-react-native`'s postinstall — run `npm install-scripts approve nodejs-mobile-react-native` then `npm rebuild nodejs-mobile-react-native`.
+- Debug builds load JS from Metro unless you run `node node_modules/react-native/cli.js bundle --platform android --dev false --entry-file index.js --bundle-output android/app/src/main/assets/index.android.bundle --assets-dest android/app/src/main/res`.
+- The default ABIs are ARM only, so `x86_64` emulators need `-PreactNativeArchitectures=arm64-v8a,armeabi-v7a,x86_64` and adding `x86_64` to `abiFilters` in a local build.
+- A debug build needs `android/app/debug.keystore` (generate with `keytool`, standard `androiddebugkey`/`android` values) — never commit it.
 
 ## iPhone and iPad
 

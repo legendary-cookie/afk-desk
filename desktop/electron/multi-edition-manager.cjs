@@ -31,7 +31,7 @@ class MultiEditionBotManager {
 for (const method of [
   'sendChat', 'completeChat', 'control', 'setControlState', 'look', 'lookDelta', 'dropStack', 'dropItems',
   'moveInventorySlot', 'equipInventoryItem', 'depositSlot', 'setItemLocks', 'clickWindowSlot',
-  'closeWindow', 'setAutoDeposit', 'worldSnapshot', 'worldAction', 'setEnvironmentalMovement', 'setAntiAfk'
+  'closeWindow', 'respondForm', 'setAutoDeposit', 'worldSnapshot', 'worldAction', 'setEnvironmentalMovement', 'setAntiAfk'
 ]) {
   MultiEditionBotManager.prototype[method] = function (id, ...args) { return this.manager(id)[method](id, ...args) }
 }

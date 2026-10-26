@@ -11,6 +11,7 @@ STUB = r"""
 window.__sent = [];
 window.__controls = [];
 window.__windowClicks = [];
+window.__formResponses = [];
 window.__inventoryMoves = [];
 window.__equips = [];
 window.__worldActions = [];
@@ -105,6 +106,7 @@ window.afkDesk = {
   moveInventorySlot: async (_id, sourceSlot, destinationSlot) => { window.__inventoryMoves.push([sourceSlot, destinationSlot]); return { account: {}, sourceSlot, targetSlot: destinationSlot }; },
   equipInventoryItem: async (_id, slot, destination) => { window.__equips.push([slot, destination]); return { account: {}, sourceSlot: slot, targetSlot: slot, destination: destination === 'auto' ? 'head' : destination }; },
   clickWindowSlot: async (_id, slot) => { window.__windowClicks.push(slot); }, closeServerWindow: async () => { window.__botEvent({ type: 'window', id: 'one', payload: { open: false } }); },
+  respondForm: async (id, formId, response) => { window.__formResponses.push({ id, formId: String(formId), response }); },
   saveAccount: async (value) => (window.__savedAccount = value), deleteAccount: async () => {},
   openExternal: async () => {}, openIsolatedLogin: async () => {},
   macros: {
@@ -371,6 +373,23 @@ def run() -> None:
         menu_item.click()
         assert page.evaluate("window.__windowClicks") == [0]
         page.locator("#close-server-window").click()
+        page.locator("#server-window-dialog").wait_for(state="hidden")
+        page.evaluate("window.__botEvent({ type: 'window', id: 'one', payload: { open: true, kind: 'form', formId: 12, formType: 'form', title: '§aServer §lSelector', content: '§7Pick a destination:', buttons: ['§eLobby', '§bSurvival'] } })")
+        page.locator("#server-window-dialog").wait_for(state="visible")
+        assert page.locator("#server-window-title").inner_text() == "Server Selector"
+        assert page.locator(".bedrock-form-body").inner_text() == "Pick a destination:"
+        page.get_by_role("button", name="Survival").click()
+        page.locator("#server-window-dialog").wait_for(state="hidden")
+        assert page.evaluate("window.__formResponses") == [{"id": "one", "formId": "12", "response": 1}]
+        page.evaluate("window.__botEvent({ type: 'window', id: 'one', payload: { open: true, kind: 'form', formId: 13, formType: 'modal', title: '§eConfirm?', content: '§fProceed?', button1: '§aYes', button2: '§cNo' } })")
+        page.locator("#server-window-dialog").wait_for(state="visible")
+        page.get_by_role("button", name="Close", exact=True).click()
+        page.locator("#server-window-dialog").wait_for(state="hidden")
+        assert page.evaluate("window.__formResponses.at(-1)") == {"id": "one", "formId": "13", "response": None}
+        page.evaluate("window.__botEvent({ type: 'window', id: 'one', payload: { open: true, kind: 'form', formId: 14, formType: 'custom_form', title: '§bSettings', elements: [{ type: 'label', text: '§7Info' }, { type: 'toggle', text: '§fNotify', default: true }, { type: 'slider', text: 'Range', min: 1, max: 10, step: 1, default: 4 }, { type: 'dropdown', text: 'Mode', options: ['Easy', 'Hard'], default: 1 }, { type: 'input', text: 'Note', default: 'hi' }] } })")
+        page.locator("#server-window-dialog").wait_for(state="visible")
+        page.locator(".bedrock-form-submit").click()
+        assert page.evaluate("window.__formResponses.at(-1)") == {"id": "one", "formId": "14", "response": [None, True, 4, 1, "hi"]}
         page.locator("#server-window-dialog").wait_for(state="hidden")
         page.locator("#display-menu-trigger").click()
         assert page.locator("#quick-scale-number").is_visible()

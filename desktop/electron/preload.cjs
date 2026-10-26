@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld('afkDesk', {
   setAutoDeposit: (id, enabled) => ipcRenderer.invoke('bot:auto-deposit', { id, enabled }),
   clickWindowSlot: (id, slot) => ipcRenderer.invoke('bot:window-click', { id, slot }),
   closeServerWindow: (id) => ipcRenderer.invoke('bot:window-close', id),
+  respondForm: (id, formId, response) => ipcRenderer.invoke('bot:form-respond', { id, formId, response }),
   getWorldSnapshot: (id, radius, blockRefreshMs) => ipcRenderer.invoke('bot:world-snapshot', { id, radius, blockRefreshMs }),
   worldAction: (id, action, target) => ipcRenderer.invoke('bot:world-action', { id, action, target }),
   listLogs: (id, options = {}) => ipcRenderer.invoke('logs:list', { id, ...options }),
