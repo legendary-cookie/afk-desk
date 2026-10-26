@@ -1,6 +1,7 @@
 const path = require('node:path')
 const bridge = require('rn-bridge')
 const { BotManager } = require('./bot-manager.cjs')
+const { validateCommand, isRequestId } = require('./bridge-command.cjs')
 
 const manager = new BotManager({
   profilesPath: path.join(bridge.app.datadir(), 'minecraft-profiles'),
@@ -11,8 +12,12 @@ function reply(requestId, ok, value) {
   bridge.channel.post('engine-reply', { requestId, ok, ...(ok ? { value } : { error: String(value?.message || value) }) })
 }
 
-bridge.channel.on('engine-command', async ({ requestId, action, account, accountId, value, duration, enabled, range, slot }) => {
+bridge.channel.on('engine-command', async (rawCommand) => {
+  let requestId
   try {
+    const command = validateCommand(rawCommand)
+    ;({ requestId } = command)
+    const { action, account, accountId, value, duration, enabled, range, slot } = command
     let result = null
     switch (action) {
       case 'connect': manager.connect(account); break
@@ -32,7 +37,10 @@ bridge.channel.on('engine-command', async ({ requestId, action, account, account
     }
     reply(requestId, true, result)
   } catch (error) {
-    reply(requestId, false, error)
+    // Echo a usable id even when validation failed, so the app's waiter rejects
+    // promptly instead of timing out after 10 seconds.
+    const echoId = isRequestId(requestId) ? requestId : (isRequestId(rawCommand?.requestId) ? rawCommand.requestId : null)
+    reply(echoId, false, error)
   }
 })
 

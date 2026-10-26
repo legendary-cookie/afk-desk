@@ -8,13 +8,14 @@
   },
   "dependencies": {
     "adm-zip": "^0.6.1",
-    "mineflayer": "^4.37.1",
+    "mineflayer": "4.37.1",
     "socks": "2.8.9"
   },
   "overrides": {
     "@azure/msal-node": {
       "uuid": "11.1.1"
     },
+    "prismarine-physics": "1.11.1",
     "yggdrasil": {
       "uuid": "11.1.1"
     }
