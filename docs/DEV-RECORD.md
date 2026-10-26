@@ -60,3 +60,27 @@ Ordered by user value against implementation cost. AFKCC is cloud-hosted; AFK De
 4. **Account management.** Pinning, groups, bulk actions, account counter, import/export with secrets excluded.
 5. **POV.** Multi-bot grid, freecam, scoreboard/bossbar/title overlays, tab list. Keep within a lightweight-renderer budget.
 6. **Version support.** AFKCC supports 26.1–26.3. AFK Desk stops at 1.21.11. This depends on upstream minecraft-data / minecraft-protocol support; track it and do not hand-roll protocol support.
+
+## 2026-10-27 — Android device verification and agent routing
+
+- **Embedded Node 18 engine verified on an Android device (emulator).** The debug APK was built from `feature/macro-engine` with a throwaway debug key, x86_64 was added in the build copy only, and the JS was bundled. It ran on the Google emulator (Android 14, `sdk_gphone64_x86_64`).
+  - The app launched, and the RN UI rendered.
+  - Connect → the engine emitted "Connecting to 10.0.2.2…".
+  - prismarine-auth on nodejs-mobile Node 18 obtained a real Microsoft device code (sign-in not completed).
+  - This closes the main M1 risk at the connect and auth stages. Still not verified: a completed sign-in plus a live server session on device, ARM hardware, background or foreground-service survival, and upgrade over 0.9.2.
+- **Android build notes for Windows** (add to mobile/BUILDING.md):
+  - Use a short TMP path, e.g. `C:\afktmp`, or Gradle fails with "Unable to establish loopback connection".
+  - Pass JVM options via `GRADLE_OPTS` / `org.gradle.jvmargs`, never `JAVA_TOOL_OPTIONS`. Its "Picked up…" stderr line makes prefab fail with CXX1210.
+  - npm 11 blocks `nodejs-mobile-react-native`'s postinstall by default. Run `npm install-scripts approve nodejs-mobile-react-native` and then `npm rebuild nodejs-mobile-react-native`.
+  - A debug build loads JS from Metro unless the bundle is generated into assets.
+  - ARM-only APKs crash on x86_64 emulators (SoLoader looks in lib/x86_64). Consider shipping x86_64 for Chromebooks and emulators.
+- **Safety note.** adb on this machine also sees a physical Android TV box over wireless debugging. All commands target `-s emulator-5554` explicitly; nothing is installed on the TV box.
+- **Agent routing (owner has Codex and Antigravity subscriptions).**
+  - Antigravity has two pools.
+  - Gemini pool:
+    - `gemini-4-argon-high` for hard implementation
+    - `gemini-4-argon-medium` for normal work
+    - `gemini-3.8-flash-*` for docs and mechanical tasks
+  - Claude/GPT pool: `claude-sonnet-5-5-*` for independent reviews (a different family from the authors) and as a fallback when the Gemini pool is exhausted.
+  - Codex is used for scoped implementation; its sandbox cannot run `node --test` (spawn EPERM) or commit, so it is not used for large refactors that need the suite.
+  - Tool versions: codex-cli 0.162.1 (0.164.0 available), agy 1.4.7. Update between tasks, never while a job is running.
