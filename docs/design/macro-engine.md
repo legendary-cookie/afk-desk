@@ -1,6 +1,6 @@
 # Macro engine v2: design
 
-Status: **draft for review** · Branch `feature/macro-engine` (from `milestone/0.10.0-beta.10`) · 2026-10-26
+Status: **revised after Codex design review; awaiting owner approval** · Branch `feature/macro-engine` (from `milestone/0.10.0-beta.10`) · 2026-10-26
 
 ## 1. Goal
 
@@ -22,11 +22,13 @@ Non-goals for v2: a node-graph canvas editor, a public macro marketplace, script
 
 ### Defects in the current engine, to fix as part of v2
 
-1. **Level-triggered health and inventory.** `health` fires on every 2 s telemetry tick while health is below the threshold. Overlapping runs then throw "already running", and the error is swallowed. Any inventory change re-fires `inventory`.
+1. **Level-triggered health and inventory.** Telemetry is built every 2 s but emitted only when its stable snapshot changes (`bot-manager.cjs:258-265`). While health is below the threshold, **any** telemetry change (position, hunger, inventory) re-fires `health`. Overlapping runs then throw "already running", and the error is swallowed. Any inventory change re-fires `inventory`.
 2. **Timers ignore connection state.** The interval keeps firing while offline, so every run fails.
 3. **Swallowed failures.** `handleEvent` and `run` failures from triggers use `.catch(() => {})`, so the user never learns why a macro didn't run.
 4. **A failing step aborts the whole macro.** AFKCC found users expect the macro to continue past a failed step (changelog, 20 Aug 2026).
-5. **No release of held inputs on stop.** Once hold actions exist, a stopped, deleted or disabled macro must release held clicks and controls (AFKCC, 6 Oct 2026).
+5. **Cancellation does not stop in-flight work.** `run()` races `runSteps` against the abort signal (`beta-core.cjs:244`), so a cancelled run is marked finished while an awaited `execute` may still be acting on the bot. A replacement run can then start alongside it.
+
+The current `move` uses the timed `bots.control` helper and there are no indefinite hold steps, so held inputs are **not** an existing defect. They become a requirement once v2 adds hold actions (see §6, input ownership).
 6. **Hard caps that block real use.** A 5-minute runtime and `repeat` ≤100 make long AFK loops impossible. Replace them with rate budgets (§6).
 7. **Re-normalization on every event.** The whole automation list is normalized on every telemetry tick, which is wasted CPU across many accounts.
 
@@ -44,6 +46,11 @@ electron/macro/
 - **Pure core.** `model`, `triggers`, `actions` and `engine` take no Electron or Mineflayer imports. Timers and the bot facade are injected. This makes them unit-testable with fake timers, and later portable to the Android engine (`mobile/nodejs-assets/nodejs-project`, Node 18-compatible syntax only).
 - **Facade.** The facade is the only code that talks to bot managers. It maps actions to existing methods: `sendChat`, `setControlState`, `lookDelta`, `worldAction`, `clickWindowSlot`, `closeWindow`, `dropItems`, `depositSlot`, `equipInventoryItem`, `moveInventorySlot`, `disconnect`, and `connect`. New bot-manager helpers are listed in §5.
 - **Wiring.** `beta-core.cjs` keeps exporting `MacroEngine` as a re-export during transition, so `main.cjs` changes stay small.
+- **Scaling with many accounts.**
+  - Macros are normalized **once** on load or save. Each account gets a trigger index (`triggerType → macros`) that is rebuilt only when the library or that account's targets change. Events never re-normalize.
+  - Edge state, such as last health above or below and last inventory-full, is kept per account and per trigger, replacing whole-inventory `JSON.stringify` comparisons.
+  - **One shared scheduler** (a min-heap with a single `setTimeout` to the next due item) drives every timer, schedule, wait and budget delay across all accounts, replacing one `setInterval` per timer macro.
+  - Invalidation: a save, enable or disable, or target edit re-plans only the affected entries. A disconnect drops that account's entries.
 - **Capabilities.** Each action declares `capabilities: ['java'] | ['java','bedrock']`. Unsupported actions are disabled in the editor with the reason shown, and are rejected at run time with a clear log line.
 
 ## 4. Data model (schema v2)
@@ -72,7 +79,10 @@ Macros move from per-account to a **library with targets**. This matches the "Al
   - `health` → `healthBelow` with edge detection
   - `inventory` → `inventoryChanged`
 
-  The v1 field is **left in place, unread**, so rolling back to beta.9 still sees the user's automations. It is removed no earlier than 1.0, after one release with telemetry-free confirmation in release notes.
+  The v1 field is **left in place**, so rolling back to beta.9 still sees the user's automations. It is removed no earlier than 1.0.
+  - **One-time and idempotent.** `macros.json` records `migratedFromV1: { at, accountIds }`. Migration runs only for accounts not yet listed, so re-running it never duplicates. A profile imported later with v1 automations is migrated on load.
+  - **Rollback window: write-back.** Until 1.0, edits to a migrated macro that still targets exactly one account, and uses only v1-representable triggers and steps, are also written back to that account's `automations` in v1 shape. Macros that use v2-only features are marked "v2 only". The editor and release notes say they will not appear after a downgrade. This keeps a downgrade lossless for everything beta.9 can represent.
+  - **Corrupt or partial library.** If `macros.json` is unreadable, it is moved aside and the library is **rebuilt from the v1 fields**, never emptied. The user sees a warning naming the backup file.
 - **Writes.** Atomic temp-file plus rename, the same as `AccountStore`. A corrupt file is moved aside (`macros.json.corrupt-<ts>`) and never silently emptied.
 - **Secrets.** Webhook URLs are stored encrypted with Electron `safeStorage` (the same approach as proxy passwords). They are redacted in logs, diagnostics and exports. Export strips them, like AFKCC's "sharing filters webhook URLs".
 
@@ -85,11 +95,11 @@ Phase 1 includes all **P1** rows.
 | Trigger | Source | Semantics | Phase |
 | --- | --- | --- | --- |
 | manual | UI or IPC | Runs once | P1 |
-| join | first `spawn` per connection | Fires once per connection | P1 |
-| worldChange | `respawn` with dimension/world change | Debounced 2 s (AFKCC: rapid world changes were unpredictable) | P1 |
-| timer | interval | Only while online. ±jitter. The first fire is one interval after join, not at t=0 | P1 |
-| schedule | wall clock HH:MM (daily) | Only while online. A missed fire while offline is skipped, not queued | P1 |
-| chat | `messagestr` | contains, or regex (length-capped, timeout-safe via a simple-pattern subset). Capture groups become variables. Own messages are ignored | P1 |
+| join | first `spawn` of a **connection** (a new TCP session) | Fires once per connection, including after an auto-reconnect. A proxy backend switch (Velocity/Bungee `respawn` or `login` without a socket close) is **not** a join; it is a `worldChange` with `reason: "server-switch"`. Duplicate spawns within 2 s are ignored | P1 |
+| worldChange | `respawn`/`login` with a changed dimension, world name, or proxy backend | Debounced 2 s (AFKCC: rapid world changes were unpredictable). Exposes `reason` = dimension or server-switch | P1 |
+| timer | interval | Only while online. ±jitter. The phase **restarts at join**: the first fire is one interval after each join, and elapsed time is not carried across disconnects. A tick while the macro is still running is **skipped** (logged at debug), never queued | P1 |
+| schedule | wall clock HH:MM, daily, in the **machine's local time zone** | Only while online; a missed fire while offline is skipped. DST: a skipped local time (spring forward) fires at the next valid minute, and a repeated time (fall back) fires once. A system clock or time-zone change re-plans the next fire | P1 |
+| chat | `messagestr` (formatting stripped, case-insensitive by default) | Patterns are **contains** or **glob** with `*` and named captures `{name}`. They compile to a linear-time matcher, with no user regex in P1 (JS regex cannot be interrupted, so ReDoS cannot be bounded). Captures become variables. Messages the bot itself sent in the last 5 s are ignored. The source can be filtered to chat, system or action bar | P1 |
 | death | `death` | | P1 |
 | disconnected | `end`/`kicked` | Exposes the reason. Cannot run world actions; only `notify`, `wait` and `reconnect` | P1 |
 | healthBelow / hungerBelow | telemetry | **Edge-triggered** with hysteresis: fires when crossing below X, re-arms above X+2 | P1 |
@@ -107,7 +117,7 @@ Phase 1 includes all **P1** rows. `J` = Java, `B` = Bedrock.
 | chat | `sendChat`, with a per-account rate limit | J, B | P1 |
 | wait | timer. `ms` + `jitterMs`, or random min–max | J, B | P1 |
 | notify | desktop notification, optional Discord webhook | J, B | P1 |
-| move | `setControlState` for duration, or distance via `walk` | J | P1 |
+| move | duration: existing timed `control` helper (today's wiring) through the input-ownership layer; distance: `worldAction('walk')` | J | P1 |
 | look | absolute yaw/pitch (**new** `lookAbsolute`) or relative `lookDelta`; `look-at` block/entity | J | P1 |
 | sneak / jump / sprint hold · release | `setControlState`, recorded in the held-input ledger | J | P1 |
 | leftClick once · hold · release | `dig-crosshair`/`attack-nearest`/`swing` · `stop-dig`. Options: blocks only / entities only | J | P1 |
@@ -123,20 +133,30 @@ Phase 1 includes all **P1** rows. `J` = Java, `B` = Bedrock.
 | disconnect / reconnect | `disconnect` / `connect`. A macro-initiated disconnect suppresses auto-reconnect | J, B | P1 |
 | breakBlock (at coordinates), placeBlock, attack, fish, autoEat toggle, trade, sign | various | J | P2–P3 |
 
-**Item locks:** locked inventory slots (an existing AFK Desk feature) are never dropped, deposited, moved or clicked away by a macro, whatever the step says. This is a safety rule.
+**Item locks** (an existing AFK Desk feature) are a safety rule. A macro never drops, deposits, moves or clicks away a locked slot, whatever the step says. Enforcement lives in the facade, before any packet is sent:
+- **Own inventory:** `drop`, `dropAll`, `deposit`, `equip` and `useInventory` reject a locked source slot.
+- **GUI clicks:** the facade maps a window slot back to the player-inventory slot when it lies in the window's inventory section (`inventoryStart` onward). Shift-clicks, number-key swaps, and drops (Q, Ctrl-Q) on a locked slot are rejected. A plain click that would pick up a locked stack is rejected. Placing onto a locked slot is allowed only if it does not displace the locked item.
+- **Logging:** a rejection is a step failure ("slot 12 is locked"), and continue/stop rules apply.
 
 ## 6. Runner semantics
 
 - **Concurrency.** One run per account. Different accounts run independently. A trigger that fires while its account is busy is skipped and logged ("skipped: X is running"), unless `concurrency: "override"`, which aborts the current run first.
 - **Errors.** With `onError: continue`, a failed step is logged with its index and reason, then the run continues. With `stop`, the run ends with `failed`.
-- **Budgets instead of hard caps.** These keep idle CPU low with many accounts:
+- **Budgets are per account, shared by all of that account's macros.** A step delayed by a budget is cancellable like any wait. These budgets replace the hard caps and keep idle CPU low with many accounts:
   - `repeat` without a wait yields at least one game tick (50 ms) per iteration.
   - At most 20 steps per second per account.
   - The chat budget is set per account; the default is 1 message per 1.5 s, configurable.
   - Exceeding a budget delays the step; it does not fail it.
   - There is no wall-clock runtime cap (long AFK loops are the point). A user-set optional `maxRuntime` stays available.
-- **Held-input ledger.** Every hold action is recorded. On stop, failure, disable, delete, edit-while-running (AFKCC behaviour: editing stops the run), disconnect, or app quit, the ledger releases all held controls and clicks for that run.
-- **Session fence.** Each run captures the session identity at start. If the account disconnects or reconnects mid-run, world actions abort instead of acting on the new session (the same pattern as fix D3).
+- **Input ownership.** Today `setControlState(false)` clears every claim on a control (`bot-manager.cjs:506-527`): manual input, timed controls, and implicitly anti-AFK. v2 adds a small claim layer in `bot-manager.cjs`:
+  - Each control and click keeps a set of owners (`manual`, `antiAfk`, `macro:<runId>`).
+  - The underlying Mineflayer state is "pressed" while any owner holds it.
+  - An owner can release only its own claim.
+  - The existing manual paths become the `manual` owner, so their behaviour is unchanged.
+  - The macro ledger releases exactly the `macro:<runId>` claims on stop, failure, disable, delete, edit-while-running (AFKCC: editing stops the run), disconnect, or app quit.
+  - Anti-AFK is paused while a macro holds movement, and resumes after.
+- **Cancellation is cooperative and awaited.** Every facade operation receives the run's `AbortSignal`. On abort, the runner stops issuing steps, then **awaits the in-flight operation** with a 2 s grace period before marking the run `cancelled`. An operation still running after that is fenced: its completion is ignored and its claims are released. A replacement run for the same account starts only after this settles. This fixes defect 5.
+- **Session fence after every await.** Each run captures the session identity at start. After **every** asynchronous facade call, and before the next world action, the runner checks that the identity is unchanged. A mismatch ends the run as `interrupted` (the same pattern as fix D3).
 - **Stop conditions.** `stopWhen` conditions are checked before each step and on their own trigger events. A match ends the run as `stopped` and releases held inputs.
 - **Logs.** Each macro keeps a ring buffer of its last 50 runs: start, end, trigger, per-step outcome and duration. They are persisted alongside events with the existing redaction, viewable in the editor, and included in diagnostics with secrets redacted.
 - **Live state.** The renderer receives `macro` events `{ macroId, runId, status, stepIndex }`, so the editor can show which step each account is on (AFKCC "account heads").
@@ -144,7 +164,10 @@ Phase 1 includes all **P1** rows. `J` = Java, `B` = Bedrock.
 ## 7. Webhooks (P1, opt-in)
 
 - Discord webhook URL per macro (`notify` action) and per account event type (disconnect, death, kicked).
-- Events within 2 s are batched into one message, like AFKCC. Payloads are rate-limited and length-capped. The webhook HTTP request goes through `net-policy` with a public-host check, and the URL is validated against `https://discord.com/api/webhooks/` and `discordapp.com`. Other hosts are allowed only through an explicit "custom webhook" opt-in.
+- Events within 2 s are batched into one message, like AFKCC. Payloads are rate-limited and length-capped.
+- **Destination.** The URL must be `https://discord.com/api/webhooks/…` or `https://discordapp.com/api/webhooks/…`. Other hosts need an explicit "custom webhook" opt-in.
+- **Request path.** Requests go through `net-policy.fetchWithPolicy`: https only, a public-host check on every hop, redirects not followed, a 10 s timeout, and a response read capped at 64 KB. The DNS-rebinding window documented for resource packs applies here too, and is reduced by the Discord allowlist.
+- **Failures.** Three consecutive failures pause that webhook for 5 minutes and log one warning. The macro is never blocked: webhooks are fire-and-forget (AFKCC: webhooks delayed macro runs).
 - No screenshots in P1, because POV capture is heavy.
 
 ## 8. UI (P1)
@@ -158,7 +181,8 @@ Phase 1 includes all **P1** rows. `J` = Java, `B` = Bedrock.
 
 ## 9. Security and abuse limits
 
-- Declarative only. No `eval`, no user JS, no shell. Regexes are restricted (length ≤200, no backreferences or nested quantifiers) to avoid ReDoS on chat.
+- Declarative only. No `eval`, no user JS, no shell, and no user-supplied regex in P1. Chat patterns use the linear-time glob matcher (§5).
+- IPC payloads (`macros:save`, `macros:run`, `macros:stop`, `macros:import`) are size-capped (256 KB), normalized and validated by `model.cjs`. Account ids in targets are checked against existing profiles. Unknown fields are dropped.
 - The chat rate limit cannot be disabled, only raised up to a ceiling, to protect accounts from spam kicks.
 - Webhook secrets use `safeStorage` and are always redacted.
 - IPC: new handlers register through `registerTrustedHandler`, the same as existing ones. Payloads are normalized by `model.cjs` before storage.
@@ -186,21 +210,32 @@ As everywhere else in this project, nothing here is real-server qualification. A
 | 3 | Step failure | **Continue by default** | Matches user expectation (AFKCC change, 20 Aug 2026). |
 | 4 | Runtime cap | **Rate budgets, no wall-clock cap** | AFK loops run for hours; budgets keep CPU bounded. |
 | 5 | Webhooks in P1 | **Yes, Discord only, opt-in** | High value for AFK users, small surface. |
-| 6 | Android | **Shared pure core, ported after desktop P1** | The embedded engine runs Node 18. The core avoids Node 20+ APIs. |
+| 6 | Android | **Shared pure core, ported after desktop P1** | The embedded engine runs Node 18.20.4. The pure-core test suite runs under the downloaded Node 18.20.4 binary as a hard gate, which proves compatibility instead of asserting it. Desktop keeps `engines >=22`. |
 
 ## 12. Work breakdown (P1)
 
-Each stream owns disjoint files; streams run in parallel worktrees, as in the milestone.
+Each stream owns disjoint files and runs in its own worktree, as in the milestone. Work proceeds in stages, so no stream codes against an interface that is still moving.
 
-| # | Stream | Files owned | Depends on | Suggested agent |
-| --- | --- | --- | --- | --- |
-| A | model + migration | `electron/macro/model.cjs`, `test/macro-model.test.cjs` | none | Sonnet |
-| B | triggers | `electron/macro/triggers.cjs`, `test/macro-triggers.test.cjs` | A (types only) | Sonnet |
-| C | engine + ledger + logs | `electron/macro/engine.cjs`, `test/macro-engine.test.cjs` | A | Opus (concurrency) |
-| D | facade + actions + bot-manager helpers (`lookAbsolute`, `holdItemByName`, `findWindowSlot`, `waitForWindow`, `dropAll`) | `electron/macro/actions.cjs`, `facade.cjs`, `bot-manager.cjs` (additions only) | A | Codex, then Claude review |
-| E | wiring + IPC + store + webhooks | `main.cjs`, `preload.cjs`, `store.cjs`, `beta-core.cjs` | A–D | Claude |
-| F | editor UI | `src/renderer.js`, `src/index.html`, `src/styles.css` | E's IPC contract | Sonnet + ui-consistency |
-| G | integration matrix + upgrade tests | `test-fixtures/*`, `test/macro-integration.test.cjs` | E | Haiku/Sonnet |
+**Stage 0 — contract (Claude, before anything else).** `electron/macro/contract.cjs` freezes the interfaces every stream builds against:
+- JSDoc types for macro, trigger, step, run context and run event
+- the facade interface, with every method's signature, `AbortSignal` parameter and error semantics
+- the trigger-matcher interface consumed by the engine
+- the input-ownership API
+- the IPC channel names and payload shapes
+
+Each stream must implement or consume exactly this; changing it requires a contract update reviewed by Claude.
+
+| Stage | # | Stream | Files owned | Depends on | Suggested agent |
+| --- | --- | --- | --- | --- | --- |
+| 1 | A | model + migration + write-back | `electron/macro/model.cjs`, `test/macro-model.test.cjs`, `test-fixtures/macro/model/*` | contract | Sonnet |
+| 1 | B | triggers + glob matcher + schedule | `electron/macro/triggers.cjs`, `test/macro-triggers.test.cjs`, `test-fixtures/macro/triggers/*` | contract | Sonnet |
+| 1 | C | engine: cooperative cancel, fences, budgets, ledger, logs | `electron/macro/engine.cjs`, `test/macro-engine.test.cjs` | contract (uses fake trigger matcher and facade) | Opus (concurrency) |
+| 1 | D | facade + actions + item-lock mapping + input-ownership layer + bot-manager helpers (`lookAbsolute`, `holdItemByName`, `findWindowSlot`, `waitForWindow`, `dropAll`) | `electron/macro/actions.cjs`, `facade.cjs`, `bot-manager.cjs`, `test/macro-actions.test.cjs`, `test-fixtures/macro/actions/*` | contract | Codex, then Claude review |
+| 2 | E | wiring + IPC + store + webhooks; `beta-core` re-export | `main.cjs`, `preload.cjs`, `store.cjs`, `beta-core.cjs`, `test/macro-ipc.test.cjs` | A, B, C, D | Claude |
+| 3 | F | editor UI | `src/renderer.js`, `src/index.html`, `src/styles.css` | E | Sonnet + ui-consistency |
+| 3 | G | integration matrix + beta.9 upgrade/rollback tests + Node 18 core gate | `test-fixtures/macro/integration/*`, `test/macro-integration.test.cjs` | E | Sonnet |
+
+Integration is serial at each stage boundary: merge, then the full suite, then Node 18 core gate, then independent review.
 
 **Exit criteria for P1:**
 - All P1 triggers and actions work against fakes and the loopback matrix.
