@@ -419,7 +419,10 @@ function createRemoteServer({
 
   function getClientIp(req) {
     if (trustProxy) {
-      const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim()
+      // Use the RIGHT-most entry: it is appended by our own trusted proxy. Earlier
+      // entries are client-controlled (e.g. a spoofed "127.0.0.1" would otherwise
+      // grant the loopback lockout exemption and allow unlimited password guessing).
+      const forwarded = String(req.headers['x-forwarded-for'] || '').split(',').map((part) => part.trim()).filter(Boolean).pop() || ''
       if (forwarded) return normalizeIp(forwarded)
     }
     return normalizeIp(req.socket?.remoteAddress || '127.0.0.1')
