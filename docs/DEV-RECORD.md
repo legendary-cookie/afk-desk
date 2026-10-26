@@ -95,3 +95,11 @@ Ordered by user value against implementation cost. AFKCC is cloud-hosted; AFK De
     - Codex `gpt-6.1-sol` takes the rest, with Claude (lead) running tests and commits.
   - R2 security review (Codex `gpt-6-astra`) found 2 P1 issues and 8 P2 issues. Notably, a read token could become admin via session ids in the audit log, and remote admins could change remote-access settings and passwords. Fixes are in progress; nothing from R2 is merged until a re-review passes.
 - **2026-10-27 — Antigravity Claude pool also exhausted** (it resets after about 5 h; the Gemini pool after about 7 days). R2 security fixes moved to Codex `gpt-6-astra`; Docker (R5) is on Codex `gpt-6.1-sol`. Claude runs every suite and commit.
+- **Owner policy: rate limits (2026-10-27).**
+  - **Rule.** When the best-suited provider, model or effort for a task is rate-limited, wait for it to reset; don't fall back to a weaker substitute.
+  - **Exceptions.** Fall back only when:
+    1. the task is urgent: it blocks other work, or it is a security fix on the critical path; or
+    2. the reset is more than 24 hours away.
+  - **Effect on current queues.**
+    - Gemini 4 Argon tasks (weekly reset, >1 day): fall back to Gemini Flash High or Codex.
+    - Antigravity Claude-pool and Codex 5-hour limits: wait unless the task is urgent.
