@@ -1,10 +1,12 @@
 const path = require('node:path')
+const { randomUUID } = require('node:crypto')
 const { isDeepStrictEqual } = require('node:util')
 const { profilePath, validateProfileId } = require('./profile-path.cjs')
 const { applyProtocolFixes } = require('./protocol-fixes.cjs')
 const { createProxyConnect } = require('./proxy-connect.cjs')
 const { ResourcePackLoader, normalizePackEvent } = require('./resource-pack.cjs')
 const { HostPolicyError } = require('./net-policy.cjs')
+const { INPUTS } = require('./macro/contract.cjs')
 const {
   CONFIGURATION_PACKET_NAMES,
   installMovementPacketCompatibility,
@@ -30,6 +32,18 @@ const WATER_NAMES = new Set(['water', 'flowing_water'])
 const WATERLIKE_NAMES = new Set(['bubble_column', 'seagrass', 'tall_seagrass', 'kelp', 'kelp_plant'])
 const FLOW_DIRECTIONS = [[0, 1], [-1, 0], [0, -1], [1, 0]]
 const FLUID_CONTACT_GRACE_MS = 750
+const MOVEMENT_INPUTS = new Set(['forward', 'back', 'left', 'right', 'jump', 'sprint', 'sneak'])
+const INPUT_NAMES = new Set(INPUTS)
+const WALK_CONTROLS = new Set(['forward', 'back', 'left', 'right'])
+const HOTBAR_FIRST_SLOT = 36
+const HOTBAR_LAST_SLOT = 44
+const PHYSICS_LINGER_MS = 200
+const DIG_REPEAT_MS = 100
+const WALK_POLL_MS = 50
+const WALK_BLOCKS_PER_POLL = 0.1
+const WALK_MIN_TIMEOUT_MS = 2000
+const WALK_STALL_MS = 2000
+const WALK_STALL_EPSILON = 0.01
 const CHEST_SCAN_INTERVAL = 5000
 const DEFAULT_AUTO_DEPOSIT_RANGE = 5
 const MAX_AUTO_DEPOSIT_RANGE = 16
@@ -103,6 +117,9 @@ class BotManager {
 
     const session = {
       bot,
+      sessionId: randomUUID(),
+      inputClaims: new Map(),
+      inputActionTimers: new Map(),
       account: { ...account },
       moddedProfile: normalizeModdedProfile(account),
       antiAfkTimer: null,
@@ -112,7 +129,6 @@ class BotManager {
       reconnectResetTimer: null,
       networkRecoveryTimer: null,
       physicsRestoreTimer: null,
-      manualControls: new Set(),
       manualControlTimers: new Map(),
       antiAfkActionTimers: new Set(),
       messageTimers: new Set(),
@@ -506,28 +522,227 @@ class BotManager {
   setControlState(id, control, active) {
     const session = this.sessions.get(id)
     const bot = this.requireOnline(id)
-    const allowed = new Set(['forward', 'back', 'left', 'right', 'jump', 'sprint', 'sneak'])
-    if (!allowed.has(control)) throw new Error('Unknown movement control.')
+    if (!MOVEMENT_INPUTS.has(control)) throw new Error('Unknown movement control.')
     if (typeof active !== 'boolean') throw new Error('Movement state must be true or false.')
 
     const oldTimer = session.manualControlTimers.get(control)
     if (oldTimer) this.clearAntiAfkTimer(oldTimer)
     session.manualControlTimers.delete(control)
     if (active) {
-      session.manualControls.add(control)
-      if (session.physicsRestoreTimer) this.clearAntiAfkTimer(session.physicsRestoreTimer)
-      session.physicsRestoreTimer = null
-      session.bot.physicsEnabled = true
+      this.claimInput(id, control, 'manual')
     } else {
-      session.manualControls.delete(control)
-      if (session.manualControls.size === 0) {
-        this.temporarilyEnablePhysics(session, 200)
+      const heldByManual = this.inputOwners(id, control).includes('manual')
+      this.releaseInput(id, control, 'manual')
+      // A release nobody owns still clears the key, as it did before input ownership.
+      if (!heldByManual && this.inputOwners(id, control).length === 0) {
+        bot.setControlState(control, false)
+        this.restorePhysicsWhenIdle(session)
       }
     }
-    bot.setControlState(control, active)
     this.diagnose({
       event: 'manual_control', accountId: id, control, active,
       position: vectorSnapshot(bot.entity?.position), velocity: vectorSnapshot(bot.entity?.velocity), at: Date.now()
+    })
+  }
+
+  // Input ownership: a bot input stays pressed while any owner ('manual', 'antiAfk',
+  // 'macro:<runId>') holds it, and an owner can only release its own claim.
+  claimInput(id, input, owner) {
+    const session = this.sessions.get(id)
+    this.requireOnline(id)
+    if (!INPUT_NAMES.has(input)) throw new Error('Unknown input.')
+    if (typeof owner !== 'string' || !owner) throw new Error('Input owner is required.')
+    // Movement does nothing while physics is paused, whoever asks for it.
+    if (MOVEMENT_INPUTS.has(input)) this.enableMovementPhysics(session)
+    const owners = session.inputClaims.get(input) || new Set()
+    if (owners.has(owner)) return
+    const isFirstClaim = owners.size === 0
+    owners.add(owner)
+    session.inputClaims.set(input, owners)
+    if (isFirstClaim) this.pressInput(id, session, input)
+  }
+
+  releaseInput(id, input, owner) {
+    const session = this.sessions.get(id)
+    const owners = session?.inputClaims.get(input)
+    if (!owners?.delete(owner) || owners.size > 0) return
+    session.inputClaims.delete(input)
+    this.stopInput(id, session, input)
+  }
+
+  releaseOwner(id, owner) {
+    const session = this.sessions.get(id)
+    if (!session) return
+    for (const input of [...session.inputClaims.keys()]) this.releaseInput(id, input, owner)
+  }
+
+  inputOwners(id, input) {
+    return [...(this.sessions.get(id)?.inputClaims.get(input) || [])]
+  }
+
+  pressInput(id, session, input) {
+    if (input === 'leftClick') this.repeatOwnedDig(id, session)
+    else if (input === 'rightClick') {
+      try { session.bot.activateItem() } catch {}
+    } else session.bot.setControlState(input, true)
+  }
+
+  stopInput(id, session, input) {
+    if (input === 'leftClick') {
+      const timer = session.inputActionTimers.get(input)
+      if (timer) this.clearAntiAfkTimer(timer)
+      session.inputActionTimers.delete(input)
+      void this.worldAction(id, 'stop-dig').catch(() => {})
+    } else if (input === 'rightClick') {
+      void this.worldAction(id, 'stop-use').catch(() => {})
+    } else {
+      try { session.bot.setControlState(input, false) } catch {}
+      this.restorePhysicsWhenIdle(session)
+    }
+  }
+
+  enableMovementPhysics(session) {
+    if (session.physicsRestoreTimer) this.clearAntiAfkTimer(session.physicsRestoreTimer)
+    session.physicsRestoreTimer = null
+    session.bot.physicsEnabled = true
+  }
+
+  restorePhysicsWhenIdle(session) {
+    if (!this.hasMovementClaims(session)) this.temporarilyEnablePhysics(session, PHYSICS_LINGER_MS)
+  }
+
+  hasMovementClaims(session) {
+    for (const input of MOVEMENT_INPUTS) {
+      if (session.inputClaims.get(input)?.size) return true
+    }
+    return false
+  }
+
+  macroHoldsMovement(session) {
+    for (const input of MOVEMENT_INPUTS) {
+      for (const owner of session.inputClaims.get(input) || []) {
+        if (owner.startsWith('macro:')) return true
+      }
+    }
+    return false
+  }
+
+  // Held left click: dig the crosshair block again as soon as the last dig ends.
+  repeatOwnedDig(id, session) {
+    const isHeld = () => this.sessions.get(id) === session && session.inputClaims.get('leftClick')?.size > 0
+    if (!isHeld()) return
+    void this.worldAction(id, 'dig-crosshair').catch(() => {}).finally(() => {
+      if (!isHeld()) return
+      const timer = this.scheduleAntiAfkTimer(() => {
+        session.inputActionTimers.delete('leftClick')
+        this.repeatOwnedDig(id, session)
+      }, DIG_REPEAT_MS)
+      session.inputActionTimers.set('leftClick', timer)
+    })
+  }
+
+  // Yaw and pitch are radians, like Mineflayer and lookDelta.
+  lookAbsolute(id, yaw, pitch) {
+    const bot = this.requireOnline(id)
+    if (!Number.isFinite(Number(yaw)) || !Number.isFinite(Number(pitch))) throw new Error('Yaw and pitch must be numbers.')
+    return bot.look(Number(yaw), Math.max(-1.45, Math.min(1.45, Number(pitch))), true)
+  }
+
+  lookAtEntity(id, name) {
+    const bot = this.requireOnline(id)
+    const wanted = String(name ?? '').toLowerCase()
+    if (!wanted) throw new Error('An entity name is required.')
+    const entity = Object.values(bot.entities || {}).find((candidate) =>
+      candidate && candidate !== bot.entity && candidate.position &&
+      String(candidate.username || candidate.name || '').toLowerCase().includes(wanted))
+    if (!entity) throw codedError('NOT_FOUND', 'Target entity was not found.')
+    return bot.lookAt(entity.position.offset(0, Number(entity.height || 1) / 2, 0), true)
+  }
+
+  swingArm(id) {
+    this.requireOnline(id).swingArm('right')
+  }
+
+  // Selects the first stack matching `name`, preferring one already in the hotbar.
+  // Otherwise the stack is swapped into the selected hotbar slot. Locked stacks never move.
+  async holdItemByName(id, name) {
+    const bot = this.requireOnline(id)
+    const locked = lockedSlotSet(this.sessions.get(id).account)
+    const matches = (bot.inventory?.items?.() || []).filter((item) => itemNameMatches(item, name))
+    if (!matches.length) throw codedError('NOT_FOUND', 'Item not found.')
+    const inHotbar = matches.find((item) => item.slot >= HOTBAR_FIRST_SLOT && item.slot <= HOTBAR_LAST_SLOT)
+    if (inHotbar) {
+      await this.worldAction(id, 'select-hotbar', { slot: inHotbar.slot - HOTBAR_FIRST_SLOT })
+      return { slot: inHotbar.slot }
+    }
+    const source = matches.find((item) => !locked.has(Number(item.slot)))
+    if (!source) throw codedError('LOCKED_SLOT', 'Every matching inventory stack is locked.')
+    const hotbarIndex = Math.max(0, Math.min(Number(bot.quickBarSlot) || 0, 8))
+    const target = HOTBAR_FIRST_SLOT + hotbarIndex
+    if (locked.has(target)) throw codedError('LOCKED_SLOT', `Hotbar slot ${hotbarIndex + 1} is locked.`)
+    await this.moveInventorySlot(id, source.slot, target)
+    await this.worldAction(id, 'select-hotbar', { slot: hotbarIndex })
+    return { slot: target }
+  }
+
+  // Index into the open window's slots, or -1. A slot index is valid when it is in range,
+  // empty or not; name and lore selectors match the first stack that contains the text.
+  findWindowSlot(id, selector = {}) {
+    const bot = this.requireOnline(id)
+    const slots = bot.currentWindow?.slots
+    if (!slots) return -1
+    if (selector.slot != null) {
+      const slot = Number(selector.slot)
+      return Number.isInteger(slot) && slot >= 0 && slot < slots.length ? slot : -1
+    }
+    const matches = selector.name
+      ? (item) => itemNameMatches(item, selector.name)
+      : (item) => itemLoreMatches(item, selector.lore)
+    if (!selector.name && !selector.lore) return -1
+    return slots.findIndex((item) => item && matches(item))
+  }
+
+  // Resolves with the window once one whose plain-text title contains `title` (any case) is open.
+  waitForWindow(id, { title, giveUpAfterMs = 10000, signal } = {}) {
+    const bot = this.requireOnline(id)
+    return new Promise((resolve, reject) => {
+      let timer = null
+      const finish = (settle, value) => {
+        clearTimeout(timer)
+        bot.removeListener('windowOpen', onOpen)
+        bot.removeListener('end', onEnd)
+        signal?.removeEventListener('abort', onAbort)
+        settle(value)
+      }
+      const onOpen = (window) => {
+        if (windowTitleMatches(window, title)) finish(resolve, window)
+      }
+      const onAbort = () => finish(reject, codedError('ABORTED', 'Macro run was aborted.'))
+      const onEnd = () => finish(reject, codedError('SESSION_CHANGED', 'Account session changed.'))
+      if (signal?.aborted) {
+        onAbort()
+        return
+      }
+      bot.on('windowOpen', onOpen)
+      bot.on('end', onEnd)
+      signal?.addEventListener('abort', onAbort, { once: true })
+      timer = setTimeout(() => finish(reject, codedError('TIMEOUT', 'Timed out waiting for the server menu.')), Math.max(0, Number(giveUpAfterMs) || 0))
+      if (bot.currentWindow) onOpen(bot.currentWindow)
+    })
+  }
+
+  // Drops every unlocked stack whose name contains `filter` (all stacks when empty).
+  async dropAll(id, { filter, signal } = {}) {
+    return this.withInventoryAction(id, async (bot, session) => {
+      const locked = lockedSlotSet(session.account)
+      const matching = (bot.inventory?.items?.() || []).filter((item) => !filter || itemNameMatches(item, filter))
+      const droppable = matching.filter((item) => !locked.has(Number(item.slot)))
+      if (matching.length > 0 && droppable.length === 0) throw codedError('LOCKED_SLOT', 'All matching inventory stacks are locked.')
+      for (const item of droppable) {
+        if (signal?.aborted) throw codedError('ABORTED', 'Macro run was aborted.')
+        await this.dropSlotItems(id, bot, session, item.slot, item.count)
+      }
+      return { dropped: droppable.length }
     })
   }
 
@@ -558,18 +773,30 @@ class BotManager {
   }
 
   async dropItems(id, slot, requestedCount = 1) {
+    return this.withInventoryAction(id, (bot, session) => this.dropSlotItems(id, bot, session, slot, requestedCount))
+  }
+
+  async dropSlotItems(id, bot, session, slot, requestedCount) {
+    const safeSlot = playerInventorySlot(slot)
+    if (lockedSlotSet(session.account).has(safeSlot)) throw new Error('That inventory stack is locked.')
+    const item = bot.inventory?.slots?.[safeSlot]
+    if (!item) throw new Error('That inventory stack is no longer available.')
+    const count = Math.max(1, Math.min(Number(requestedCount) || 1, Number(item.count) || 1))
+    if (typeof bot.transfer !== 'function') throw new Error('Exact-slot inventory transfer is unavailable.')
+    await bot.transfer({ window: bot.inventory, itemType: item.type, metadata: item.metadata ?? null,
+      nbt: item.nbt, count, sourceStart: safeSlot, sourceEnd: safeSlot + 1,
+      destStart: -999, destEnd: -999 })
+    this.emit('log', id, { kind: 'sent', message: `Dropped ${count} × ${item.displayName || item.name}`, at: Date.now() })
+    return { slot: safeSlot, count }
+  }
+
+  // Serialized with the other inventory actions; the slot must not be locked.
+  async clickInventorySlot(id, slot, { button = 0, mode = 0 } = {}) {
     return this.withInventoryAction(id, async (bot, session) => {
       const safeSlot = playerInventorySlot(slot)
       if (lockedSlotSet(session.account).has(safeSlot)) throw new Error('That inventory stack is locked.')
-      const item = bot.inventory?.slots?.[safeSlot]
-      if (!item) throw new Error('That inventory stack is no longer available.')
-      const count = Math.max(1, Math.min(Number(requestedCount) || 1, Number(item.count) || 1))
-      if (typeof bot.transfer !== 'function') throw new Error('Exact-slot inventory transfer is unavailable.')
-      await bot.transfer({ window: bot.inventory, itemType: item.type, metadata: item.metadata ?? null,
-        nbt: item.nbt, count, sourceStart: safeSlot, sourceEnd: safeSlot + 1,
-        destStart: -999, destEnd: -999 })
-      this.emit('log', id, { kind: 'sent', message: `Dropped ${count} × ${item.displayName || item.name}`, at: Date.now() })
-      return { slot: safeSlot, count }
+      await bot.clickWindow(safeSlot, button, mode)
+      return { slot: safeSlot }
     })
   }
 
@@ -676,9 +903,41 @@ class BotManager {
       at: Date.now() }
   }
 
+  // Holds a walk input for `owner` until the bot has covered `distance` blocks.
+  // Gives up (TIMEOUT) after a speed-based cap, or when the bot stops making progress.
+  async walkDistance(id, session, { control, distance, owner, signal }) {
+    const bot = session.bot
+    const blocks = Number(distance)
+    if (!WALK_CONTROLS.has(control) || !Number.isFinite(blocks) || blocks <= 0 || !owner) {
+      throw new Error('A movement control, positive distance, and input owner are required.')
+    }
+    const start = horizontalPosition(bot)
+    if (!start) throw new Error('World position is not available yet.')
+    const timeoutMs = Math.max(WALK_MIN_TIMEOUT_MS, blocks / WALK_BLOCKS_PER_POLL * WALK_POLL_MS)
+    const startedAt = Date.now()
+    let lastProgress = { ...start, at: startedAt }
+    this.claimInput(id, control, owner)
+    try {
+      while (true) {
+        if (signal?.aborted) throw codedError('ABORTED', 'Macro run was aborted.')
+        if (this.sessions.get(id) !== session) throw codedError('SESSION_CHANGED', 'Account session changed.')
+        const here = horizontalPosition(bot)
+        const now = Date.now()
+        if (here && Math.hypot(here.x - start.x, here.z - start.z) >= blocks) return { distance: blocks }
+        if (here && Math.hypot(here.x - lastProgress.x, here.z - lastProgress.z) > WALK_STALL_EPSILON) lastProgress = { ...here, at: now }
+        if (now - startedAt >= timeoutMs) throw codedError('TIMEOUT', 'Walking took too long.')
+        if (now - lastProgress.at >= WALK_STALL_MS) throw codedError('TIMEOUT', 'The bot is not moving; something is blocking it.')
+        await delay(WALK_POLL_MS)
+      }
+    } finally {
+      this.releaseInput(id, control, owner)
+    }
+  }
+
   async worldAction(id, action, target = {}) {
     const bot = this.requireOnline(id)
     const session = this.sessions.get(id)
+    if (action === 'walk') return this.walkDistance(id, session, target)
     if (action === 'stop-dig') {
       if (session.worldDigging) session.worldDigging.cancelled = true
       bot.stopDigging?.()
@@ -789,16 +1048,25 @@ class BotManager {
     this.emitTelemetry(id)
   }
 
-  async clickWindowSlot(id, slot) {
+  // Server-menu slots only, unless `allowInventory` (macros) also reaches the window's
+  // player-inventory section; item locks still apply there.
+  async clickWindowSlot(id, slot, { button = 0, mode = 0, allowInventory = false } = {}) {
     const bot = this.requireOnline(id)
+    const session = this.sessions.get(id)
     const window = bot.currentWindow
     if (!window) throw new Error('The server menu is no longer open.')
     const requestedSlot = Number(slot)
     if (!Number.isInteger(requestedSlot) || requestedSlot < 0 || requestedSlot > 255) throw new Error('Invalid server-menu slot.')
+    if (!Number.isInteger(button) || button < 0 || button > 2 || !Number.isInteger(mode) || mode < 0 || mode > 6) throw new Error('Invalid click type.')
     const safeSlot = requestedSlot
     const inventoryStart = Math.max(0, Number(window.inventoryStart) || window.slots?.length || 0)
-    if (safeSlot >= inventoryStart) throw new Error('Only server-menu slots can be clicked here.')
-    await bot.clickWindow(safeSlot, 0, 0)
+    if (safeSlot >= inventoryStart) {
+      if (!allowInventory) throw new Error('Only server-menu slots can be clicked here.')
+      if (safeSlot >= (window.slots?.length || 0)) throw new Error('Invalid server-menu slot.')
+      const locked = lockedGuiSlot(window, safeSlot, mode, lockedSlotSet(session.account), bot.inventory?.inventoryStart)
+      if (locked !== null) throw codedError('LOCKED_SLOT', `slot ${locked} is locked`)
+    }
+    await bot.clickWindow(safeSlot, button, mode)
   }
 
   closeWindow(id) {
@@ -1001,6 +1269,8 @@ class BotManager {
   runAntiAfkCycle(id) {
     const session = this.sessions.get(id)
     if (!session?.bot?.entity) return
+    // A macro holding movement keeps the keys; the next cycle resumes once it lets go.
+    if (this.macroHoldsMovement(session)) return
     const { bot } = session
     const settings = session.antiAfkSettings
     const duration = Math.round(settings.duration * 1000)
@@ -1031,24 +1301,24 @@ class BotManager {
   }
 
   holdAntiAfkControl(session, control, duration) {
-    session.bot.setControlState(control, true)
+    this.claimInput(session.account.id, control, 'antiAfk')
     const timer = this.scheduleAntiAfkTimer(() => {
       session.antiAfkActionTimers.delete(timer)
-      if (this.sessions.get(session.account.id) === session) session.bot.setControlState(control, false)
+      if (this.sessions.get(session.account.id) === session) this.releaseInput(session.account.id, control, 'antiAfk')
     }, duration)
     session.antiAfkActionTimers.add(timer)
   }
 
   walkAntiAfkDistance(session, control, distance, duration) {
     const start = { x: Number(session.bot.entity.position.x), z: Number(session.bot.entity.position.z) }
-    session.bot.setControlState(control, true)
+    this.claimInput(session.account.id, control, 'antiAfk')
     const startedAt = Date.now()
     const check = () => {
       if (this.sessions.get(session.account.id) !== session) return
       const position = session.bot.entity?.position
       const moved = position ? Math.hypot(Number(position.x) - Number(start.x), Number(position.z) - Number(start.z)) : 0
       if (moved >= distance || Date.now() - startedAt >= duration) {
-        session.bot.setControlState(control, false)
+        this.releaseInput(session.account.id, control, 'antiAfk')
         return
       }
       const timer = this.scheduleAntiAfkTimer(() => {
@@ -1066,7 +1336,8 @@ class BotManager {
     session.bot.physicsEnabled = true
     session.physicsRestoreTimer = this.scheduleAntiAfkTimer(() => {
       session.physicsRestoreTimer = null
-      if (this.sessions.get(session.account.id) === session && session.account.environmentalMovement === false) session.bot.physicsEnabled = false
+      const stillIdle = !this.hasMovementClaims(session)
+      if (stillIdle && this.sessions.get(session.account.id) === session && session.account.environmentalMovement === false) session.bot.physicsEnabled = false
     }, duration)
   }
 
@@ -1088,10 +1359,7 @@ class BotManager {
     if (session.antiAfkTimer) this.clearAntiAfkTimer(session.antiAfkTimer)
     for (const timer of session.antiAfkActionTimers) this.clearAntiAfkTimer(timer)
     session.antiAfkActionTimers.clear()
-    session.bot.setControlState('jump', false)
-    session.bot.setControlState('sneak', false)
-    session.bot.setControlState('forward', false)
-    session.bot.setControlState('back', false)
+    this.releaseOwner(id, 'antiAfk')
     session.antiAfkTimer = null
     if (account.antiAfk !== false && session.bot.entity) this.enableAntiAfk(id, account)
   }
@@ -1113,7 +1381,9 @@ class BotManager {
     session.activeDepositContainer = null
     for (const timer of session.manualControlTimers || []) this.clearAntiAfkTimer(timer[1])
     session.manualControlTimers?.clear()
-    session.manualControls?.clear()
+    session.inputClaims.clear()
+    for (const timer of session.inputActionTimers.values()) this.clearAntiAfkTimer(timer)
+    session.inputActionTimers.clear()
     if (session.antiAfkTimer) this.clearAntiAfkTimer(session.antiAfkTimer)
     if (session.telemetryTimer) clearInterval(session.telemetryTimer)
     if (session.chestScanTimer) clearInterval(session.chestScanTimer)
@@ -1976,6 +2246,48 @@ async function transferPlayerSlot(bot, container, slot, requestedCount) {
   return count
 }
 
+function codedError(code, message) {
+  return Object.assign(new Error(message), { code })
+}
+
+function horizontalPosition(bot) {
+  const position = bot.entity?.position
+  return position ? { x: Number(position.x), z: Number(position.z) } : null
+}
+
+// Name selectors match the item id or its display name, case-insensitively.
+function itemNameMatches(item, needle) {
+  const wanted = String(needle ?? '').toLowerCase()
+  if (!wanted) return false
+  return [item?.name, item?.displayName].some((value) => String(value ?? '').toLowerCase().includes(wanted))
+}
+
+function itemLoreMatches(item, needle) {
+  const wanted = String(needle ?? '').toLowerCase()
+  if (!wanted) return false
+  const lore = itemTooltipDetails(item, null, null).lore || []
+  return lore.some((line) => line.toLowerCase().includes(wanted))
+}
+
+function windowTitleText(window) {
+  return String(extractText(window?.title?.json ?? window?.title) || '')
+}
+
+function windowTitleMatches(window, title) {
+  const wanted = String(title ?? '').trim().toLowerCase()
+  return !wanted || windowTitleText(window).toLowerCase().includes(wanted)
+}
+
+// The player-inventory slot a click would change, when it is locked; otherwise null.
+// Any click on an occupied locked slot picks up, swaps, moves or drops the stack.
+function lockedGuiSlot(window, slot, mode, locked, playerInventoryStart = 9) {
+  const windowInventoryStart = Number(window?.inventoryStart)
+  if (!Number.isFinite(windowInventoryStart) || slot < windowInventoryStart) return null
+  const mapped = playerInventoryStart + slot - windowInventoryStart
+  const occupied = Boolean(window.slots?.[slot])
+  return locked.has(mapped) && (occupied || mode !== 0) ? mapped : null
+}
+
 function delay(milliseconds) { return new Promise((resolve) => setTimeout(resolve, milliseconds)) }
 
 function resolveEquipmentDestination(item, requested) {
@@ -2045,4 +2357,4 @@ function rejectResourcePack(bot, first, second, hash) {
   } catch {}
 }
 
-module.exports = { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, parseInteractiveChat, normalizeSkinUrl, findNearestChest, buildTelemetry, buildWindowSnapshot, normalizeLockedSlots, describeNetworkError, reconnectDelaySeconds, reconnectFloorSeconds, jitterReconnectDelay, normalizeAntiAfkSettings, inspectFluidCurrent, recordFluidCorrection, installMovementPacketCompatibility, installModernPlayerInputCompatibility }
+module.exports = { BotManager, lockedSlotSet, itemNameMatches, itemLoreMatches, windowTitleText, windowTitleMatches, lockedGuiSlot, normalizeLoginCode, extractText, parseMinecraftFormatting, parseInteractiveChat, normalizeSkinUrl, findNearestChest, buildTelemetry, buildWindowSnapshot, normalizeLockedSlots, describeNetworkError, reconnectDelaySeconds, reconnectFloorSeconds, jitterReconnectDelay, normalizeAntiAfkSettings, inspectFluidCurrent, recordFluidCorrection, installMovementPacketCompatibility, installModernPlayerInputCompatibility }
