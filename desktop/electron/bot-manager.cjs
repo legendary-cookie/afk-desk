@@ -300,9 +300,19 @@ class BotManager {
         return
       }
       const host = safeUrlHost(pack.url)
+      // Pack downloads use the global fetch, which cannot be routed through the account's
+      // SOCKS/HTTP proxy. Fetching directly would reveal the user's real IP to a
+      // server-chosen host, so refuse unless the account explicitly opts in.
+      if (session.account.proxy?.enabled && session.account.allowDirectPackDownload !== true) {
+        const message = 'Server resource pack skipped: this account uses a proxy and pack downloads would bypass it. Enable "allow direct pack download" for this account to load packs.'
+        this.emit('log', account.id, { kind: 'error', message, at: Date.now() })
+        this.diagnose({ event: 'resource_pack_skipped_proxy', accountId: account.id, host })
+        rejectResourcePack(bot, first, second, pack.hash)
+        return
+      }
       this.emit('log', account.id, { kind: 'system', message: `Loading server resource pack from ${host}…`, at: Date.now() })
       try {
-        session.resourcePack = await this.resourcePackLoader.load(pack.url, pack.hash)
+        session.resourcePack = await this.resourcePackLoader.load(pack.url, pack.hash, { allowPrivateHosts: session.account.allowPrivatePackHosts === true })
         bot.acceptResourcePack?.()
         session.telemetryKey = ''
         emitTelemetry()
@@ -358,7 +368,7 @@ class BotManager {
         session.lastNetworkKey = key
         session.lastNetworkAt = now
       }
-      if (account.autoReconnect !== false && !reconnectState.manual && !session.networkRecoveryTimer) {
+      if ((reconnectState.account || account).autoReconnect !== false && !reconnectState.manual && !session.networkRecoveryTimer) {
         session.networkRecoveryTimer = this.scheduleNetworkTimer(() => {
           session.networkRecoveryTimer = null
           if (this.sessions.get(account.id) === session) bot.end('networkError')
@@ -368,8 +378,10 @@ class BotManager {
     bot.on('end', (reason) => {
       if (this.sessions.get(account.id) !== session) return
       this.clearSession(account.id, session)
-      if (account.autoReconnect !== false && !reconnectState.manual) {
-        this.scheduleReconnect(account, session.lastKickReason || session.lastNetworkReason || reason)
+      // Use the latest saved config, not the one captured at connect time (see updateAccountConfig).
+      const currentAccount = reconnectState.account || account
+      if (currentAccount.autoReconnect !== false && !reconnectState.manual) {
+        this.scheduleReconnect(currentAccount, session.lastKickReason || session.lastNetworkReason || reason)
       } else {
         this.reconnects.delete(account.id)
         this.status(account.id, 'offline', reason ? `Disconnected: ${reason}` : 'Disconnected')
@@ -398,6 +410,26 @@ class BotManager {
     }
   }
 
+  // Replace the account config used by future reconnects for `account.id`. A live
+  // session is never dropped: a changed destination applies to the next connect, and
+  // disabling auto-reconnect cancels any pending retry (a live session just stops
+  // retrying once it ends). Returns false when the id has no reconnect state.
+  updateAccountConfig(account) {
+    validateProfileId(account?.id)
+    const state = this.reconnects.get(account.id)
+    if (!state) return false
+    state.account = { ...account }
+    if (account.autoReconnect === false) {
+      if (state.timer) this.clearReconnectTimer(state.timer)
+      state.timer = null
+      if (!this.sessions.has(account.id)) {
+        this.reconnects.delete(account.id)
+        this.status(account.id, 'offline', 'Auto-reconnect disabled.')
+      }
+    }
+    return true
+  }
+
   scheduleReconnect(account, reason) {
     const state = this.reconnects.get(account.id) || { attempts: 0, timer: null, manual: false, account }
     state.attempts += 1
@@ -407,13 +439,13 @@ class BotManager {
       this.status(account.id, 'offline', `Auto-reconnect stopped after ${maximum} attempts.`)
       return
     }
-    const delay = reconnectDelaySeconds(account, reason, state.attempts)
+    const delay = jitterReconnectDelay(reconnectDelaySeconds(account, reason, state.attempts), this.random, reconnectFloorSeconds(account, reason))
     state.manual = false
     state.account = account
     this.status(account.id, 'reconnecting', `Disconnected${reason ? `: ${String(reason).slice(0, 90)}` : ''}. Retrying in ${delay}s…`)
     state.timer = this.scheduleReconnectTimer(() => {
       state.timer = null
-      if (state.manual || this.sessions.has(account.id)) return
+      if (state.manual || this.sessions.has(account.id) || this.reconnects.get(account.id) !== state || state.account?.autoReconnect === false) return
       try { this.connect(state.account, { reconnecting: true }) }
       catch (error) {
         this.emit('log', account.id, { kind: 'error', message: `Reconnect failed: ${error.message}`, at: Date.now() })
@@ -1181,10 +1213,29 @@ function reconnectDelaySeconds(account, reason, attempts) {
   const multiplier = boundedNumber(account?.autoReconnectBackoffMultiplier, 1, 10, 2)
   const maximum = Math.max(base, boundedNumber(account?.autoReconnectMaxDelay, 1, 86400, 300))
   const exponential = Math.min(base * (multiplier ** Math.min(Math.max(0, Number(attempts) - 1), 12)), maximum)
-  const text = String(reason || '')
-  const rateLimitMinimum = boundedNumber(account?.autoReconnectRateLimitDelay, 1, 86400, 30)
-  const result = /logging in too fast|too many connection attempts|rate.?limit/i.test(text) ? Math.max(exponential, rateLimitMinimum) : exponential
+  const result = Math.max(exponential, reconnectFloorSeconds(account, reason))
   return Math.max(1, Math.round(result * 10) / 10)
+}
+
+const RATE_LIMIT_REASON = /logging in too fast|too many connection attempts|rate.?limit/i
+// A duplicate-login kick means the previous ("ghost") session is still registered
+// on the server; retrying immediately just gets kicked again.
+const GHOST_SESSION_REASON = /already (?:logged|online|connected)|logged in from another location/i
+
+// Smallest delay a disconnect reason allows (1s when it needs no special wait).
+function reconnectFloorSeconds(account, reason) {
+  const text = String(reason || '')
+  if (RATE_LIMIT_REASON.test(text)) return boundedNumber(account?.autoReconnectRateLimitDelay, 1, 86400, 30)
+  if (GHOST_SESSION_REASON.test(text)) return boundedNumber(account?.autoReconnectGhostDelay, 30, 86400, 30)
+  return 1
+}
+
+// +/-20% so many accounts disconnected together do not retry in lockstep.
+// Never drops below the floor the disconnect reason requires.
+function jitterReconnectDelay(seconds, random = Math.random, floor = 1) {
+  const sample = Math.min(1, Math.max(0, Number(random()) || 0))
+  const jittered = seconds * (1 + (sample * 2 - 1) * 0.2)
+  return Math.max(floor, Math.round(jittered * 10) / 10)
 }
 
 function boundedNumber(value, minimum, maximum, fallback) {
@@ -1198,17 +1249,57 @@ function formatReason(reason) {
   try { return JSON.stringify(reason) } catch { return String(reason) }
 }
 
-function extractText(value) {
-  if (typeof value === 'string') {
-    try { return extractText(JSON.parse(value)) || value } catch { return value }
+// Text components come from the server, so every walker below is iterative and
+// bounded: past the depth or node cap it stops and keeps what it has gathered.
+const MAX_COMPONENT_DEPTH = 64
+const MAX_COMPONENT_NODES = 4096
+
+function extractText(root) {
+  // Post-order walk (each level is trimmed after its children), driven by an explicit stack.
+  // Frame phases: 0 enter, 1 JSON-string child returned, 2 own text returned, 3/4 iterate extras.
+  const stack = [{ value: root, depth: 0, phase: 0 }]
+  let nodes = 0
+  let result = ''
+  while (stack.length) {
+    const frame = stack[stack.length - 1]
+    if (frame.phase === 0) {
+      const value = frame.value
+      if (++nodes > MAX_COMPONENT_NODES || frame.depth > MAX_COMPONENT_DEPTH) { result = ''; stack.pop(); continue }
+      if (typeof value === 'string') {
+        let parsed
+        try { parsed = JSON.parse(value) } catch { result = value; stack.pop(); continue }
+        frame.phase = 1
+        stack.push({ value: parsed, depth: frame.depth + 1, phase: 0 })
+        continue
+      }
+      if (!value || typeof value !== 'object') { result = ''; stack.pop(); continue }
+      if (value.type === 'string' && typeof value.value === 'string') { result = value.value; stack.pop(); continue }
+      const source = value.type === 'compound' && value.value ? value.value : value
+      const extrasValue = source.extra?.value?.value || source.extra?.value || source.extra
+      frame.extras = Array.isArray(extrasValue) ? extrasValue : []
+      frame.index = 0
+      frame.parts = []
+      frame.phase = 2
+      stack.push({ value: source.text, depth: frame.depth + 1, phase: 0 })
+      continue
+    }
+    if (frame.phase === 1) {
+      // Mirrors `extractText(JSON.parse(value)) || value`.
+      if (!result) result = frame.value
+      stack.pop()
+      continue
+    }
+    if (frame.phase === 2) { frame.text = result; frame.phase = 3 }
+    else if (frame.phase === 4) { frame.parts.push(result); frame.phase = 3 }
+    if (frame.index < frame.extras.length && nodes < MAX_COMPONENT_NODES) {
+      frame.phase = 4
+      stack.push({ value: frame.extras[frame.index++], depth: frame.depth + 1, phase: 0 })
+      continue
+    }
+    result = `${frame.text}${frame.parts.join('')}`.trim()
+    stack.pop()
   }
-  if (!value || typeof value !== 'object') return ''
-  if (value.type === 'string' && typeof value.value === 'string') return value.value
-  const source = value.type === 'compound' && value.value ? value.value : value
-  const text = extractText(source.text)
-  const extrasValue = source.extra?.value?.value || source.extra?.value || source.extra
-  const extras = Array.isArray(extrasValue) ? extrasValue.map(extractText).join('') : ''
-  return `${text}${extras}`.trim()
+  return result
 }
 
 const CHAT_COLORS = {
@@ -1287,30 +1378,42 @@ function parseInteractiveChat(originalMessage, fallbackMessage = '', formattedMe
   return linkifyChatSegments(segments).slice(0, 256)
 }
 
-function appendInteractiveComponent(segments, component, inherited) {
-  if (typeof component === 'string') {
-    if (component) segments.push({ text: component, ...inherited })
-    return
+function appendInteractiveComponent(segments, rootComponent, rootInherited) {
+  // Pre-order walk with an explicit stack (children are pushed in reverse to keep document order).
+  const stack = [{ component: rootComponent, inherited: rootInherited, depth: 0 }]
+  let nodes = 0
+  while (stack.length) {
+    const { component, inherited, depth } = stack.pop()
+    if (++nodes > MAX_COMPONENT_NODES) return
+    if (depth > MAX_COMPONENT_DEPTH) continue
+    if (typeof component === 'string') {
+      if (component) segments.push({ text: component, ...inherited })
+      continue
+    }
+    if (!component || typeof component !== 'object' || segments.length >= 256) continue
+    const source = component.json && typeof component.json === 'object' ? component.json : component
+    const colorName = String(component.color ?? source.color ?? '')
+    const color = /^#[0-9a-f]{6}$/i.test(colorName) ? colorName.toLowerCase() : CHAT_NAMED_COLORS[colorName]
+    const style = {
+      ...inherited,
+      ...(color ? { color } : {}),
+      ...booleanChatStyle('bold', component, source),
+      ...booleanChatStyle('italic', component, source),
+      ...booleanChatStyle('underlined', component, source),
+      ...booleanChatStyle('strikethrough', component, source)
+    }
+    const click = normalizeChatClick(component.clickEvent || component.click_event || source.clickEvent || source.click_event)
+    const hover = normalizeChatHover(component.hoverEvent || component.hover_event || source.hoverEvent || source.hover_event)
+    const actionStyle = { ...style, ...(click ? { click } : {}), ...(hover ? { hover } : {}) }
+    const text = component.text ?? source.text
+    if (typeof text === 'string' && text) segments.push({ text: text.slice(0, 8192), ...actionStyle })
+    const children = component.extra || source.extra || component.with || source.with
+    if (Array.isArray(children)) {
+      for (let index = Math.min(children.length, MAX_COMPONENT_NODES) - 1; index >= 0; index--) {
+        stack.push({ component: children[index], inherited: actionStyle, depth: depth + 1 })
+      }
+    }
   }
-  if (!component || typeof component !== 'object' || segments.length >= 256) return
-  const source = component.json && typeof component.json === 'object' ? component.json : component
-  const colorName = String(component.color ?? source.color ?? '')
-  const color = /^#[0-9a-f]{6}$/i.test(colorName) ? colorName.toLowerCase() : CHAT_NAMED_COLORS[colorName]
-  const style = {
-    ...inherited,
-    ...(color ? { color } : {}),
-    ...booleanChatStyle('bold', component, source),
-    ...booleanChatStyle('italic', component, source),
-    ...booleanChatStyle('underlined', component, source),
-    ...booleanChatStyle('strikethrough', component, source)
-  }
-  const click = normalizeChatClick(component.clickEvent || component.click_event || source.clickEvent || source.click_event)
-  const hover = normalizeChatHover(component.hoverEvent || component.hover_event || source.hoverEvent || source.hover_event)
-  const actionStyle = { ...style, ...(click ? { click } : {}), ...(hover ? { hover } : {}) }
-  const text = component.text ?? source.text
-  if (typeof text === 'string' && text) segments.push({ text: text.slice(0, 8192), ...actionStyle })
-  const children = component.extra || source.extra || component.with || source.with
-  if (Array.isArray(children)) for (const child of children) appendInteractiveComponent(segments, child, actionStyle)
 }
 
 function booleanChatStyle(name, component, source) {
@@ -1793,25 +1896,39 @@ function parseComponentValue(value) {
   try { return JSON.parse(value) } catch { return value }
 }
 
-function componentTextSegments(value, inherited = {}) {
-  if (typeof value === 'string') return parseMinecraftFormatting(value).map((segment) => ({ ...inherited, ...segment }))
-  if (Array.isArray(value)) return value.flatMap((part) => componentTextSegments(part, inherited))
-  if (!value || typeof value !== 'object') return []
-  if (value.type === 'string') return componentTextSegments(value.value, inherited)
-  const source = value.type === 'compound' && value.value ? value.value : value
-  const style = { ...inherited }
-  const color = componentScalar(source.color)
-  if (/^#[0-9a-f]{6}$/i.test(color)) style.color = color.toLowerCase()
-  else if (NAMED_CHAT_COLORS[color]) style.color = NAMED_CHAT_COLORS[color]
-  for (const key of ['bold', 'italic', 'underlined', 'strikethrough']) {
-    const setting = componentScalar(source[key])
-    if (typeof setting === 'boolean') style[key] = setting
-  }
+function componentTextSegments(rootValue, rootInherited = {}) {
+  // Pre-order walk with an explicit stack; children are pushed in reverse to keep document order.
   const segments = []
-  const text = componentScalar(source.text)
-  if (typeof text === 'string' && text) segments.push(...componentTextSegments(text, style))
-  const extra = source.extra?.value?.value || source.extra?.value || source.extra
-  if (Array.isArray(extra)) segments.push(...extra.flatMap((part) => componentTextSegments(part, style)))
+  const stack = [{ value: rootValue, inherited: rootInherited, depth: 0 }]
+  let nodes = 0
+  const pushChildren = (list, inherited, depth) => {
+    for (let index = Math.min(list.length, MAX_COMPONENT_NODES) - 1; index >= 0; index--) stack.push({ value: list[index], inherited, depth })
+  }
+  while (stack.length && segments.length < MAX_COMPONENT_NODES) {
+    const { value, inherited, depth } = stack.pop()
+    if (++nodes > MAX_COMPONENT_NODES) break
+    if (depth > MAX_COMPONENT_DEPTH) continue
+    if (typeof value === 'string') {
+      for (const segment of parseMinecraftFormatting(value)) segments.push({ ...inherited, ...segment })
+      continue
+    }
+    if (Array.isArray(value)) { pushChildren(value, inherited, depth + 1); continue }
+    if (!value || typeof value !== 'object') continue
+    if (value.type === 'string') { stack.push({ value: value.value, inherited, depth: depth + 1 }); continue }
+    const source = value.type === 'compound' && value.value ? value.value : value
+    const style = { ...inherited }
+    const color = componentScalar(source.color)
+    if (/^#[0-9a-f]{6}$/i.test(color)) style.color = color.toLowerCase()
+    else if (NAMED_CHAT_COLORS[color]) style.color = NAMED_CHAT_COLORS[color]
+    for (const key of ['bold', 'italic', 'underlined', 'strikethrough']) {
+      const setting = componentScalar(source[key])
+      if (typeof setting === 'boolean') style[key] = setting
+    }
+    const extra = source.extra?.value?.value || source.extra?.value || source.extra
+    if (Array.isArray(extra)) pushChildren(extra, style, depth + 1)
+    const text = componentScalar(source.text)
+    if (typeof text === 'string' && text) stack.push({ value: text, inherited: style, depth: depth + 1 })
+  }
   return segments
 }
 
@@ -1916,4 +2033,4 @@ function rejectResourcePack(bot, first, second, hash) {
   } catch {}
 }
 
-module.exports = { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, parseInteractiveChat, normalizeSkinUrl, findNearestChest, buildTelemetry, buildWindowSnapshot, normalizeLockedSlots, describeNetworkError, reconnectDelaySeconds, normalizeAntiAfkSettings, inspectFluidCurrent, recordFluidCorrection, installMovementPacketCompatibility, installModernPlayerInputCompatibility }
+module.exports = { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, parseInteractiveChat, normalizeSkinUrl, findNearestChest, buildTelemetry, buildWindowSnapshot, normalizeLockedSlots, describeNetworkError, reconnectDelaySeconds, reconnectFloorSeconds, jitterReconnectDelay, normalizeAntiAfkSettings, inspectFluidCurrent, recordFluidCorrection, installMovementPacketCompatibility, installModernPlayerInputCompatibility }

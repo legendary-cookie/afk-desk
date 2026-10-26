@@ -4,6 +4,7 @@ const crypto = require('node:crypto')
 const AdmZip = require('adm-zip')
 const { ResourcePackLoader, parseResourcePack, normalizePackEvent, resolveItemDefinition } = require('../electron/resource-pack.cjs')
 
+const PUBLIC_LOOKUP = async () => [{ address: '93.184.216.34', family: 4 }]
 const PIXEL = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+XfSUWQAAAABJRU5ErkJggg==', 'base64')
 
 test('a long chain of distinct model parents falls back without overflowing the stack', () => {
@@ -17,7 +18,7 @@ test('a long chain of distinct model parents falls back without overflowing the 
 
 test('declared oversized body is cancelled before any pull is consumed', async () => {
   let cancelled = false
-  const loader = new ResourcePackLoader({ maxPackBytes: 16, fetchImpl: async () => new Response(new ReadableStream({
+  const loader = new ResourcePackLoader({ lookup: PUBLIC_LOOKUP, maxPackBytes: 16, fetchImpl: async () => new Response(new ReadableStream({
     cancel() { cancelled = true }
   }), { headers: { 'content-length': '17' } }) })
   await assert.rejects(loader.load('https://packs.example/declared.zip'), /download limit/)
@@ -26,7 +27,7 @@ test('declared oversized body is cancelled before any pull is consumed', async (
 
 test('download deadline also bounds a stalled response-header request', async () => {
   let signal
-  const loader = new ResourcePackLoader({ downloadTimeoutMs: 10, fetchImpl: (_url, options) => {
+  const loader = new ResourcePackLoader({ lookup: PUBLIC_LOOKUP, downloadTimeoutMs: 10, fetchImpl: (_url, options) => {
     signal = options.signal
     return new Promise(() => {})
   } })
@@ -37,7 +38,7 @@ test('download deadline also bounds a stalled response-header request', async ()
 
 test('stream read failure aborts download and removes failed cache entry', async () => {
   let signal
-  const loader = new ResourcePackLoader({ fetchImpl: async (_url, options) => {
+  const loader = new ResourcePackLoader({ lookup: PUBLIC_LOOKUP, fetchImpl: async (_url, options) => {
     signal = options.signal
     return new Response(new ReadableStream({ pull(controller) { controller.error(new Error('stream failed')) } }))
   } })
@@ -52,7 +53,7 @@ test('streamed pack rejects lying content length before buffering the oversized 
   let cancelled = false
   let signal
   let chunks = 0
-  const loader = new ResourcePackLoader({ maxPackBytes: 16, fetchImpl: async (_url, options) => {
+  const loader = new ResourcePackLoader({ lookup: PUBLIC_LOOKUP, maxPackBytes: 16, fetchImpl: async (_url, options) => {
     signal = options.signal
     return new Response(new ReadableStream({
       pull(controller) { chunks++; if (chunks > 4) controller.close(); else controller.enqueue(new Uint8Array(12)) },
@@ -69,7 +70,7 @@ test('streamed pack rejects lying content length before buffering the oversized 
 test('download deadline cancels a stalled stream and releases its cache entry', async () => {
   let cancelled = false
   let signal
-  const loader = new ResourcePackLoader({ downloadTimeoutMs: 10, fetchImpl: async (_url, options) => {
+  const loader = new ResourcePackLoader({ lookup: PUBLIC_LOOKUP, downloadTimeoutMs: 10, fetchImpl: async (_url, options) => {
     signal = options.signal
     return new Response(new ReadableStream({ cancel() { cancelled = true } }))
   } })
@@ -81,7 +82,7 @@ test('download deadline cancels a stalled stream and releases its cache entry', 
 
 test('failed HTTP response bodies are cancelled without reading', async () => {
   let cancelled = false
-  const loader = new ResourcePackLoader({ fetchImpl: async () => new Response(new ReadableStream({
+  const loader = new ResourcePackLoader({ lookup: PUBLIC_LOOKUP, fetchImpl: async () => new Response(new ReadableStream({
     cancel() { cancelled = true }
   }), { status: 500 }) })
   await assert.rejects(loader.load('https://packs.example/error.zip'), /HTTP 500/)
@@ -91,7 +92,7 @@ test('failed HTTP response bodies are cancelled without reading', async () => {
 test('bounded parsed cache evicts oldest result and download failures allow retry', async () => {
   let downloads = 0
   const bytes = fixturePack()
-  const loader = new ResourcePackLoader({ maxCacheEntries: 2, fetchImpl: async () => {
+  const loader = new ResourcePackLoader({ lookup: PUBLIC_LOOKUP, maxCacheEntries: 2, fetchImpl: async () => {
     downloads++
     if (downloads === 1) return new Response('invalid zip')
     return new Response(bytes)
@@ -117,7 +118,7 @@ test('disk cache prunes only owned hash zip files and never caches invalid archi
   fs.mkdirSync(path.join(directory, 'b'.repeat(40) + '.zip'))
   const bytes = fixturePack()
   let invalid = true
-  const loader = new ResourcePackLoader({ cacheDir: directory, maxCacheEntries: 1, maxCacheBytes: bytes.length, fetchImpl: async () => new Response(invalid ? 'bad zip' : bytes) })
+  const loader = new ResourcePackLoader({ lookup: PUBLIC_LOOKUP, cacheDir: directory, maxCacheEntries: 1, maxCacheBytes: bytes.length, fetchImpl: async () => new Response(invalid ? 'bad zip' : bytes) })
   await assert.rejects(loader.load('https://packs.example/bad.zip'))
   assert.deepEqual(fs.readdirSync(directory).sort(), [oldName, 'b'.repeat(40) + '.zip', 'notes.zip'].sort())
   invalid = false
@@ -193,7 +194,7 @@ test('loads a bounded HTTP pack, validates its hash, and caches the parsed resul
   const bytes = fixturePack()
   const hash = crypto.createHash('sha1').update(bytes).digest('hex')
   let downloads = 0
-  const loader = new ResourcePackLoader({ fetchImpl: async () => {
+  const loader = new ResourcePackLoader({ lookup: PUBLIC_LOOKUP, fetchImpl: async () => {
     downloads++
     return new Response(bytes, { headers: { 'content-length': String(bytes.length) } })
   } })
@@ -217,4 +218,133 @@ test('normalizes Mineflayer resource-pack argument order and modern item definit
     entries: [{ threshold: 5, model: { type: 'minecraft:model', model: 'veridian:item/mission' } }]
   }, { floats: [6] })
   assert.equal(model, 'veridian:item/mission')
+})
+
+
+// --- SSRF destination policy ---
+
+const PUBLIC_IP = '93.184.216.34'
+
+function recordingFetch(handler) {
+  const calls = []
+  const fetchImpl = async (url, options) => { calls.push({ url: String(url), redirect: options?.redirect }); return handler(String(url), calls.length) }
+  return { calls, fetchImpl }
+}
+
+function packZip() {
+  const zip = new AdmZip()
+  zip.addFile('assets/minecraft/models/item/stone.json', Buffer.from('{}'))
+  return zip.toBuffer()
+}
+
+test('resource pack URLs that target loopback, private, or link-local hosts are refused without a request', async () => {
+  const blocked = [
+    'http://127.0.0.1/p.zip', 'http://localhost/p.zip', 'http://sub.localhost/p.zip', 'http://0.0.0.0/p.zip', 'http://10.1.2.3/p.zip',
+    'http://172.16.0.1/p.zip', 'http://172.31.255.255/p.zip', 'http://192.168.0.1/p.zip', 'http://100.64.0.1/p.zip',
+    'http://169.254.169.254/latest/meta-data', 'http://224.0.0.1/p.zip', 'http://2130706433/p.zip', 'http://0x7f.1/p.zip',
+    'http://[::1]/p.zip', 'http://[::]/p.zip', 'http://[::ffff:127.0.0.1]/p.zip', 'http://[::ffff:7f00:1]/p.zip',
+    'http://[::ffff:10.0.0.1]/p.zip', 'http://[fe80::1]/p.zip', 'http://[fd12:3456::1]/p.zip', 'http://[fc00::1]/p.zip',
+    'http://[ff02::1]/p.zip', 'http://[64:ff9b::7f00:1]/p.zip', 'http://[2002:7f00:1::]/p.zip'
+  ]
+  for (const url of blocked) {
+    const { calls, fetchImpl } = recordingFetch(() => new Response(packZip()))
+    const loader = new ResourcePackLoader({ lookup: PUBLIC_LOOKUP, fetchImpl })
+    await assert.rejects(loader.load(url), /not allowed/, url)
+    assert.equal(calls.length, 0, url)
+  }
+})
+
+test('public addresses and ports are still allowed', async () => {
+  for (const url of ['https://packs.example/p.zip', `http://${PUBLIC_IP}:8080/p.zip`, 'http://[2606:4700:4700::1111]/p.zip', 'http://172.32.0.1/p.zip', 'http://100.128.0.1/p.zip']) {
+    const { calls, fetchImpl } = recordingFetch(() => new Response(packZip()))
+    const loader = new ResourcePackLoader({ lookup: PUBLIC_LOOKUP, fetchImpl })
+    await loader.load(url)
+    assert.equal(calls.length, 1, url)
+  }
+})
+
+test('a host is refused when any resolved address is private', async () => {
+  const { calls, fetchImpl } = recordingFetch(() => new Response(packZip()))
+  const lookup = async (host, options) => {
+    assert.equal(options.all, true)
+    return [{ address: PUBLIC_IP, family: 4 }, { address: '10.0.0.5', family: 4 }]
+  }
+  const loader = new ResourcePackLoader({ lookup, fetchImpl })
+  await assert.rejects(loader.load('https://rebind.example/p.zip'), /not allowed/)
+  assert.equal(calls.length, 0)
+  const failing = new ResourcePackLoader({ lookup: async () => { throw new Error('ENOTFOUND') }, fetchImpl })
+  await assert.rejects(failing.load('https://nxdomain.example/p.zip'), /could not be resolved/)
+  const mappedV6 = new ResourcePackLoader({ lookup: async () => [{ address: '::ffff:192.168.1.1', family: 6 }], fetchImpl })
+  await assert.rejects(mappedV6.load('https://mapped.example/p.zip'), /not allowed/)
+})
+
+test('redirects are followed manually and every hop is revalidated', async () => {
+  const { calls, fetchImpl } = recordingFetch((url) => {
+    if (url === 'https://packs.example/start.zip') return new Response(null, { status: 302, headers: { location: '/next.zip' } })
+    if (url === 'https://packs.example/next.zip') return new Response(packZip())
+    throw new Error(`unexpected ${url}`)
+  })
+  const loader = new ResourcePackLoader({ lookup: PUBLIC_LOOKUP, fetchImpl })
+  await loader.load('https://packs.example/start.zip')
+  assert.deepEqual(calls.map((call) => call.url), ['https://packs.example/start.zip', 'https://packs.example/next.zip'])
+  assert.deepEqual(calls.map((call) => call.redirect), ['manual', 'manual'])
+
+  for (const target of ['http://169.254.169.254/latest/meta-data', 'http://127.0.0.1:8080/admin', 'http://[::1]/x', 'file:///etc/passwd', 'ftp://packs.example/p.zip']) {
+    const redirecting = recordingFetch(() => new Response(null, { status: 307, headers: { location: target } }))
+    const guarded = new ResourcePackLoader({ lookup: PUBLIC_LOOKUP, fetchImpl: redirecting.fetchImpl })
+    await assert.rejects(guarded.load('https://packs.example/hop.zip'), /not allowed|HTTP or HTTPS/, target)
+    assert.equal(redirecting.calls.length, 1, target)
+  }
+
+  const viaDns = recordingFetch(() => new Response(null, { status: 301, headers: { location: 'https://internal.example/p.zip' } }))
+  const lookup = async (host) => [{ address: host === 'internal.example' ? '192.168.0.9' : PUBLIC_IP, family: 4 }]
+  await assert.rejects(new ResourcePackLoader({ lookup, fetchImpl: viaDns.fetchImpl }).load('https://packs.example/a.zip'), /not allowed/)
+  assert.equal(viaDns.calls.length, 1)
+})
+
+test('redirect chains are limited to five hops', async () => {
+  const { calls, fetchImpl } = recordingFetch((_url, count) => new Response(null, { status: 302, headers: { location: `https://packs.example/hop${count}.zip` } }))
+  const loader = new ResourcePackLoader({ lookup: PUBLIC_LOOKUP, fetchImpl })
+  await assert.rejects(loader.load('https://packs.example/hop0.zip'), /redirected more than 5 times/)
+  assert.equal(calls.length, 6)
+
+  const five = recordingFetch((_url, count) => count <= 5
+    ? new Response(null, { status: 302, headers: { location: `https://packs.example/hop${count}.zip` } })
+    : new Response(packZip()))
+  await new ResourcePackLoader({ lookup: PUBLIC_LOOKUP, fetchImpl: five.fetchImpl }).load('https://packs.example/hop0.zip')
+  assert.equal(five.calls.length, 6)
+})
+
+test('allowPrivatePackHosts is opt-in and does not leak through the cache', async () => {
+  const { calls, fetchImpl } = recordingFetch(() => new Response(packZip()))
+  const loader = new ResourcePackLoader({ lookup: PUBLIC_LOOKUP, fetchImpl })
+  await assert.rejects(loader.load('http://192.168.1.5/p.zip'), /not allowed/)
+  await loader.load('http://192.168.1.5/p.zip', '', { allowPrivateHosts: true })
+  assert.equal(calls.length, 1)
+  await assert.rejects(loader.load('http://192.168.1.5/p.zip'), /not allowed/)
+  const optIn = new ResourcePackLoader({ lookup: PUBLIC_LOOKUP, fetchImpl, allowPrivatePackHosts: true })
+  await optIn.load('http://127.0.0.1:9000/p.zip')
+  assert.equal(calls.length, 2)
+  assert.equal(new ResourcePackLoader({}).allowPrivatePackHosts, false)
+})
+
+test('the default DNS lookup is used when none is injected', async () => {
+  const { calls, fetchImpl } = recordingFetch(() => new Response(packZip()))
+  const loader = new ResourcePackLoader({ fetchImpl })
+  await assert.rejects(loader.load('http://localhost/p.zip'), /not allowed/)
+  assert.equal(calls.length, 0)
+})
+
+test('component text flattening is bounded and iterative', () => {
+  const { flattenComponentText } = require('../electron/resource-pack.cjs')
+  let chain = { text: 'x' }
+  for (let index = 0; index < 12_000; index++) chain = { text: '', extra: [chain] }
+  assert.doesNotThrow(() => flattenComponentText(chain))
+  assert.equal(flattenComponentText(chain), '')
+  const wide = { text: 'a', extra: Array.from({ length: 100_000 }, () => ({ text: 'b' })) }
+  const flat = flattenComponentText(wide)
+  assert.equal(flat.startsWith('abb'), true)
+  assert.equal(flat.length <= 4097, true)
+  assert.equal(flattenComponentText({ text: 'Hi ', extra: [{ text: 'there' }, '!'] }), 'Hi there!')
+  assert.equal(flattenComponentText('{"text":"json","extra":[{"text":"!"}]}'), 'json!')
 })
