@@ -11,6 +11,7 @@ const MAX_JSON_BYTES = 2 * 1024 * 1024
 const MAX_TEXTURE_BYTES = 16 * 1024 * 1024
 const MAX_ARCHIVE_ENTRIES = 100_000
 const MAX_PARSED_JSON_BYTES = 100 * 1024 * 1024
+const MAX_COMPRESSION_RATIO = 1000
 const DOWNLOAD_TIMEOUT_MS = 30_000
 
 class ResourcePackLoader {
@@ -259,8 +260,8 @@ class ParsedResourcePack {
 }
 
 function parseResourcePack(buffer, metadata = {}) {
-  const archive = new AdmZip(buffer)
-  const entries = archive.getEntries()
+  let entries
+  try { entries = new AdmZip(buffer).getEntries() } catch { entries = readTolerantZip(buffer) }
   if (entries.length > MAX_ARCHIVE_ENTRIES) throw new Error('Resource pack contains too many files.')
   const json = new Map()
   const textureEntries = new Map()
@@ -318,13 +319,78 @@ function safeEntryData(entry, maximumBytes) {
     if ((Number(entry?.header?.flags) & 1) !== 0) return null
     const compressed = entry?.getCompressedData?.()
     if (!Buffer.isBuffer(compressed) || compressed.length > MAX_PACK_BYTES) return null
+    const declaredSize = Number(entry?.header?.size)
     const method = Number(entry?.header?.method)
     if (method === 0) return compressed.length <= maximumBytes ? Buffer.from(compressed) : null
     if (method !== 8) return null
-    return zlib.inflateRawSync(compressed, { maxOutputLength: maximumBytes })
+    const inflated = zlib.inflateRawSync(compressed, { maxOutputLength: maximumBytes })
+    if (entry?.tolerant === true && inflated.length / Math.max(1, compressed.length) > MAX_COMPRESSION_RATIO) return null
+    return inflated
   } catch {
     return null
   }
+}
+
+// Read only ZIP structures needed for extraction. In particular, extra-field
+// contents are opaque: their declared lengths are used only to advance offsets.
+function readTolerantZip(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length > MAX_PACK_BYTES) throw new Error('Invalid resource pack ZIP.')
+  const min = Math.max(0, buffer.length - 65557)
+  let eocd = -1
+  for (let i = buffer.length - 22; i >= min; i--) if (buffer.readUInt32LE(i) === 0x06054b50) { eocd = i; break }
+  if (eocd < 0) throw new Error('Invalid resource pack ZIP.')
+  let count = buffer.readUInt16LE(eocd + 10)
+  let directorySize = buffer.readUInt32LE(eocd + 12)
+  let directoryOffset = buffer.readUInt32LE(eocd + 16)
+  const locator = eocd - 20
+  if (locator >= 0 && buffer.readUInt32LE(locator) === 0x07064b50) {
+    const zip64Offset = Number(buffer.readBigUInt64LE(locator + 8))
+    if (zip64Offset <= buffer.length - 56 && buffer.readUInt32LE(zip64Offset) === 0x06064b50) {
+      count = Number(buffer.readBigUInt64LE(zip64Offset + 32))
+      directorySize = Number(buffer.readBigUInt64LE(zip64Offset + 40))
+      directoryOffset = Number(buffer.readBigUInt64LE(zip64Offset + 48))
+    }
+  }
+  if (!Number.isSafeInteger(count) || count > MAX_ARCHIVE_ENTRIES || !Number.isSafeInteger(directoryOffset) || directoryOffset < 0 || directoryOffset > buffer.length) throw new Error('Invalid resource pack ZIP.')
+  const directoryEnd = Math.min(buffer.length, directoryOffset + directorySize)
+  const entries = []
+  let cursor = directoryOffset
+  for (let index = 0; index < count && cursor + 46 <= directoryEnd; index++) {
+    if (buffer.readUInt32LE(cursor) !== 0x02014b50) break
+    const flags = buffer.readUInt16LE(cursor + 8)
+    const method = buffer.readUInt16LE(cursor + 10)
+    const compressedSize = buffer.readUInt32LE(cursor + 20)
+    const declaredSize = buffer.readUInt32LE(cursor + 24)
+    const size = declaredSize === 0xffffffff ? 0 : declaredSize
+    const nameLength = buffer.readUInt16LE(cursor + 28)
+    const extraLength = buffer.readUInt16LE(cursor + 30)
+    const commentLength = buffer.readUInt16LE(cursor + 32)
+    const localOffset = buffer.readUInt32LE(cursor + 42)
+    const nameStart = cursor + 46
+    const nameEnd = Math.min(directoryEnd, nameStart + nameLength)
+    const name = buffer.toString('utf8', nameStart, nameEnd).replaceAll('\\', '/')
+    const normalized = name.replace(/\/$/, '')
+    const unsafe = normalized.startsWith('/') || /^[a-z]:/i.test(normalized) || normalized.split('/').includes('..')
+    let next = nameStart + nameLength + extraLength + commentLength
+    if (next > directoryEnd) {
+      next = directoryEnd
+      for (let scan = nameStart + nameLength; scan + 4 <= directoryEnd; scan++) {
+        if (buffer.readUInt32LE(scan) === 0x02014b50) { next = scan; break }
+      }
+    }
+    next = Math.min(directoryEnd, next)
+    if (!unsafe && localOffset <= buffer.length - 30 && buffer.readUInt32LE(localOffset) === 0x04034b50) {
+      const localNameLength = buffer.readUInt16LE(localOffset + 26)
+      const localExtraLength = buffer.readUInt16LE(localOffset + 28)
+      const dataStart = Math.min(buffer.length, localOffset + 30 + localNameLength + localExtraLength)
+      const dataEnd = Math.min(buffer.length, dataStart + compressedSize)
+      const data = buffer.subarray(dataStart, dataEnd)
+      if (data.length === compressedSize) entries.push({ entryName: name, isDirectory: name.endsWith('/'), tolerant: true, header: { flags, method, size }, getCompressedData: () => data })
+    }
+    if (next <= cursor) break
+    cursor = next
+  }
+  return entries
 }
 
 function buildFontIndex(definitions) {

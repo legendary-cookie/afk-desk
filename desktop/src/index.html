@@ -343,6 +343,11 @@
             <span class="toggle" aria-hidden="true"></span>
             <span><strong>Stagger startup account logins</strong><small>Connect startup accounts one at a time to reduce network and authentication spikes.</small></span>
           </label>
+          <label class="toggle-row">
+            <input id="use-launcher-pack-cache" type="checkbox" checked />
+            <span class="toggle" aria-hidden="true"></span>
+            <span><strong>Use Minecraft launcher resource pack cache</strong><small>Reuse verified packs from Minecraft, Modrinth, and CurseForge when available.</small></span>
+          </label>
           <label class="field settings-delay"><span>Delay between accounts (seconds)</span><input id="startup-connection-delay" type="number" min="1" max="300" value="3" /></label>
           <label class="field settings-delay"><span>Interface scale</span><input id="ui-scale" type="range" min="75" max="125" step="5" value="100" /><small><output id="ui-scale-value" for="ui-scale">100%</output> — smaller values fit more controls on screen.</small></label>
           <div class="form-section"><h3>POV performance</h3><p>Views are rendered only while the POV dashboard is open.</p></div>

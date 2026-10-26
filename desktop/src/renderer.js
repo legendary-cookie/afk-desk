@@ -99,7 +99,7 @@ const state = {
 }
 
 const el = Object.fromEntries([
-  'account-list', 'account-count', 'add-account', 'open-settings', 'toggle-sidebar', 'open-command-center', 'command-dialog', 'command-search', 'command-results', 'close-command-center', 'quick-scale', 'quick-scale-number', 'reset-scale', 'quick-scale-value', 'quick-workspace-design', 'quick-color-theme', 'workspace-design', 'color-theme', 'display-menu', 'console-menu', 'macro-menu', 'settings-dialog', 'close-settings', 'start-with-windows', 'notifications-enabled', 'stagger-startup-connections', 'startup-connection-delay', 'save-settings', 'empty-state', 'dashboard', 'account-title', 'app-version', 'settings-app-version',
+  'account-list', 'account-count', 'add-account', 'open-settings', 'toggle-sidebar', 'open-command-center', 'command-dialog', 'command-search', 'command-results', 'close-command-center', 'quick-scale', 'quick-scale-number', 'reset-scale', 'quick-scale-value', 'quick-workspace-design', 'quick-color-theme', 'workspace-design', 'color-theme', 'display-menu', 'console-menu', 'macro-menu', 'settings-dialog', 'close-settings', 'start-with-windows', 'notifications-enabled', 'stagger-startup-connections', 'use-launcher-pack-cache', 'startup-connection-delay', 'save-settings', 'empty-state', 'dashboard', 'account-title', 'app-version', 'settings-app-version',
   'edit-account', 'open-logs', 'open-automations', 'open-pov', 'connection-button', 'status-banner', 'status-name', 'status-detail', 'server-address',
   'detail-username', 'detail-server', 'detail-version', 'detail-antiafk', 'detail-environment', 'detail-water', 'detail-health', 'detail-hunger', 'detail-coordinates', 'detail-chest', 'detail-dimension', 'inventory-count', 'inventory-grid', 'auto-deposit-toggle', 'hold-selected', 'equip-destination', 'equip-selected', 'lock-selected', 'inventory-action-count', 'deposit-selected', 'drop-count-selected', 'drop-selected', 'toggle-inventory', 'console-log', 'clear-console',
   'chat-form', 'chat-message', 'chat-suggestions', 'macro-pad', 'manage-macros', 'macro-dialog', 'close-macro-dialog', 'macro-editor', 'macro-rows', 'add-macro', 'cancel-macros', 'save-macros', 'account-dialog', 'account-form', 'dialog-title', 'account-id', 'identity-id', 'profile-name', 'edition', 'label',
@@ -1661,6 +1661,7 @@ async function openSettingsDialog() {
     el['start-with-windows'].checked = settings.startWithWindows === true
     el['notifications-enabled'].checked = settings.notificationsEnabled === true
     el['stagger-startup-connections'].checked = settings.staggerStartupConnections !== false
+    el['use-launcher-pack-cache'].checked = settings.useLauncherPackCache !== false
     el['startup-connection-delay'].value = settings.startupConnectionDelay || 3
     el['ui-scale'].value = settings.uiScale || 100
     el['workspace-design'].value = settings.workspaceDesign || 'hybrid'
@@ -1687,6 +1688,7 @@ async function saveSettings() {
       startWithWindows: el['start-with-windows'].checked,
       notificationsEnabled: el['notifications-enabled'].checked,
       staggerStartupConnections: el['stagger-startup-connections'].checked,
+      useLauncherPackCache: el['use-launcher-pack-cache'].checked,
       startupConnectionDelay: Number(el['startup-connection-delay'].value),
       uiScale: Number(el['ui-scale'].value)
       ,workspaceDesign: el['workspace-design'].value

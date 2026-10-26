@@ -10,15 +10,19 @@ const MAX_JSON_BYTES = 2 * 1024 * 1024
 const MAX_TEXTURE_BYTES = 16 * 1024 * 1024
 const MAX_ARCHIVE_ENTRIES = 100_000
 const MAX_PARSED_JSON_BYTES = 100 * 1024 * 1024
+const MAX_COMPRESSION_RATIO = 1000
 const DOWNLOAD_TIMEOUT_MS = 30_000
 
 class ResourcePackLoader {
-  constructor({ fetchImpl = globalThis.fetch, lookup, allowPrivatePackHosts = false, cacheDir = '', maxPackBytes = MAX_PACK_BYTES,
+  constructor({ fetchImpl = globalThis.fetch, lookup, allowPrivatePackHosts = false, cacheDir = '', externalCacheDirs = [], useLauncherPackCache = true, diagnose = () => {}, maxPackBytes = MAX_PACK_BYTES,
     downloadTimeoutMs = DOWNLOAD_TIMEOUT_MS, maxCacheEntries = 8, maxCacheBytes = 300 * 1024 * 1024 } = {}) {
     this.fetchImpl = fetchImpl
     this.lookup = lookup
     this.allowPrivatePackHosts = allowPrivatePackHosts === true
     this.cacheDir = cacheDir
+    this.externalCacheDirs = Array.isArray(externalCacheDirs) ? externalCacheDirs : []
+    this.useLauncherPackCache = useLauncherPackCache !== false
+    this.diagnose = diagnose
     this.maxPackBytes = boundedLimit(maxPackBytes, MAX_PACK_BYTES)
     this.downloadTimeoutMs = boundedLimit(downloadTimeoutMs, DOWNLOAD_TIMEOUT_MS)
     this.maxCacheEntries = boundedLimit(maxCacheEntries, 8)
@@ -27,7 +31,7 @@ class ResourcePackLoader {
     this.activeDownloads = 0
   }
 
-  async load(urlValue, expectedHash = '', { allowPrivateHosts = this.allowPrivatePackHosts } = {}) {
+  async load(urlValue, expectedHash = '', { allowPrivateHosts = this.allowPrivatePackHosts, useLauncherPackCache = this.useLauncherPackCache } = {}) {
     const url = normalizePackUrl(urlValue)
     const hash = normalizeHash(expectedHash)
     const allowPrivate = allowPrivateHosts === true
@@ -36,12 +40,52 @@ class ResourcePackLoader {
     if (this.activeDownloads >= 4) throw new Error('Too many resource pack downloads in progress. Try again shortly.')
     while (this.cache.size >= this.maxCacheEntries) this.cache.delete(this.cache.keys().next().value)
     this.activeDownloads++
-    const task = this.#downloadAndParse(url, hash, allowPrivate).catch((error) => {
+    const task = this.#loadWithCaches(url, hash, allowPrivate, useLauncherPackCache).catch((error) => {
       if (this.cache.get(key) === task) this.cache.delete(key)
       throw error
     }).finally(() => { this.activeDownloads-- })
     this.cache.set(key, task)
     return task
+  }
+
+  async #loadWithCaches(url, hash, allowPrivateHosts, useLauncherPackCache) {
+    if (hash) {
+      const own = this.#readVerifiedCacheFile(this.cacheDir && path.join(this.cacheDir, `${hash}.zip`), hash, true)
+      if (own) {
+        this.diagnose({ event: 'resource_pack_cache_hit', source: 'afkdesk', sha1: hash })
+        return own
+      }
+      if (useLauncherPackCache !== false) {
+        for (const directory of this.externalCacheDirs) {
+          // Minecraft 1.20.3+ stores server packs at downloads/<id>/<id>/<sha1>, so
+          // look up to 3 levels deep for files named exactly by the hash.
+          for (const file of findHashNamedFiles(directory, hash)) {
+            const parsed = this.#readVerifiedCacheFile(file, hash, false)
+            if (!parsed) continue
+            try { if (this.cacheDir) this.#cacheToDisk(hash, fs.readFileSync(file)) } catch {}
+            this.diagnose({ event: 'resource_pack_cache_hit', source: 'launcher', sha1: hash })
+            return parsed
+          }
+        }
+      }
+    }
+    return this.#downloadAndParse(url, hash, allowPrivateHosts)
+  }
+
+  #readVerifiedCacheFile(file, expectedHash, deleteOnMismatch) {
+    if (!file) return null
+    try {
+      const stat = fs.lstatSync(file)
+      if (!stat.isFile() || stat.size > this.maxPackBytes) return null
+      const buffer = fs.readFileSync(file)
+      if (crypto.createHash('sha1').update(buffer).digest('hex') !== expectedHash) {
+        if (deleteOnMismatch) { try { fs.unlinkSync(file) } catch {} }
+        return null
+      }
+      return parseResourcePack(buffer, { source: 'afkdesk://resource-pack-cache', sha1: expectedHash })
+    } catch {
+      return null
+    }
   }
 
   async #downloadAndParse(url, expectedHash, allowPrivateHosts = false) {
@@ -74,7 +118,9 @@ class ResourcePackLoader {
       const sha1 = crypto.createHash('sha1').update(buffer).digest('hex')
       if (expectedHash && expectedHash.length === 40 && sha1 !== expectedHash) throw new Error('Resource pack SHA-1 does not match the server hash.')
       const parsed = parseResourcePack(buffer, { source: safePackSource(url), sha1 })
-      if (this.cacheDir && buffer.length <= this.maxCacheBytes) this.#cacheToDisk(sha1, buffer)
+      if (this.cacheDir && buffer.length <= this.maxCacheBytes) {
+        try { this.#cacheToDisk(sha1, buffer) } catch {}
+      }
       return parsed
     } catch (error) {
       controller.abort(error)
@@ -198,8 +244,8 @@ class ParsedResourcePack {
 }
 
 function parseResourcePack(buffer, metadata = {}) {
-  const archive = new AdmZip(buffer)
-  const entries = archive.getEntries()
+  let entries
+  try { entries = new AdmZip(buffer).getEntries() } catch { entries = readTolerantZip(buffer) }
   if (entries.length > MAX_ARCHIVE_ENTRIES) throw new Error('Resource pack contains too many files.')
   const json = new Map()
   const textureEntries = new Map()
@@ -260,10 +306,74 @@ function safeEntryData(entry, maximumBytes) {
     const method = Number(entry?.header?.method)
     if (method === 0) return compressed.length <= maximumBytes ? Buffer.from(compressed) : null
     if (method !== 8) return null
-    return zlib.inflateRawSync(compressed, { maxOutputLength: maximumBytes })
+    const inflated = zlib.inflateRawSync(compressed, { maxOutputLength: maximumBytes })
+    if (entry?.tolerant === true && inflated.length / Math.max(1, compressed.length) > MAX_COMPRESSION_RATIO) return null
+    return inflated
   } catch {
     return null
   }
+}
+
+// Read only ZIP structures needed for extraction. In particular, extra-field
+// contents are opaque: their declared lengths are used only to advance offsets.
+function readTolerantZip(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length > MAX_PACK_BYTES) throw new Error('Invalid resource pack ZIP.')
+  const min = Math.max(0, buffer.length - 65557)
+  let eocd = -1
+  for (let i = buffer.length - 22; i >= min; i--) if (buffer.readUInt32LE(i) === 0x06054b50) { eocd = i; break }
+  if (eocd < 0) throw new Error('Invalid resource pack ZIP.')
+  let count = buffer.readUInt16LE(eocd + 10)
+  let directorySize = buffer.readUInt32LE(eocd + 12)
+  let directoryOffset = buffer.readUInt32LE(eocd + 16)
+  const locator = eocd - 20
+  if (locator >= 0 && buffer.readUInt32LE(locator) === 0x07064b50) {
+    const zip64Offset = Number(buffer.readBigUInt64LE(locator + 8))
+    if (zip64Offset <= buffer.length - 56 && buffer.readUInt32LE(zip64Offset) === 0x06064b50) {
+      count = Number(buffer.readBigUInt64LE(zip64Offset + 32))
+      directorySize = Number(buffer.readBigUInt64LE(zip64Offset + 40))
+      directoryOffset = Number(buffer.readBigUInt64LE(zip64Offset + 48))
+    }
+  }
+  if (!Number.isSafeInteger(count) || count > MAX_ARCHIVE_ENTRIES || !Number.isSafeInteger(directoryOffset) || directoryOffset < 0 || directoryOffset > buffer.length) throw new Error('Invalid resource pack ZIP.')
+  const directoryEnd = Math.min(buffer.length, directoryOffset + directorySize)
+  const entries = []
+  let cursor = directoryOffset
+  for (let index = 0; index < count && cursor + 46 <= directoryEnd; index++) {
+    if (buffer.readUInt32LE(cursor) !== 0x02014b50) break
+    const flags = buffer.readUInt16LE(cursor + 8)
+    const method = buffer.readUInt16LE(cursor + 10)
+    const compressedSize = buffer.readUInt32LE(cursor + 20)
+    const declaredSize = buffer.readUInt32LE(cursor + 24)
+    const size = declaredSize === 0xffffffff ? 0 : declaredSize
+    const nameLength = buffer.readUInt16LE(cursor + 28)
+    const extraLength = buffer.readUInt16LE(cursor + 30)
+    const commentLength = buffer.readUInt16LE(cursor + 32)
+    const localOffset = buffer.readUInt32LE(cursor + 42)
+    const nameStart = cursor + 46
+    const nameEnd = Math.min(directoryEnd, nameStart + nameLength)
+    const name = buffer.toString('utf8', nameStart, nameEnd).replaceAll('\\', '/')
+    const normalized = name.replace(/\/$/, '')
+    const unsafe = normalized.startsWith('/') || /^[a-z]:/i.test(normalized) || normalized.split('/').includes('..')
+    let next = nameStart + nameLength + extraLength + commentLength
+    if (next > directoryEnd) {
+      next = directoryEnd
+      for (let scan = nameStart + nameLength; scan + 4 <= directoryEnd; scan++) {
+        if (buffer.readUInt32LE(scan) === 0x02014b50) { next = scan; break }
+      }
+    }
+    next = Math.min(directoryEnd, next)
+    if (!unsafe && localOffset <= buffer.length - 30 && buffer.readUInt32LE(localOffset) === 0x04034b50) {
+      const localNameLength = buffer.readUInt16LE(localOffset + 26)
+      const localExtraLength = buffer.readUInt16LE(localOffset + 28)
+      const dataStart = Math.min(buffer.length, localOffset + 30 + localNameLength + localExtraLength)
+      const dataEnd = Math.min(buffer.length, dataStart + compressedSize)
+      const data = buffer.subarray(dataStart, dataEnd)
+      if (data.length === compressedSize) entries.push({ entryName: name, isDirectory: name.endsWith('/'), tolerant: true, header: { flags, method, size }, getCompressedData: () => data })
+    }
+    if (next <= cursor) break
+    cursor = next
+  }
+  return entries
 }
 
 function buildFontIndex(definitions) {
@@ -365,6 +475,32 @@ function normalizeHash(value) {
   return /^[a-f0-9]{40}$/.test(hash) ? hash : ''
 }
 
+function discoverLauncherPackDirs({ appData, userProfile, fs: fileSystem = fs } = {}) {
+  const candidates = []
+  const add = (directory) => {
+    if (!directory || candidates.length >= 50) return
+    try { if (fileSystem.statSync(directory).isDirectory()) candidates.push(directory) } catch {}
+  }
+  const addPackDirs = (root) => {
+    add(path.join(root, 'downloads'))
+    add(path.join(root, 'server-resource-packs'))
+  }
+  if (appData) {
+    addPackDirs(path.join(appData, '.minecraft'))
+    const modrinthProfiles = path.join(appData, 'ModrinthApp', 'profiles')
+    let profiles = []
+    try { profiles = fileSystem.readdirSync(modrinthProfiles, { withFileTypes: true }).filter((entry) => entry.isDirectory()).slice(0, 50) } catch {}
+    for (const profile of profiles) addPackDirs(path.join(modrinthProfiles, profile.name))
+  }
+  if (userProfile && candidates.length < 50) {
+    const instances = path.join(userProfile, 'curseforge', 'minecraft', 'Instances')
+    let profiles = []
+    try { profiles = fileSystem.readdirSync(instances, { withFileTypes: true }).filter((entry) => entry.isDirectory()).slice(0, 50) } catch {}
+    for (const profile of profiles) addPackDirs(path.join(instances, profile.name))
+  }
+  return candidates.slice(0, 50)
+}
+
 function safePackSource(url) {
   return `${url.protocol}//${url.host}${url.pathname}`.slice(0, 300)
 }
@@ -455,4 +591,23 @@ function pngDimensions(buffer) {
   return { width, height }
 }
 
-module.exports = { ResourcePackLoader, ParsedResourcePack, parseResourcePack, normalizePackEvent, itemComponents, resolveItemDefinition, flattenComponentText }
+// Bounded, read-only search for `<sha1>` or `<sha1>.zip` up to `maxDepth` levels
+// below `root` (never follows symlinks; caps visited directories).
+function findHashNamedFiles(root, hash, { maxDepth = 3, maxDirs = 400 } = {}) {
+  const names = new Set([hash, `${hash}.zip`])
+  const found = []
+  const queue = [{ dir: root, depth: 0 }]
+  let visited = 0
+  while (queue.length && visited < maxDirs) {
+    const { dir, depth } = queue.shift()
+    visited++
+    let entries = []
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { continue }
+    for (const entry of entries) {
+      if (entry.isFile() && names.has(entry.name)) found.push(path.join(dir, entry.name))
+      else if (entry.isDirectory() && !entry.isSymbolicLink() && depth < maxDepth) queue.push({ dir: path.join(dir, entry.name), depth: depth + 1 })
+    }
+  }
+  return found
+}
+module.exports = { ResourcePackLoader, ParsedResourcePack, parseResourcePack, normalizePackEvent, itemComponents, resolveItemDefinition, flattenComponentText, discoverLauncherPackDirs }
