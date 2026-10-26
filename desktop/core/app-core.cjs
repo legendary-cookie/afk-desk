@@ -1,8 +1,9 @@
 'use strict'
 // Electron-free owner of durable/application services. Platform effects enter through hooks.
 const path = require('node:path')
+const fs = require('node:fs')
 const crypto = require('node:crypto')
-const { AccountStore, SettingsStore, startupConnectionDelay } = require('../electron/store.cjs')
+const { AccountStore, SettingsStore, normalizeSettings, normalizeNotifyChannels, startupConnectionDelay } = require('../electron/store.cjs')
 const { BotManager: DefaultBotManager, normalizeSkinUrl: defaultNormalizeSkinUrl } = require('../electron/bot-manager.cjs')
 const { BedrockBotManager: DefaultBedrockBotManager } = require('../electron/bedrock-bot-manager.cjs')
 const { MultiEditionBotManager: DefaultMultiEditionBotManager } = require('../electron/multi-edition-manager.cjs')
@@ -27,6 +28,33 @@ const { createCommandLayer } = require('./commands.cjs')
 const { auditActor, redactAuditText } = require('./audit-identity.cjs')
 
 const movementDiagnosticsEnabled = process.env.AFK_DESK_MOVEMENT_DIAGNOSTICS === '1'
+
+function normalizePovRenderDistance(value) {
+  const chunks = Number(value)
+  return Number.isFinite(chunks) ? Math.max(1, Math.min(8, Math.round(chunks))) : 1
+}
+
+// Extend the existing settings schema here, keeping POV ownership in AppCore.
+class PovSettingsStore extends SettingsStore {
+  get() {
+    const settings = super.get() // Retain the store's validation and corrupt-file protection.
+    let raw = {}
+    try { raw = JSON.parse(fs.readFileSync(this.file, 'utf8')) } catch (error) { if (error.code !== 'ENOENT') throw error }
+    return { ...settings, povRenderDistance: normalizePovRenderDistance(raw.povRenderDistance) }
+  }
+
+  save(input) {
+    const current = this.get()
+    if (!input || typeof input !== 'object' || Array.isArray(input)) throw new TypeError('Settings must be an object')
+    const settings = { ...normalizeSettings(input), povRenderDistance: normalizePovRenderDistance(Object.hasOwn(input, 'povRenderDistance') ? input.povRenderDistance : current.povRenderDistance) }
+    const notifyChannels = Object.hasOwn(input, 'notifyChannels') ? normalizeNotifyChannels(input.notifyChannels) : this.getNotifyChannels()
+    fs.mkdirSync(path.dirname(this.file), { recursive: true })
+    const temporaryFile = `${this.file}.tmp`
+    fs.writeFileSync(temporaryFile, JSON.stringify({ ...settings, notifyChannels }, null, 2), 'utf8')
+    fs.renameSync(temporaryFile, this.file)
+    return settings
+  }
+}
 
 class AppCore {
   constructor({
@@ -62,7 +90,7 @@ class AppCore {
     this.eventStorageWarnings = new Map()
     this.recentChats = new Map()
     this.store = this.accountsStore = new AccountStore(userDataPath)
-    this.settingsStore = new SettingsStore(userDataPath)
+    this.settingsStore = new PovSettingsStore(userDataPath)
     this.diagnosticLog = new DiagnosticLog(userDataPath)
     this.eventStore = new PersistentEventStore(userDataPath)
     this.smartProxies = new SmartProxyManager()

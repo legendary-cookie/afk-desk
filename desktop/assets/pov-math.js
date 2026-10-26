@@ -28,5 +28,18 @@
     return { yaw: -Number(movementX || 0) * scale, pitch: -Number(movementY || 0) * scale }
   }
 
-  return { viewBasis, projectHorizontal, mouseLookDelta }
+  function entityLabel(entity) {
+    const type = String(entity.entityType || entity.name || entity.type || '').toLowerCase().replace(/^minecraft:/, '').replace(/ /g, '_')
+    if (type === 'item_display' || type === 'block_display') return ''
+    if (type === 'text_display' || type === 'armor_stand') return String(entity.label || '')
+    return String(entity.label ?? entity.username ?? entity.name ?? entity.type ?? 'entity')
+  }
+
+  function snapshotRadius(settings, viewMode, mapRadius) {
+    if (viewMode === 'map') return Math.max(2, Math.min(12, Math.round(Number(mapRadius) || 6)))
+    const chunks = Number(settings?.povRenderDistance)
+    return Math.max(1, Math.min(8, Number.isFinite(chunks) ? Math.round(chunks) : 1)) * 16
+  }
+
+  return { viewBasis, projectHorizontal, mouseLookDelta, entityLabel, snapshotRadius }
 })

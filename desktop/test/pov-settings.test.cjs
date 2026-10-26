@@ -1,0 +1,36 @@
+const test = require('node:test')
+const assert = require('node:assert/strict')
+const fs = require('node:fs')
+const os = require('node:os')
+const path = require('node:path')
+const { AppCore } = require('../core/app-core.cjs')
+
+test('POV chunk distance is normalized, persisted and survives unrelated settings saves', t => {
+  const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'pov-settings-'))
+  t.after(() => fs.rmSync(userDataPath, { recursive: true, force: true }))
+  const core = new AppCore({ userDataPath })
+  assert.equal(core.settings.get().povRenderDistance, 1)
+  for (const [input, expected] of [[4, 4], [999, 8], [-1, 1], [2.8, 3], ['5', 5], [null, 1], [Infinity, 1], ['bad', 1]]) {
+    assert.equal(core.settings.save({ povRenderDistance: input }).povRenderDistance, expected)
+    assert.equal(new AppCore({ userDataPath }).settings.get().povRenderDistance, expected)
+  }
+  core.settings.save({ povRenderDistance: 4 })
+  core.settingsStore.save({ ...core.settingsStore.get(), povFrameRate: 60 })
+  assert.equal(core.settings.get().povRenderDistance, 4)
+  assert.equal(JSON.parse(fs.readFileSync(path.join(userDataPath, 'settings.json'))).povRenderDistance, 4)
+})
+
+test('POV settings preserve notification secrets and corrupt settings remain untouched', t => {
+  const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'pov-settings-'))
+  t.after(() => fs.rmSync(userDataPath, { recursive: true, force: true }))
+  const core = new AppCore({ userDataPath })
+  core.settingsStore.save({ povRenderDistance: 3, notifyChannels: [{ id: 'notify', type: 'discord', secretEncrypted: 'encrypted-fixture' }] })
+  const before = core.settingsStore.getNotifyChannels()
+  assert.equal(before[0].secretEncrypted, 'encrypted-fixture')
+  core.settings.save({ povRenderDistance: 4 })
+  assert.deepEqual(core.settingsStore.getNotifyChannels(), before)
+  const file = path.join(userDataPath, 'settings.json')
+  fs.writeFileSync(file, '{broken')
+  assert.throws(() => core.settings.save({ povRenderDistance: 5 }), /Existing data is preserved/)
+  assert.equal(fs.readFileSync(file, 'utf8'), '{broken')
+})
