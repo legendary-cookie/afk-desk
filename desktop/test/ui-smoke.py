@@ -24,7 +24,29 @@ for (let x = 1; x <= 4; x++) for (let y = 64; y <= 66; y++) window.__world.block
 window.__world.blocks.push({ x: 0, y: 64, z: -2, name: 'stone_slab', solid: true, shapes: [[0, 0, 0, 1, .5, 1]] }, { x: -1, y: 64, z: -5, name: 'diamond_ore', solid: true });
 window.__savedAccount = null;
 window.__scale = 100;
-window.__settings = { startWithWindows: false, staggerStartupConnections: true, startupConnectionDelay: 3, uiScale: 100, sidePanelWidth: 300, inventoryHeight: 220, macros: [{ label: 'Town', message: '/server towny' }] };
+window.__settings = {
+  startWithWindows: false,
+  staggerStartupConnections: true,
+  startupConnectionDelay: 3,
+  uiScale: 100,
+  sidePanelWidth: 300,
+  inventoryHeight: 220,
+  macros: [{ label: 'Town', message: '/server towny' }],
+  remoteAccess: {
+    enabled: true,
+    bind: '127.0.0.1',
+    port: 8787,
+    allowedHosts: ['localhost'],
+    running: true,
+    interfaces: [
+      { name: 'loopback', address: '127.0.0.1', label: '127.0.0.1 (Loopback — loopback)' },
+      { name: 'tailscale0', address: '100.85.14.94', label: '100.85.14.94 (Tailscale — tailscale0)' }
+    ],
+    tokens: [
+      { id: 'token-1', name: 'Dashboard Access', scope: 'admin', tokenHint: '••••abcd' }
+    ]
+  }
+};
 window.__macroRunListeners = [];
 window.__macros = [
   {
@@ -97,7 +119,34 @@ window.afkDesk = {
   runAutomation: async () => {}, stopAutomation: async () => {},
   completeChat: async () => [], duplicateProfile: async () => ({}),
   dropItems: async () => {}, depositSlot: async () => {},
-  saveSettings: async (input) => (window.__settings = { ...window.__settings, ...input }),
+  saveSettings: async (input) => {
+    if (input?.remoteAccess?._update) {
+      const currentRa = window.__settings.remoteAccess || {};
+      const tokens = [...(currentRa.tokens || [])];
+      if (input.remoteAccess.createToken) {
+        tokens.push({
+          id: 'token-' + Date.now(),
+          name: input.remoteAccess.createToken.name || 'Token',
+          scope: input.remoteAccess.createToken.scope || 'read',
+          tokenHint: '••••' + Math.floor(1000 + Math.random() * 9000)
+        });
+      }
+      if (input.remoteAccess.revokeTokenId) {
+        const idx = tokens.findIndex((t) => t.id === input.remoteAccess.revokeTokenId);
+        if (idx !== -1) tokens.splice(idx, 1);
+      }
+      window.__settings.remoteAccess = {
+        ...currentRa,
+        enabled: input.remoteAccess.enabled !== undefined ? input.remoteAccess.enabled : currentRa.enabled,
+        bind: input.remoteAccess.bind !== undefined ? input.remoteAccess.bind : currentRa.bind,
+        port: input.remoteAccess.port !== undefined ? input.remoteAccess.port : currentRa.port,
+        allowedHosts: input.remoteAccess.allowedHosts !== undefined ? input.remoteAccess.allowedHosts : currentRa.allowedHosts,
+        tokens
+      };
+    }
+    window.__settings = { ...window.__settings, ...input };
+    return { ...window.__settings };
+  },
   setUiScale: (value) => { window.__scale = value; },
   onBotEvent: (callback) => { window.__botEvent = callback; setTimeout(() => { callback({ type: 'status', id: 'one', payload: { status: 'online', detail: 'Ready', at: Date.now() } }); callback({ type: 'telemetry', id: 'one', payload: { health: 20, food: 18, selectedHotbarSlot: 0, inventory: [{ slot: 36, name: 'diamond_sword', displayName: 'Diamond Sword', count: 1 }, { slot: 37, name: 'oak_planks', displayName: 'Oak Planks', count: 32 }] } }); }, 0); return () => {}; },
   sendChat: async (_id, message) => { window.__sent.push(message); },
@@ -294,7 +343,13 @@ def run() -> None:
         sidebar_width = page.locator(".sidebar").bounding_box()["width"]
         page.locator("#toggle-sidebar").click()
         page.wait_for_timeout(220)
-        assert page.locator(".sidebar").bounding_box()["width"] < sidebar_width
+        collapsed_box = page.locator(".sidebar").bounding_box()
+        assert 50 <= collapsed_box["width"] <= 64, collapsed_box["width"]
+        assert page.locator("#add-account").is_visible()
+        assert page.locator("#open-settings").is_visible()
+        assert page.locator(".account-avatar").first.is_visible()
+        collapsed_sidebar = str(Path(gettempdir()) / "afkdesk-collapsed-sidebar.png")
+        page.screenshot(path=collapsed_sidebar)
         page.locator("#toggle-sidebar").click()
         page.wait_for_timeout(220)
         page.locator('[data-collapse-target="details-panel"]').click()
@@ -413,6 +468,16 @@ def run() -> None:
         macro_lib_1366 = str(Path(gettempdir()) / "afkdesk-macro-library-1366.png")
         page.screenshot(path=macro_lib_1366)
 
+        page.locator("#macro-templates-btn").click()
+        page.locator("#macro-templates-dialog").wait_for(state="visible")
+        template_cards = page.locator(".macro-template-card")
+        assert template_cards.count() >= 10
+        assert template_cards.first.locator(".macro-template-badge").is_visible()
+        template_picker_1366 = str(Path(gettempdir()) / "afkdesk-template-picker.png")
+        page.screenshot(path=template_picker_1366)
+        page.locator("#close-macro-templates").click()
+        page.locator("#macro-templates-dialog").wait_for(state="hidden")
+
         page.locator("#macro-new-btn").click()
         page.locator("#macro-name-input").fill("Join Lobby & Loop")
         page.locator("#macro-trigger-type").select_option("join")
@@ -461,6 +526,19 @@ def run() -> None:
         # Stage 3 Flow D: Notifications panel inside Settings -> add Discord channel -> Send test -> toast
         page.locator("#open-settings").click()
         page.locator("#settings-dialog").wait_for(state="visible")
+        page.locator("#remote-access-settings-section").wait_for(state="visible")
+        assert not page.locator("#remote-access-desktop-only-note").is_visible()
+        assert page.locator("#remote-access-enabled").is_enabled()
+        assert page.locator("#remote-access-bind").is_enabled()
+        assert "tailscale0" in page.locator("#remote-access-bind").inner_text()
+        assert page.locator("#remote-access-port").is_enabled()
+        assert page.locator("#remote-access-allowed-hosts").is_enabled()
+        assert page.locator("#remote-access-apply").is_visible()
+        assert page.locator("#remote-access-token-create").is_visible()
+        assert "Dashboard Access" in page.locator("#remote-access-token-list").inner_text()
+        page.locator("#remote-access-settings-section").scroll_into_view_if_needed()
+        settings_remote_1366 = str(Path(gettempdir()) / "afkdesk-settings-remote-access.png")
+        page.screenshot(path=settings_remote_1366)
         page.locator("#notifications-panel").scroll_into_view_if_needed()
         page.locator("#add-notification-channel").click()
         page.locator("#notification-channel-dialog").wait_for(state="visible")
@@ -617,6 +695,9 @@ def run() -> None:
             compact_path,
             narrow_path,
             pov_path,
+            collapsed_sidebar,
+            template_picker_1366,
+            settings_remote_1366,
             macro_lib_1366,
             macro_editor_1366,
             macro_runs_1366,

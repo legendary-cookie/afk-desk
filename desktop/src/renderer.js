@@ -105,8 +105,14 @@ const el = Object.fromEntries([
   'chat-form', 'chat-message', 'chat-suggestions', 'macro-pad', 'manage-macros', 'macro-dialog', 'close-macro-dialog', 'macro-editor', 'macro-rows', 'add-macro', 'cancel-macros', 'save-macros', 'account-dialog', 'account-form', 'dialog-title', 'account-id', 'identity-id', 'profile-name', 'edition', 'label',
   'username', 'host', 'port', 'version', 'modded-fields', 'mod-loader', 'mod-handshake', 'client-brand', 'mod-list', 'mod-channels', 'connect-on-startup', 'proxy-mode', 'proxy-enabled', 'proxy-fields', 'proxy-type', 'proxy-host', 'proxy-port', 'proxy-username', 'proxy-password', 'proxy-password-help', 'proxy-clear-password', 'share-proxy-pool', 'proxy-label', 'proxy-max-sessions', 'alert-disconnect', 'alert-errors', 'alert-health', 'anti-afk', 'anti-afk-min-delay', 'anti-afk-max-delay', 'anti-afk-duration', 'anti-afk-look-degrees', 'anti-afk-walk-distance', 'anti-afk-jump', 'anti-afk-look', 'anti-afk-sneak', 'anti-afk-swing', 'anti-afk-walk', 'environmental-movement', 'auto-reconnect', 'auto-reconnect-delay', 'auto-reconnect-backoff', 'auto-reconnect-max-delay', 'auto-reconnect-rate-limit-delay', 'auto-reconnect-max', 'connect-timeout', 'reconnect-reset-delay', 'auto-deposit-setting', 'auto-deposit-range', 'join-message', 'server-change-message',
   'message-delay', 'form-error', 'delete-account', 'duplicate-profile', 'login-dialog', 'login-code', 'open-login-private', 'open-login',
-  'close-login', 'ui-scale', 'ui-scale-value', 'pov-settings-refresh', 'pov-settings-fps', 'pov-settings-radius', 'pov-settings-render-distance', 'pov-settings-columns', 'pov-max-feeds', 'pov-settings-view-mode', 'pov-show-hud', 'column-resizer', 'inventory-resizer', 'server-window-dialog', 'server-window-title', 'server-window-stage', 'server-window-art', 'server-window-grid', 'close-server-window', 'logs-dialog', 'close-logs', 'log-filter', 'refresh-logs', 'clear-persistent-logs', 'persistent-log-view',
-  'automation-dialog', 'close-automation', 'macro-watch-account', 'macro-live-chip', 'macro-run-now', 'macro-stop-run', 'macro-library-pane', 'macro-library-search', 'macro-new-btn', 'macro-template-picker', 'macro-duplicate-btn', 'macro-delete-btn', 'macro-import-btn', 'macro-export-btn', 'macro-import-file', 'macro-json-panel', 'macro-json-label', 'macro-json-io', 'macro-json-error', 'macro-json-confirm-import', 'macro-json-copy', 'macro-json-close', 'macro-library-list', 'macro-detail-pane', 'macro-tab-editor', 'macro-tab-runs', 'macro-runs-badge', 'macro-undo-btn', 'macro-redo-btn', 'macro-close-editor-btn', 'macro-save-btn', 'macro-validation-banner', 'macro-empty-editor', 'macro-editor-view', 'macro-trigger-card', 'macro-editor-enabled-wrap', 'macro-editor-enabled', 'macro-name-input', 'macro-trigger-type', 'macro-trigger-cooldown', 'macro-trigger-fields', 'macro-trigger-error', 'macro-targets-card', 'macro-target-mode', 'macro-concurrency', 'macro-on-error', 'macro-default-delay', 'macro-max-runtime', 'macro-target-accounts-list', 'macro-target-tags-box', 'macro-target-tags-input', 'macro-target-tags-suggestions', 'macro-targets-error', 'macro-add-stop-cond', 'macro-stop-when-list', 'macro-steps-card', 'macro-steps-count', 'macro-open-step-picker', 'macro-step-picker', 'macro-step-list', 'macro-steps-error', 'macro-runs-view', 'macro-runs-caption', 'macro-refresh-runs', 'macro-runs-list',
+  , , , , , , , , , , , ,
+  , , , , , , , , , , , ,
+  , , , , , , , , , , , ,
+  , , , , , , , , , , , ,
+  , , , , , , , , , , , ,
+  , , , , , , , , , , , ,
+  , , , , , , , , , , , ,
+  , , , , , , , , , ,
   'notifications-panel', 'add-notification-channel', 'notification-channel-list', 'notification-channel-dialog', 'notification-channel-form', 'notification-channel-dialog-title', 'close-notification-channel', 'notify-channel-id', 'notify-channel-type', 'notify-channel-name', 'notify-channel-enabled', 'notify-discord-fields', 'notify-webhook-url', 'notify-telegram-fields', 'notify-bot-token', 'notify-chat-id', 'notify-events-grid', 'notify-account-mode', 'notify-accounts-checklist', 'notify-include-timestamp', 'notify-channel-error', 'delete-notification-channel', 'test-notification-channel', 'cancel-notification-channel', 'save-notification-channel',
   'pov-dialog', 'close-pov', 'pov-grid', 'pov-search', 'pov-columns', 'pov-refresh', 'pov-fps', 'pov-view-mode', 'pov-pause', 'pov-back-grid', 'pov-radius', 'pov-x', 'pov-y', 'pov-z', 'pov-detail', 'item-tooltip', 'toast-region'
 ].map((id) => [id, document.getElementById(id)]))
@@ -313,6 +319,9 @@ function renderAccountList() {
     const indicator = document.createElement('span')
     indicator.className = `mini-status ${status}`
     indicator.setAttribute('aria-label', status)
+    const accountLabel = `${account.profileName || account.label} (${status}) - ${account.host}`
+    button.setAttribute('aria-label', accountLabel)
+    button.title = accountLabel
     button.append(avatar, copy, indicator)
     button.addEventListener('click', () => {
       releaseAllManualInputs()
@@ -1334,6 +1343,16 @@ function handleBotEvent({ type, id, payload }) {
   }
 }
 
+function formatServerWindowTitle(rawTitle) {
+  if (typeof rawTitle !== 'string') return 'Server menu'
+  const cleaned = rawTitle
+    .replace(/[\uE000-\uF8FF\uFFF0-\uFFFF]/gu, '')
+    .replace(/[\u{F0000}-\u{FFFFD}\u{100000}-\u{10FFFD}]/gu, '')
+    .replace(/§[0-9a-fk-or]/gi, '')
+    .trim()
+  return cleaned.length > 0 ? cleaned : 'Server menu'
+}
+
 function renderServerWindow() {
   const menu = state.serverWindows.get(state.selectedId)
   if (!menu) {
@@ -1354,7 +1373,7 @@ function renderServerWindow() {
   stage.classList.remove('is-bedrock-form')
   grid.classList.remove('bedrock-form-grid')
   if (help) help.textContent = 'Select an item to left-click that slot. The server controls what each item does.'
-  el['server-window-title'].textContent = menu.title || 'Server menu'
+  el['server-window-title'].textContent = formatServerWindowTitle(menu.title)
   const slots = new Map((menu.slots || []).map((item) => [item.slot, item]))
   const highestSlot = Math.max(-1, ...slots.keys()) + 1
   const size = Math.max(highestSlot, Math.min(Number(menu.size) || 0, 256))

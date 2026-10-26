@@ -83,9 +83,11 @@
   ])
 
   const TEMPLATES = Object.freeze({
+    // 1. Join → /afk: Enters AFK mode after connecting to server
     'join-afk': () => ({
-      name: 'Join /afk',
-      enabled: true,
+      name: 'Join → /afk',
+      description: 'Waits 1.5 seconds after joining a server, then sends the /afk chat command.',
+      enabled: false,
       targets: { mode: 'all' },
       trigger: { type: 'join', cooldownMs: 0 },
       stopWhen: [],
@@ -94,29 +96,38 @@
       defaultDelayMs: 1000,
       maxRuntimeMs: null,
       steps: [
+        // Wait for player to settle after server spawn
         { type: 'wait', ms: 1500, jitterMs: 500 },
+        // Send AFK command
         { type: 'chat', message: '/afk' }
       ]
     }),
-    'timer-look': () => ({
-      name: 'Timer anti-AFK look-around',
-      enabled: true,
+    // 2. Anti-AFK look-around every 60 s: Subtle camera motion to prevent idle kick
+    'anti-afk-look': () => ({
+      name: 'Anti-AFK look-around every 60 s',
+      description: 'Periodically turns the player view slightly every 60 seconds to avoid idle disconnects.',
+      enabled: false,
       targets: { mode: 'all' },
-      trigger: { type: 'timer', intervalMs: 45000, jitterMs: 5000 },
+      trigger: { type: 'timer', intervalMs: 60000, jitterMs: 5000 },
       stopWhen: [],
       concurrency: 'skip',
       onError: 'continue',
       defaultDelayMs: 500,
       maxRuntimeMs: null,
       steps: [
+        // Turn view slightly to the right
         { type: 'look', mode: 'relative', yaw: 0.35, pitch: 0 },
+        // Pause briefly
         { type: 'wait', ms: 400 },
+        // Return view back to original orientation
         { type: 'look', mode: 'relative', yaw: -0.35, pitch: 0 }
       ]
     }),
-    'hunger-eat': () => ({
+    // 3. Auto-eat when hunger < 14: Equips food and consumes it
+    'auto-eat': () => ({
       name: 'Auto-eat when hunger < 14',
-      enabled: true,
+      description: 'Selects food by name, holds right-click to eat when hunger drops below 14, then releases.',
+      enabled: false,
       targets: { mode: 'all' },
       trigger: { type: 'hungerBelow', below: 14 },
       stopWhen: [],
@@ -125,15 +136,21 @@
       defaultDelayMs: 250,
       maxRuntimeMs: null,
       steps: [
+        // Equip food into main hand
         { type: 'holdItem', name: 'cooked_beef' },
+        // Hold right-click to eat
         { type: 'rightClick', action: 'hold' },
+        // Vanilla eating duration (1.61s) with safe margin
         { type: 'wait', ms: 1800 },
+        // Release right-click
         { type: 'rightClick', action: 'release' }
       ]
     }),
+    // 4. Inventory full → deposit to chest: Stores items when bag is filled
     'inv-deposit': () => ({
-      name: 'Inventory full → deposit',
-      enabled: true,
+      name: 'Inventory full → deposit to chest',
+      description: 'When all inventory slots fill up, deposits items to a chest and sends a notification.',
+      enabled: false,
       targets: { mode: 'all' },
       trigger: { type: 'inventoryFull' },
       stopWhen: [],
@@ -142,13 +159,17 @@
       defaultDelayMs: 500,
       maxRuntimeMs: null,
       steps: [
+        // Deposit inventory items (starting at slot 9) into the open container
         { type: 'deposit', select: { slot: 9 }, count: 64 },
-        { type: 'notify', message: 'Deposited full inventory stack.', desktop: true, webhook: false }
+        // Notify desktop of the deposit event
+        { type: 'notify', message: 'Inventory full: deposited items to chest.', desktop: true, webhook: false }
       ]
     }),
-    'kick-reconnect': () => ({
-      name: 'Disconnect → notify & reconnect',
-      enabled: true,
+    // 5. Kick/disconnect → notify: Desktop alert on unexpected disconnect
+    'kick-notify': () => ({
+      name: 'Kick/disconnect → notify',
+      description: 'Sends a desktop notification alert whenever the account is disconnected or kicked.',
+      enabled: false,
       targets: { mode: 'all' },
       trigger: { type: 'disconnected' },
       stopWhen: [],
@@ -157,9 +178,101 @@
       defaultDelayMs: 500,
       maxRuntimeMs: null,
       steps: [
-        { type: 'notify', message: 'Account disconnected, reconnecting in 10s…', desktop: true, webhook: false },
-        { type: 'wait', ms: 10000 },
-        { type: 'reconnect', delayMs: 1000 }
+        // Send desktop notification alert
+        { type: 'notify', message: 'Account was disconnected or kicked from the server.', desktop: true, webhook: false }
+      ]
+    }),
+    // 6. Death → wait then /home: Respawn sequence returning to home base
+    'death-home': () => ({
+      name: 'Death → wait then /home',
+      description: 'On respawn after death, waits 2 seconds and runs /home to return to base.',
+      enabled: false,
+      targets: { mode: 'all' },
+      trigger: { type: 'death' },
+      stopWhen: [],
+      concurrency: 'skip',
+      onError: 'continue',
+      defaultDelayMs: 500,
+      maxRuntimeMs: null,
+      steps: [
+        // Wait 2 seconds for server respawn sequence to complete
+        { type: 'wait', ms: 2000 },
+        // Teleport back to safe home location
+        { type: 'chat', message: '/home' }
+      ]
+    }),
+    // 7. Chat trigger "{player} has invited you" → /tpaccept: Auto-accept teleport invites
+    'chat-tpaccept': () => ({
+      name: 'Chat trigger "{player} has invited you" → /tpaccept',
+      description: 'Detects an incoming teleport invite in chat and automatically responds with /tpaccept.',
+      enabled: false,
+      targets: { mode: 'all' },
+      trigger: { type: 'chat', match: 'glob', pattern: '*{player} has invited you*' },
+      stopWhen: [],
+      concurrency: 'skip',
+      onError: 'continue',
+      defaultDelayMs: 500,
+      maxRuntimeMs: null,
+      steps: [
+        // Wait briefly before accepting teleport invite
+        { type: 'wait', ms: 1000 },
+        // Accept the teleport request
+        { type: 'chat', message: '/tpaccept' }
+      ]
+    }),
+    // 8. Scheduled daily message: Recurring daily announcement or check-in
+    'scheduled-daily': () => ({
+      name: 'Scheduled daily message',
+      description: 'Sends a scheduled message or command every day at a specific wall-clock time (12:00).',
+      enabled: false,
+      targets: { mode: 'all' },
+      trigger: { type: 'schedule', at: '12:00' },
+      stopWhen: [],
+      concurrency: 'skip',
+      onError: 'continue',
+      defaultDelayMs: 500,
+      maxRuntimeMs: null,
+      steps: [
+        // Broadcast scheduled message to server
+        { type: 'chat', message: 'Daily check-in from AFK Desk' }
+      ]
+    }),
+    // 9. Window opens "Shop" → click item by name then close: Automated GUI interaction
+    'window-shop-click': () => ({
+      name: 'Window opens "Shop" → click item by name then close',
+      description: 'When a server menu titled "Shop" opens, clicks the item named "diamond" and closes the menu.',
+      enabled: false,
+      targets: { mode: 'all' },
+      trigger: { type: 'windowOpen', title: 'Shop' },
+      stopWhen: [],
+      concurrency: 'skip',
+      onError: 'continue',
+      defaultDelayMs: 500,
+      maxRuntimeMs: null,
+      steps: [
+        // Click the diamond item in the opened Shop GUI
+        { type: 'useGui', select: { name: 'diamond' }, click: 'left' },
+        // Wait briefly for transaction to register
+        { type: 'wait', ms: 500 },
+        // Close the shop window
+        { type: 'closeGui' }
+      ]
+    }),
+    // 10. Repeat sell loop with /sell all every 5 min: Timer-based farm selling loop
+    'repeat-sell-loop': () => ({
+      name: 'Repeat sell loop with /sell all every 5 min',
+      description: 'Sends the /sell all command every 5 minutes (300 seconds) on a timer loop.',
+      enabled: false,
+      targets: { mode: 'all' },
+      trigger: { type: 'timer', intervalMs: 300000, jitterMs: 5000 },
+      stopWhen: [],
+      concurrency: 'skip',
+      onError: 'continue',
+      defaultDelayMs: 500,
+      maxRuntimeMs: null,
+      steps: [
+        // Sell all farm output
+        { type: 'chat', message: '/sell all' }
       ]
     })
   })
@@ -238,10 +351,17 @@
       el['close-automation']?.addEventListener('click', () => el['automation-dialog']?.close())
       el['macro-library-search']?.addEventListener('input', renderLibraryList)
       el['macro-new-btn']?.addEventListener('click', () => createNewMacro())
+      el['macro-templates-btn']?.addEventListener('click', openTemplatesDialog)
+      el['close-macro-templates']?.addEventListener('click', closeTemplatesDialog)
       el['macro-template-picker']?.addEventListener('change', (event) => {
         const key = event.target.value
         event.target.value = ''
-        if (key && TEMPLATES[key]) createNewMacro(TEMPLATES[key]())
+        if (key && TEMPLATES[key]) {
+          const tpl = TEMPLATES[key]()
+          tpl.enabled = false
+          createNewMacro(tpl)
+          toast(`Template "${tpl.name}" added (disabled). Review and enable when ready.`)
+        }
       })
       el['macro-duplicate-btn']?.addEventListener('click', () => void duplicateSelectedMacro())
       el['macro-delete-btn']?.addEventListener('click', () => void deleteSelectedMacro())
@@ -419,12 +539,70 @@
       placeholder.value = ''
       placeholder.textContent = 'Templates…'
       const options = Object.entries(TEMPLATES).map(([key, make]) => {
+        const tpl = make()
         const opt = document.createElement('option')
         opt.value = key
-        opt.textContent = make().name
+        opt.textContent = tpl.name
+        opt.title = tpl.description || ''
         return opt
       })
       picker.replaceChildren(placeholder, ...options)
+    }
+
+    function openTemplatesDialog() {
+      renderTemplatesGrid()
+      el['macro-templates-dialog']?.showModal()
+    }
+
+    function closeTemplatesDialog() {
+      el['macro-templates-dialog']?.close()
+    }
+
+    function renderTemplatesGrid() {
+      const grid = el['macro-templates-grid']
+      if (!grid) return
+      grid.replaceChildren(...Object.entries(TEMPLATES).map(([key, make]) => {
+        const tpl = make()
+        const card = document.createElement('div')
+        card.className = 'macro-template-card'
+
+        const header = document.createElement('div')
+        header.className = 'macro-template-card-header'
+
+        const title = document.createElement('strong')
+        title.className = 'macro-template-card-title'
+        title.textContent = tpl.name
+
+        const desc = document.createElement('p')
+        desc.className = 'macro-template-card-desc'
+        desc.textContent = tpl.description || ''
+
+        header.append(title, desc)
+
+        const footer = document.createElement('div')
+        footer.className = 'macro-template-card-footer'
+
+        const badge = document.createElement('span')
+        badge.className = 'macro-template-badge'
+        const triggerType = tpl.trigger?.type || 'manual'
+        badge.textContent = `Trigger: ${TRIGGER_TYPES[triggerType]?.label || triggerType}`
+
+        const useBtn = document.createElement('button')
+        useBtn.type = 'button'
+        useBtn.className = 'button primary compact-btn'
+        useBtn.textContent = 'Use template'
+        useBtn.addEventListener('click', () => {
+          closeTemplatesDialog()
+          const copy = make()
+          copy.enabled = false
+          createNewMacro(copy)
+          toast(`Template "${copy.name}" added (disabled). Review and enable when ready.`)
+        })
+
+        footer.append(badge, useBtn)
+        card.append(header, footer)
+        return card
+      }))
     }
 
     function syncEditionCapabilities() {
@@ -670,7 +848,7 @@
     }
 
     function createNewMacro(templateData = null) {
-      const base = templateData || {
+      const base = templateData ? { ...templateData, enabled: false } : {
         id: newMacroId(),
         name: `Macro ${macros.length + 1}`,
         enabled: true,
@@ -2534,5 +2712,11 @@
     }
   }
 
-  window.afkMacroEditor = { createMacroEditor }
+  const exposed = { createMacroEditor, TEMPLATES }
+  if (typeof window !== 'undefined') {
+    window.afkMacroEditor = exposed
+  }
+  if (typeof module === 'object' && module.exports) {
+    module.exports = exposed
+  }
 })()
