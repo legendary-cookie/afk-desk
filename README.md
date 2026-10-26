@@ -144,8 +144,8 @@ See [mobile/README.md](mobile/README.md) and [mobile/BUILDING.md](mobile/BUILDIN
 - **Released — `0.10.0-beta.9` (Windows Pre-release)**: Lightweight on-demand 3D/map POV view, workspace themes, smart proxy pool, experimental Bedrock Edition support, persistent event logs, and initial automations UI.
 - **In Development — `0.10.0` Stability Milestone**: Ongoing reliability, storage safety, and regression hardening across desktop and mobile engines.
 - **Coming in `0.11` (In Development)**:
-  - **Macro Engine v2** ([design doc](docs/design/macro-engine.md) · [user guide preview](docs/user-guide/macros.md)): Shared macro library with account/tag targets, edge-triggered events (`join`, `worldChange`, `timer`, `schedule`, `chat` globs, `healthBelow`, `inventoryFull`, `windowOpen`), cooperative cancellation, rate budgets, and strict item-lock enforcement.
-  - **Outbound Discord & Telegram Notifications** ([contract](desktop/electron/notify/contract.cjs) · [user guide preview](docs/user-guide/notifications.md)): Encrypted, rate-limited, outbound-only Discord webhook and Telegram bot alerts for disconnects, kicks, bans, deaths, low health, full inventory, and macro events.
+  - **Macro Engine v2** ([design doc](https://github.com/legendary-cookie/afk-desk/blob/feature/macro-engine/docs/design/macro-engine.md) · [user guide preview](docs/user-guide/macros.md)): Shared macro library with account/tag targets, edge-triggered events (`join`, `worldChange`, `timer`, `schedule`, `chat` globs, `healthBelow`, `inventoryFull`, `windowOpen`), cooperative cancellation, rate budgets, and strict item-lock enforcement.
+  - **Outbound Discord & Telegram Notifications** ([contract](https://github.com/legendary-cookie/afk-desk/blob/feature/macro-engine/desktop/electron/notify/contract.cjs) · [user guide preview](docs/user-guide/notifications.md)): Encrypted, rate-limited, outbound-only Discord webhook and Telegram bot alerts for disconnects, kicks, bans, deaths, low health, full inventory, and macro events.
 
 See [CHANGELOG.md](CHANGELOG.md) and [HISTORY.md](HISTORY.md) for detailed release history.
 

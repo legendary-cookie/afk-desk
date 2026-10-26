@@ -1,7 +1,7 @@
 # Notifications (Coming in 0.11 / In Development)
 
 > **Status: Coming in 0.11 / In development.**
-> Windows `0.10.0-beta.9` supports local desktop notifications (in **Settings → Desktop notifications** and per-account **Alerts**). Outbound **Discord webhook** and **Telegram bot** channels are currently in development for `0.11` (see [`desktop/electron/notify/contract.cjs`](../../desktop/electron/notify/contract.cjs)) and are not yet in a published release.
+> Windows `0.10.0-beta.9` supports local desktop notifications (in **Settings → Desktop notifications** and per-account **Alerts**). Outbound **Discord webhook** and **Telegram bot** channels are currently in development for `0.11` (see [`desktop/electron/notify/contract.cjs`](https://github.com/legendary-cookie/afk-desk/blob/feature/macro-engine/desktop/electron/notify/contract.cjs)) and are not yet in a published release.
 
 ## How outbound notifications work
 

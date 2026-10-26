@@ -1,7 +1,7 @@
 # Macros (Coming in 0.11 / In Development)
 
 > **Status: Coming in 0.11 / In development.**
-> Windows `0.10.0-beta.9` includes an early per-account **Automations (beta)** dialog for basic workflows. The declarative **Macro Engine v2** described on this page is currently in development on the `feature/macro-engine` branch (see [`docs/design/macro-engine.md`](../design/macro-engine.md)) and is not yet in a published release.
+> Windows `0.10.0-beta.9` includes an early per-account **Automations (beta)** dialog for basic workflows. The declarative **Macro Engine v2** described on this page is currently in development on the `feature/macro-engine` branch (see [`docs/design/macro-engine.md`](https://github.com/legendary-cookie/afk-desk/blob/feature/macro-engine/docs/design/macro-engine.md)) and is not yet in a published release.
 
 ![Current Automations beta dialog in 0.10.0-beta.9](../images/automation-dialog.png)
 
