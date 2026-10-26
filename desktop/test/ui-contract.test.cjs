@@ -518,3 +518,14 @@ test('macro library starter templates include at least 10 valid, safe, disabled 
   }
 })
 
+
+test('renderer element-id list has no holes and every id exists in index.html', () => {
+  const fs = require('node:fs')
+  const path = require('node:path')
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer.js'), 'utf8')
+  const body = src.match(/const el = Object\.fromEntries\(\[([\s\S]*?)\]\.map\(\(id\)/)[1]
+  assert.doesNotMatch(body, /,\s*,/, 'empty array slot in el id list (merge artifact)')
+  const html = fs.readFileSync(path.join(__dirname, '..', 'src', 'index.html'), 'utf8')
+  const missing = [...body.matchAll(/'([\w-]+)'/g)].map((m) => m[1]).filter((id) => !html.includes(`id="${id}"`))
+  assert.deepEqual(missing, [])
+})
