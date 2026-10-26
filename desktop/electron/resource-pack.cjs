@@ -3,6 +3,7 @@ const crypto = require('crypto')
 const fs = require('node:fs')
 const path = require('node:path')
 const zlib = require('node:zlib')
+const { fetchWithPolicy } = require('./net-policy.cjs')
 
 const MAX_PACK_BYTES = 100 * 1024 * 1024
 const MAX_JSON_BYTES = 2 * 1024 * 1024
@@ -12,9 +13,11 @@ const MAX_PARSED_JSON_BYTES = 100 * 1024 * 1024
 const DOWNLOAD_TIMEOUT_MS = 30_000
 
 class ResourcePackLoader {
-  constructor({ fetchImpl = globalThis.fetch, cacheDir = '', maxPackBytes = MAX_PACK_BYTES,
+  constructor({ fetchImpl = globalThis.fetch, lookup, allowPrivatePackHosts = false, cacheDir = '', maxPackBytes = MAX_PACK_BYTES,
     downloadTimeoutMs = DOWNLOAD_TIMEOUT_MS, maxCacheEntries = 8, maxCacheBytes = 300 * 1024 * 1024 } = {}) {
     this.fetchImpl = fetchImpl
+    this.lookup = lookup
+    this.allowPrivatePackHosts = allowPrivatePackHosts === true
     this.cacheDir = cacheDir
     this.maxPackBytes = boundedLimit(maxPackBytes, MAX_PACK_BYTES)
     this.downloadTimeoutMs = boundedLimit(downloadTimeoutMs, DOWNLOAD_TIMEOUT_MS)
@@ -24,15 +27,16 @@ class ResourcePackLoader {
     this.activeDownloads = 0
   }
 
-  async load(urlValue, expectedHash = '') {
+  async load(urlValue, expectedHash = '', { allowPrivateHosts = this.allowPrivatePackHosts } = {}) {
     const url = normalizePackUrl(urlValue)
     const hash = normalizeHash(expectedHash)
-    const key = `${url.href}|${hash}`
+    const allowPrivate = allowPrivateHosts === true
+    const key = `${url.href}|${hash}|${allowPrivate ? 'private' : 'public'}`
     if (this.cache.has(key)) return this.cache.get(key)
     if (this.activeDownloads >= 4) throw new Error('Too many resource pack downloads in progress. Try again shortly.')
     while (this.cache.size >= this.maxCacheEntries) this.cache.delete(this.cache.keys().next().value)
     this.activeDownloads++
-    const task = this.#downloadAndParse(url, hash).catch((error) => {
+    const task = this.#downloadAndParse(url, hash, allowPrivate).catch((error) => {
       if (this.cache.get(key) === task) this.cache.delete(key)
       throw error
     }).finally(() => { this.activeDownloads-- })
@@ -40,7 +44,7 @@ class ResourcePackLoader {
     return task
   }
 
-  async #downloadAndParse(url, expectedHash) {
+  async #downloadAndParse(url, expectedHash, allowPrivateHosts = false) {
     const controller = new AbortController()
     const timeoutError = new Error('Resource pack download timed out.')
     let rejectAbort
@@ -51,7 +55,7 @@ class ResourcePackLoader {
     let response
     let reader
     try {
-      response = await Promise.race([Promise.resolve().then(() => this.fetchImpl(url, { signal: controller.signal, redirect: 'follow' })), aborted])
+      response = await Promise.race([Promise.resolve().then(() => fetchWithPolicy(url, { fetchImpl: this.fetchImpl, lookup: this.lookup, allowPrivateHosts, signal: controller.signal })), aborted])
       if (!response?.ok) throw new Error(`Resource pack download failed with HTTP ${response?.status || 'unknown'}.`)
       const length = Number(response.headers?.get?.('content-length'))
       if (Number.isFinite(length) && length > this.maxPackBytes) throw new Error('Resource pack exceeds the download limit (maximum 100 MB).')
@@ -411,17 +415,36 @@ function firstBoolean(value) {
   return value?.flags?.[0] === true
 }
 
-function flattenComponentText(value) {
-  if (typeof value === 'string') {
-    try { return flattenComponentText(JSON.parse(value)) } catch { return value }
+// Iterative walk bounded in depth and node count: component trees come from the server.
+const MAX_COMPONENT_DEPTH = 64
+const MAX_COMPONENT_NODES = 4096
+
+function flattenComponentText(root) {
+  const stack = [{ value: root, depth: 0 }]
+  let out = ''
+  let nodes = 0
+  while (stack.length) {
+    const { value, depth } = stack.pop()
+    if (++nodes > MAX_COMPONENT_NODES) break
+    if (depth > MAX_COMPONENT_DEPTH) continue
+    if (typeof value === 'string') {
+      let parsed
+      try { parsed = JSON.parse(value) } catch { out += value; continue }
+      stack.push({ value: parsed, depth: depth + 1 })
+      continue
+    }
+    if (Array.isArray(value)) {
+      for (let index = value.length - 1; index >= 0; index--) stack.push({ value: value[index], depth: depth + 1 })
+      continue
+    }
+    if (!value || typeof value !== 'object') continue
+    if (value.type === 'string') { stack.push({ value: value.value, depth: depth + 1 }); continue }
+    const source = value.type === 'compound' && value.value ? value.value : value
+    // Pre-order: text first, then extra.
+    stack.push({ value: source.extra?.value?.value ?? source.extra?.value ?? source.extra ?? [], depth: depth + 1 })
+    stack.push({ value: source.text?.value ?? source.text ?? '', depth: depth + 1 })
   }
-  if (Array.isArray(value)) return value.map(flattenComponentText).join('')
-  if (!value || typeof value !== 'object') return ''
-  if (value.type === 'string') return flattenComponentText(value.value)
-  const source = value.type === 'compound' && value.value ? value.value : value
-  const text = flattenComponentText(source.text?.value ?? source.text ?? '')
-  const extra = source.extra?.value?.value ?? source.extra?.value ?? source.extra ?? []
-  return text + flattenComponentText(extra)
+  return out
 }
 
 function pngDimensions(buffer) {
