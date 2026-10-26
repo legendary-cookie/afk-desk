@@ -9,6 +9,26 @@
 // Node 20+ APIs (Promise.withResolvers, Array.prototype.toSorted, Set methods,
 // Object.groupBy, etc.) or ESM.
 
+// Resolved during Stage 1 (lead-reviewed; normative):
+// - Time windows are half-open: an event exactly `window` ms after the start is outside it.
+//   All matcher timing uses the injected now(); BotEvent.at is informational.
+// - join: once per sessionId; also suppressed if another join was recorded for the account
+//   < joinDuplicateWindowMs earlier (auto-reconnect waits >= 5 s, so real joins are unaffected).
+// - Edge triggers (healthBelow, hungerBelow, inventoryFull) start ARMED: a first telemetry
+//   already past the threshold fires. inventoryChanged never fires on a session's first telemetry.
+// - Cooldowns are per (macro, account) and survive resetAccount/new sessions.
+// - worldChange debounce is leading-edge; the first values of a session are a baseline only.
+// - Glob: `*` may match empty text; `{name}` needs >= 1 char; shortest match; no escape for a
+//   literal `*` (use contains). Chat matching never builds a RegExp from user input.
+// - nextScheduleTime's 3rd argument may be { tzOffsetMinutesAt(ms) } (testable DST); default local.
+// - Condition 'online' takes an optional boolean value (false = offline).
+// - origin.fromV1 = { accountId, automationId } (automationId needed when ids collided).
+//   origin.v2Only is set on any lossy migration; toV1 returns null for those.
+// - Migrated macros use defaultDelayMs 0 (v1 had no inter-step delay) and onError 'continue'.
+// - maxStepsPerMacro counts the whole step tree; an empty steps array is a blocking validation error.
+// - Model extras: migrateV1 returns { library, migratedAccountIds, warnings } and accepts { now };
+//   importMacros accepts { accountIds, editionOf }. Matcher extra: rejectedMacros().
+
 const SCHEMA_VERSION = 2
 
 const LIMITS = Object.freeze({
