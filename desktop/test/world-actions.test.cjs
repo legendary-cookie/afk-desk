@@ -20,6 +20,38 @@ function fixture(t) {
   return {manager, bot}
 }
 
+test('display and armor stand snapshots carry plain hologram text, never raw type labels', t => {
+  const { manager, bot } = fixture(t)
+  bot.registry = require('minecraft-data')('1.21.4')
+  const keys = bot.registry.entitiesByName.text_display.metadataKeys
+  const metadata = []
+  metadata[keys.indexOf('text')] = { type: 'compound', value: { text: { type: 'string', value: '§aWelcome ' }, extra: { type: 'list', value: { type: 'compound', value: [{ text: { type: 'string', value: 'Traveler' } }] } } } }
+  bot.entities = {
+    2: { id: 2, name: 'text_display', displayName: 'Text Display', type: 'other', metadata, position: new Vec3(0, 65, -2) },
+    3: { id: 3, name: 'minecraft:armor_stand', customName: '{"text":"§bShop","extra":[{"text":" keeper"}]}', position: new Vec3(1, 65, -2) },
+    4: { id: 4, name: 'item_display', displayName: 'Item Display', position: new Vec3(2, 65, -2) },
+    5: { id: 5, name: 'text_display', displayName: 'Text Display', position: new Vec3(3, 65, -2) }
+  }
+  const entities = manager.worldSnapshot('world').entities
+  assert.equal(entities.find(e => e.id === 2).label, 'Welcome Traveler')
+  assert.equal(entities.find(e => e.id === 3).label, 'Shop keeper')
+  assert.equal(entities.find(e => e.id === 4).label, '')
+  assert.equal(entities.find(e => e.id === 5).label, '')
+})
+
+test('extended snapshot radius reaches eight chunks and caps dense blocks near the bot first', t => {
+  const { manager, bot } = fixture(t)
+  bot.blockAt = position => ({ position, name: 'stone', boundingBox: 'block' })
+  const snapshot = manager.worldSnapshot('world', 128)
+  assert.equal(snapshot.radius, 128)
+  assert.equal(snapshot.renderDistance, 128)
+  assert.equal(snapshot.blocks.length, 16000)
+  for (const [x, z] of [[-2, -2], [2, 2], [-2, 2], [2, -2]]) assert.ok(snapshot.blocks.some(b => b.x === x && b.z === z && b.y === 65))
+  bot.blockAt = position => Math.abs(position.x) === 100 && position.z === 0 && position.y === 64 ? { position, name: 'stone', boundingBox: 'block' } : null
+  bot.emit('blockUpdate', null, { position: new Vec3(100, 64, 0) })
+  assert.ok(manager.worldSnapshot('world', 128).blocks.some(b => b.x === 100))
+})
+
 test('dense snapshots include every bounded cell without one-sided truncation and carry shape/held data', t => {
   const {manager, bot} = fixture(t)
   bot.blockAt = position => ({position, name: 'stone_slab', boundingBox: 'block', shapes: [[0, 0, 0, 1, 0.5, 1]], stateId: 100})

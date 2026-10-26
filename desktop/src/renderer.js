@@ -27,6 +27,7 @@ let povAnimationFrame = null
 let povLastAnimationAt = 0
 let povLookAnimationFrame = null
 let povLookDelta = { accountId: null, yaw: 0, pitch: 0 }
+let povDrag = null
 
 const ENCHANTMENT_DETAILS = {
   aqua_affinity: [1, 'Speeds up underwater mining.'],
@@ -104,7 +105,7 @@ const el = Object.fromEntries([
   'chat-form', 'chat-message', 'chat-suggestions', 'macro-pad', 'manage-macros', 'macro-dialog', 'close-macro-dialog', 'macro-editor', 'macro-rows', 'add-macro', 'cancel-macros', 'save-macros', 'account-dialog', 'account-form', 'dialog-title', 'account-id', 'identity-id', 'profile-name', 'edition', 'label',
   'username', 'host', 'port', 'version', 'modded-fields', 'mod-loader', 'mod-handshake', 'client-brand', 'mod-list', 'mod-channels', 'connect-on-startup', 'proxy-mode', 'proxy-enabled', 'proxy-fields', 'proxy-type', 'proxy-host', 'proxy-port', 'proxy-username', 'proxy-password', 'proxy-password-help', 'proxy-clear-password', 'share-proxy-pool', 'proxy-label', 'proxy-max-sessions', 'alert-disconnect', 'alert-errors', 'alert-health', 'anti-afk', 'anti-afk-min-delay', 'anti-afk-max-delay', 'anti-afk-duration', 'anti-afk-look-degrees', 'anti-afk-walk-distance', 'anti-afk-jump', 'anti-afk-look', 'anti-afk-sneak', 'anti-afk-swing', 'anti-afk-walk', 'environmental-movement', 'auto-reconnect', 'auto-reconnect-delay', 'auto-reconnect-backoff', 'auto-reconnect-max-delay', 'auto-reconnect-rate-limit-delay', 'auto-reconnect-max', 'connect-timeout', 'reconnect-reset-delay', 'auto-deposit-setting', 'auto-deposit-range', 'join-message', 'server-change-message',
   'message-delay', 'form-error', 'delete-account', 'duplicate-profile', 'login-dialog', 'login-code', 'open-login-private', 'open-login',
-  'close-login', 'ui-scale', 'ui-scale-value', 'pov-settings-refresh', 'pov-settings-fps', 'pov-settings-radius', 'pov-settings-columns', 'pov-max-feeds', 'pov-settings-view-mode', 'pov-show-hud', 'column-resizer', 'inventory-resizer', 'server-window-dialog', 'server-window-title', 'server-window-stage', 'server-window-art', 'server-window-grid', 'close-server-window', 'logs-dialog', 'close-logs', 'log-filter', 'refresh-logs', 'clear-persistent-logs', 'persistent-log-view',
+  'close-login', 'ui-scale', 'ui-scale-value', 'pov-settings-refresh', 'pov-settings-fps', 'pov-settings-radius', 'pov-settings-render-distance', 'pov-settings-columns', 'pov-max-feeds', 'pov-settings-view-mode', 'pov-show-hud', 'column-resizer', 'inventory-resizer', 'server-window-dialog', 'server-window-title', 'server-window-stage', 'server-window-art', 'server-window-grid', 'close-server-window', 'logs-dialog', 'close-logs', 'log-filter', 'refresh-logs', 'clear-persistent-logs', 'persistent-log-view',
   'automation-dialog', 'close-automation', 'macro-watch-account', 'macro-live-chip', 'macro-run-now', 'macro-stop-run', 'macro-library-pane', 'macro-library-search', 'macro-new-btn', 'macro-template-picker', 'macro-duplicate-btn', 'macro-delete-btn', 'macro-import-btn', 'macro-export-btn', 'macro-import-file', 'macro-json-panel', 'macro-json-label', 'macro-json-io', 'macro-json-error', 'macro-json-confirm-import', 'macro-json-copy', 'macro-json-close', 'macro-library-list', 'macro-detail-pane', 'macro-tab-editor', 'macro-tab-runs', 'macro-runs-badge', 'macro-undo-btn', 'macro-redo-btn', 'macro-close-editor-btn', 'macro-save-btn', 'macro-validation-banner', 'macro-empty-editor', 'macro-editor-view', 'macro-trigger-card', 'macro-editor-enabled-wrap', 'macro-editor-enabled', 'macro-name-input', 'macro-trigger-type', 'macro-trigger-cooldown', 'macro-trigger-fields', 'macro-trigger-error', 'macro-targets-card', 'macro-target-mode', 'macro-concurrency', 'macro-on-error', 'macro-default-delay', 'macro-max-runtime', 'macro-target-accounts-list', 'macro-target-tags-box', 'macro-target-tags-input', 'macro-target-tags-suggestions', 'macro-targets-error', 'macro-add-stop-cond', 'macro-stop-when-list', 'macro-steps-card', 'macro-steps-count', 'macro-open-step-picker', 'macro-step-picker', 'macro-step-list', 'macro-steps-error', 'macro-runs-view', 'macro-runs-caption', 'macro-refresh-runs', 'macro-runs-list',
   'notifications-panel', 'add-notification-channel', 'notification-channel-list', 'notification-channel-dialog', 'notification-channel-form', 'notification-channel-dialog-title', 'close-notification-channel', 'notify-channel-id', 'notify-channel-type', 'notify-channel-name', 'notify-channel-enabled', 'notify-discord-fields', 'notify-webhook-url', 'notify-telegram-fields', 'notify-bot-token', 'notify-chat-id', 'notify-events-grid', 'notify-account-mode', 'notify-accounts-checklist', 'notify-include-timestamp', 'notify-channel-error', 'delete-notification-channel', 'test-notification-channel', 'cancel-notification-channel', 'save-notification-channel',
   'pov-dialog', 'close-pov', 'pov-grid', 'pov-search', 'pov-columns', 'pov-refresh', 'pov-fps', 'pov-view-mode', 'pov-pause', 'pov-back-grid', 'pov-radius', 'pov-x', 'pov-y', 'pov-z', 'pov-detail', 'item-tooltip', 'toast-region'
@@ -1667,6 +1668,7 @@ async function openSettingsDialog() {
     el['pov-settings-refresh'].value = String(settings.povRefreshMs || 1500)
     el['pov-settings-fps'].value = String(settings.povFrameRate || 30)
     el['pov-settings-radius'].value = settings.povRadius || 6
+    el['pov-settings-render-distance'].value = settings.povRenderDistance || 1
     el['pov-settings-columns'].value = settings.povColumns || 3
     el['pov-max-feeds'].value = settings.povMaxFeeds || 9
     el['pov-settings-view-mode'].value = settings.povViewMode || 'perspective'
@@ -1692,6 +1694,7 @@ async function saveSettings() {
       ,povRefreshMs: Number(el['pov-settings-refresh'].value)
       ,povFrameRate: Number(el['pov-settings-fps'].value)
       ,povRadius: Number(el['pov-settings-radius'].value)
+      ,povRenderDistance: Number(el['pov-settings-render-distance'].value)
       ,povColumns: Number(el['pov-settings-columns'].value)
       ,povMaxFeeds: Number(el['pov-max-feeds'].value)
       ,povViewMode: el['pov-settings-view-mode'].value
@@ -2140,7 +2143,8 @@ async function refreshPov() {
   if (!el['pov-dialog'].open || povPaused || document.hidden || povRefreshActive) return
   povRefreshActive = true
   const accounts = visiblePovAccounts().filter((account) => ['online', 'connected'].includes(getStatus(account.id).status))
-  const results = await Promise.allSettled(accounts.map((account) => api.getWorldSnapshot(account.id, Number(el['pov-radius'].value), Number(el['pov-refresh'].value))))
+  const radius = povMath.snapshotRadius(state.settings, el['pov-view-mode'].value, el['pov-radius'].value)
+  const results = await Promise.allSettled(accounts.map((account) => api.getWorldSnapshot(account.id, radius, Number(el['pov-refresh'].value))))
   results.forEach((result, index) => { if (result.status === 'fulfilled') povSnapshots.set(accounts[index].id, result.value) })
   povRefreshActive = false
   const latest = povSnapshots.get(povFocusId || state.selectedId); if (latest?.position && !el['pov-x'].value) setPovTarget(latest.position)
@@ -2185,6 +2189,7 @@ function drawMapPov(snapshot, canvas) {
     context.fillRect(x - scale / 2, y - scale / 2, Math.max(2, scale - 1), Math.max(2, scale - 1))
   }
   for (const entity of snapshot.entities || []) {
+    if (!povMath.entityLabel(entity)) continue
     const x = centerX + (entity.x - snapshot.position.x) * scale
     const y = centerY + (entity.z - snapshot.position.z) * scale
     context.beginPath(); context.fillStyle = entity.type === 'player' ? '#f6c85f' : '#f16e74'; context.arc(x, y, 5, 0, Math.PI * 2); context.fill()
@@ -2198,12 +2203,18 @@ function selectPovTarget(event) {
   const canvas = event.currentTarget
   if (povPaused || document.pointerLockElement === canvas) return
   const accountId = canvas.dataset.accountId
-  if (accountId) { state.selectedId = accountId; povFocusId ||= accountId }
+  const focusChanged = povFocusId !== accountId
+  if (accountId) { state.selectedId = accountId; povFocusId = accountId }
   const position = JSON.parse(canvas.dataset.position || 'null')
   if (el['pov-view-mode'].value !== 'map') {
-    render(); renderPovGrid(); startPovPolling()
+    if (focusChanged) { releaseAllManualInputs(); releasePovActions(); render(); renderPovGrid(); startPovPolling() }
     const focusedCanvas = [...el['pov-grid'].querySelectorAll('canvas')].find((entry) => entry.dataset.accountId === accountId)
-    focusedCanvas?.focus(); focusedCanvas?.requestPointerLock?.()?.catch?.(() => toast('Mouse capture unavailable. Focus the feed for keyboard controls.', 'error'))
+    focusedCanvas?.focus()
+    try {
+      focusedCanvas?.requestPointerLock?.()?.catch?.(() => { el['pov-detail'].textContent = 'Mouse capture unavailable. Hold left mouse and drag to look; WASD moves.' })
+    } catch {
+      el['pov-detail'].textContent = 'Mouse capture unavailable. Hold left mouse and drag to look; WASD moves.'
+    }
     return
   }
   if (!position) return
@@ -2216,11 +2227,14 @@ function selectPovTarget(event) {
 }
 
 function handlePovMouseMove(event) {
-  const canvas = document.pointerLockElement
+  const locked = document.pointerLockElement
+  if (!locked && povDrag && !(event.buttons & 1)) povDrag = null
+  const canvas = locked || povDrag?.canvas
   const accountId = canvas?.closest?.('#pov-grid') ? canvas.dataset.accountId : null
-  if (!accountId || accountId !== povFocusId || povPaused || el['pov-view-mode'].value !== 'perspective') return
+  if (!accountId || accountId !== povFocusId || povPaused || !el['pov-dialog'].open || el['pov-view-mode'].value !== 'perspective') return
   povLookDelta.accountId = accountId
-  const delta = povMath.mouseLookDelta(event.movementX, event.movementY)
+  const delta = locked ? povMath.mouseLookDelta(event.movementX, event.movementY) : povMath.mouseLookDelta(event.clientX - povDrag.x, event.clientY - povDrag.y)
+  if (!locked) { povDrag.x = event.clientX; povDrag.y = event.clientY }
   povLookDelta.yaw += delta.yaw
   povLookDelta.pitch += delta.pitch
   if (!povLookAnimationFrame) povLookAnimationFrame = requestAnimationFrame(flushPovLookDelta)
@@ -2230,6 +2244,13 @@ function flushPovLookDelta() {
   povLookAnimationFrame = null
   const delta = povLookDelta; povLookDelta = { accountId: null, yaw: 0, pitch: 0 }
   if (!delta.accountId || (!delta.yaw && !delta.pitch)) return
+  // Match BotManager's radian limits and carry excess movement to subsequent frames.
+  const yaw = Math.max(-.7, Math.min(.7, delta.yaw)), pitch = Math.max(-.5, Math.min(.5, delta.pitch))
+  if (delta.yaw !== yaw || delta.pitch !== pitch) {
+    povLookDelta = { accountId: delta.accountId, yaw: delta.yaw - yaw, pitch: delta.pitch - pitch }
+    povLookAnimationFrame = requestAnimationFrame(flushPovLookDelta)
+  }
+  delta.yaw = yaw; delta.pitch = pitch
   for (const snapshots of [povSnapshots, povDisplaySnapshots]) {
     const snapshot = snapshots.get(delta.accountId)
     if (snapshot) snapshots.set(delta.accountId, { ...snapshot, yaw: Number(snapshot.yaw || 0) + delta.yaw, pitch: Math.max(-1.45, Math.min(1.45, Number(snapshot.pitch || 0) + delta.pitch)) })
@@ -2238,13 +2259,14 @@ function flushPovLookDelta() {
 }
 
 function handlePovPointerLockChange() {
+  povDrag = null
   const canvas = document.pointerLockElement
   const active = Boolean(canvas?.closest?.('#pov-grid'))
   el['pov-grid'].classList.toggle('pointer-locked', active)
   if (!active) { releaseAllManualInputs(povFocusId); releasePovActions() }
   el['pov-detail'].textContent = active
     ? 'Gameplay control active · WASD move · Space jumps · Mouse looks · Esc releases the mouse.'
-    : 'Click a perspective feed to capture the mouse and enable gameplay controls.'
+    : 'Click a perspective feed to capture the mouse, or hold left mouse and drag to look.'
 }
 
 function drawPerspectivePov(snapshot, canvas, account) {
@@ -2271,7 +2293,29 @@ function drawPerspectivePov(snapshot, canvas, account) {
 }
 
 function drawCrosshair(context, canvas) { const x = canvas.width / 2, y = canvas.height / 2, arm = Math.max(5, canvas.width / 96); context.save(); context.strokeStyle = '#ffffffdd'; context.lineWidth = Math.max(1, canvas.width / 480); context.beginPath(); context.moveTo(x - arm, y); context.lineTo(x + arm, y); context.moveTo(x, y - arm); context.lineTo(x, y + arm); context.stroke(); context.restore() }
-function drawPovEntities(context, snapshot, canvas) { const yaw = Number(snapshot.yaw) || 0, horizon = canvas.height * .5; context.font = `${Math.max(10, canvas.width / 48)}px sans-serif`; context.textAlign = 'center'; for (const entity of snapshot.entities || []) { const dx = Number(entity.x ?? entity.position?.x) - snapshot.position.x, dz = Number(entity.z ?? entity.position?.z) - snapshot.position.z, { side, depth } = povMath.projectHorizontal(dx, dz, yaw); if (depth <= .3) continue; const x = canvas.width / 2 + side / depth * canvas.width * .55, y = horizon - ((Number(entity.y ?? entity.position?.y) || snapshot.position.y) - snapshot.position.y) / depth * canvas.height * .55; if (x < 0 || x > canvas.width || y < 0 || y > canvas.height) continue; context.fillStyle = entity.type === 'player' ? '#ffe06a' : '#ff7479'; context.fillText(entity.username || entity.name || entity.type || 'entity', x, y) } }
+function drawPovEntities(context, snapshot, canvas) {
+  const basis = povMath.viewBasis(snapshot.yaw, snapshot.pitch)
+  const focal = canvas.height / (2 * Math.tan(Math.PI / 5))
+  const maximum = Number(snapshot.renderDistance) || Math.min(22, (snapshot.radius || 6) * 1.7)
+  const fontSize = Math.max(10, canvas.width / 48)
+  context.save(); context.font = `${fontSize}px sans-serif`; context.textAlign = 'center'
+  for (const entity of snapshot.entities || []) {
+    const label = povMath.entityLabel(entity)
+    if (!label) continue
+    const delta = { x: Number(entity.x ?? entity.position?.x) - snapshot.position.x, y: Number(entity.y ?? entity.position?.y) - snapshot.position.y - 1.62, z: Number(entity.z ?? entity.position?.z) - snapshot.position.z }
+    const dot = vector => delta.x * vector.x + delta.y * vector.y + delta.z * vector.z
+    const depth = dot(basis.forward)
+    const distance = Math.hypot(delta.x, delta.y, delta.z)
+    if (depth <= .3 || distance > maximum) continue
+    const x = canvas.width / 2 + dot(basis.right) / depth * focal
+    const y = canvas.height / 2 - dot(basis.up) / depth * focal
+    if (x < 0 || x > canvas.width || y < 0 || y > canvas.height) continue
+    context.globalAlpha = 1 - Math.min(.8, distance / maximum * .72)
+    context.fillStyle = ['text_display', 'armor_stand'].includes(entity.entityType) ? '#f3eedf' : entity.type === 'player' ? '#ffe06a' : '#ff7479'
+    label.split('\n').slice(0, 8).forEach((line, index) => context.fillText(line, x, y + index * fontSize * 1.2))
+  }
+  context.restore()
+}
 function drawPovHud(context, canvas, account) {
   const telemetry = state.telemetry.get(account.id) || {}, snapshot = povSnapshots.get(account.id) || {}
   const health = Math.max(0, Math.min(20, Number(telemetry.health ?? snapshot.health) || 0)), food = Math.max(0, Math.min(20, Number(telemetry.food ?? snapshot.food) || 0))
@@ -2300,6 +2344,13 @@ function drawPovHud(context, canvas, account) {
 
 function handlePovMouseDown(event) {
   const canvas = event.currentTarget
+  if (!povPaused && event.button === 0 && !document.pointerLockElement && el['pov-view-mode'].value === 'perspective') {
+    event.preventDefault()
+    selectPovTarget(event)
+    const focusedCanvas = [...el['pov-grid'].querySelectorAll('canvas')].find(entry => entry.dataset.accountId === canvas.dataset.accountId)
+    povDrag = { canvas: focusedCanvas || canvas, x: event.clientX, y: event.clientY }
+    return
+  }
   if (povPaused || document.pointerLockElement !== canvas || canvas.dataset.accountId !== povFocusId || ![0, 2].includes(event.button)) return
   event.preventDefault()
   const action = event.button === 0 ? 'dig-crosshair' : 'use-crosshair'
@@ -2308,8 +2359,9 @@ function handlePovMouseDown(event) {
   povHeldActions.add(key)
   api.worldAction(povFocusId, action, {}).catch(error => toast(cleanError(error), 'error'))
 }
-function releasePovMouse(event) { releasePovActions(event.button) }
+function releasePovMouse(event) { if (event.button === 0) povDrag = null; releasePovActions(event.button) }
 function releasePovActions(button = null, accountId = null) {
+  if (button === null && (!accountId || povDrag?.canvas.dataset.accountId === accountId)) povDrag = null
   if (button === null && (!accountId || povLookDelta.accountId === accountId)) {
     if (povLookAnimationFrame) cancelAnimationFrame(povLookAnimationFrame)
     povLookAnimationFrame = null; povLookDelta = { accountId: null, yaw: 0, pitch: 0 }

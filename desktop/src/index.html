@@ -349,7 +349,8 @@
           <div class="settings-visual-grid">
             <label class="field"><span>Refresh interval</span><select id="pov-settings-refresh"><option value="250">0.25 seconds</option><option value="500">0.5 seconds</option><option value="1000">1 second</option><option value="1500">1.5 seconds</option><option value="3000">3 seconds</option><option value="5000">5 seconds</option></select></label>
             <label class="field"><span>Display frame rate</span><select id="pov-settings-fps"><option value="30">30 FPS (lightweight)</option><option value="60">60 FPS (focused view)</option></select><small>Grid view is capped at 15 FPS to protect CPU; focused view uses this rate.</small></label>
-            <label class="field"><span>Render radius</span><input id="pov-settings-radius" type="number" min="2" max="12" value="6" /></label>
+            <label class="field"><span>Map radius (blocks)</span><input id="pov-settings-radius" type="number" min="2" max="12" value="6" /></label>
+            <label class="field"><span>POV render distance (chunks)</span><input id="pov-settings-render-distance" type="number" min="1" max="8" value="1" /><small>1 chunk = 16 blocks. Only loaded terrain within four blocks above/below the bot is sampled. Capped at 16,000 blocks per feed, nearest first; dense worlds may show less than the selected distance.</small></label>
             <label class="field"><span>Grid columns</span><input id="pov-settings-columns" type="number" min="1" max="4" value="3" /></label>
             <label class="field"><span>Maximum live feeds</span><input id="pov-max-feeds" type="number" min="1" max="12" value="9" /></label>
             <label class="field"><span>Default view</span><select id="pov-settings-view-mode"><option value="perspective">Perspective</option><option value="map">Top-down map</option></select></label>
@@ -711,7 +712,7 @@
         <div id="pov-grid" class="pov-grid" aria-live="polite"></div>
         <div class="beta-toolbar world-toolbar"><label>Radius <input id="pov-radius" type="number" min="2" max="12" value="6" /></label><label>X <input id="pov-x" type="number" step="1" /></label><label>Y <input id="pov-y" type="number" step="1" /></label><label>Z <input id="pov-z" type="number" step="1" /></label><button data-world-action="look-at" class="button secondary" type="button">Look</button><button data-world-action="walk-to" class="button secondary" type="button">Walk</button><button data-world-action="activate-block" class="button secondary" type="button">Use block</button><button data-world-action="dig-block" class="button danger" type="button">Dig</button><button data-world-action="attack-nearest" class="button danger" type="button">Attack nearest</button><button data-world-action="use-held" class="button secondary" type="button">Use held</button></div>
         <p id="pov-detail" class="dialog-copy">Click a perspective feed to focus it and capture the mouse.</p>
-        <p class="pov-control-help"><kbd>WASD</kbd> move · <kbd>Space</kbd> jump · <kbd>Shift</kbd> sneak · <kbd>Ctrl</kbd> sprint · Left mouse dig · Right mouse use/place · <kbd>1–9</kbd> / wheel hotbar · <kbd>E</kbd> inventory · <kbd>Esc</kbd> release. Original lightweight textures; only loaded chunks are visible.</p>
+        <p class="pov-control-help"><kbd>WASD</kbd> move · <kbd>Space</kbd> jump · <kbd>Shift</kbd> sneak · <kbd>Ctrl</kbd> sprint · Mouse captured: left mouse dig, right mouse use/place · Without capture: hold left mouse and drag to look · <kbd>1–9</kbd> / wheel hotbar · <kbd>E</kbd> inventory · <kbd>Esc</kbd> release. Original lightweight textures; only loaded chunks are visible. Render distance: Settings → POV performance (16,000 blocks per feed maximum).</p>
       </div>
     </dialog>
 

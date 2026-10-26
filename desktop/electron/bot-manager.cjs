@@ -870,24 +870,29 @@ class BotManager {
     const bot = this.requireOnline(id)
     const center = bot.entity?.position
     if (!center) throw new Error('World position is not available yet.')
-    const safeRadius = Math.max(2, Math.min(Math.round(Number(radius) || 6), 12))
+    const safeRadius = Math.max(2, Math.min(Math.round(Number(radius) || 6), 128))
     const anchor = { x: Math.floor(center.x), y: Math.floor(center.y), z: Math.floor(center.z) }
     const cached = session?.worldBlockCache
     const cacheLifetime = Math.max(100, Math.min(Number(blockRefreshMs) || 1000, 10000))
     let blocks = cached && cached.radius === safeRadius && cached.x === anchor.x && cached.y === anchor.y && cached.z === anchor.z && Date.now() - cached.at < cacheLifetime ? cached.blocks : null
     if (!blocks) {
       blocks = []
-      for (let y = -4; y <= 4; y += 1) {
-        for (let x = -safeRadius; x <= safeRadius; x += 1) {
-          for (let z = -safeRadius; z <= safeRadius; z += 1) {
+      // At most 16,000 blocks and 594,441 cell probes (8 chunks, nine Y levels).
+      // Visit horizontal rings near-to-far so dense worlds retain all nearby sides.
+      scan: for (let ring = 0; ring <= safeRadius; ring += 1) {
+        for (let y = -4; y <= 4; y += 1) {
+          for (let edge = 0; edge < (ring ? ring * 8 : 1); edge += 1) {
+            const side = ring ? Math.floor(edge / (ring * 2)) : 0
+            const along = ring ? edge % (ring * 2) - ring : 0
+            const x = ring ? [along, ring, -along, -ring][side] : 0
+            const z = ring ? [-ring, along, ring, -along][side] : 0
             const block = bot.blockAt?.(new Vec3(anchor.x + x, anchor.y + y, anchor.z + z), false)
             if (!block || block.name === 'air' || block.name === 'cave_air' || block.name === 'void_air') continue
             blocks.push({ x: block.position.x, y: block.position.y, z: block.position.z, name: String(block.name).slice(0, 80), solid: block.boundingBox === 'block', water: WATER_NAMES.has(block.name) || WATERLIKE_NAMES.has(block.name), shapes: boundedBlockShapes(block), stateId: Number.isSafeInteger(block.stateId) ? block.stateId : null })
+            if (blocks.length >= 16000) break scan
           }
         }
       }
-      // The radius/height loops already cap the volume at 5,625 cells. Slicing
-      // by scan order erased the upper/eastern half of dense nearby worlds.
       if (session) {
         session.worldBlockRevision = ++this.nextWorldBlockRevision
         session.worldBlockCache = { ...anchor, radius: safeRadius, blocks, at: Date.now() }
@@ -895,9 +900,10 @@ class BotManager {
     }
     const entities = Object.values(bot.entities || {}).filter((entity) => entity?.position && entity !== bot.entity && entity.position.distanceTo(center) <= safeRadius * 2).slice(0, 100).map((entity) => ({
       id: Number(entity.id), name: String(entity.username || entity.displayName || entity.name || entity.type || 'entity').slice(0, 80), type: String(entity.type || ''),
+      ...worldEntityLabel(entity, bot.registry),
       x: roundDiagnostic(entity.position.x), y: roundDiagnostic(entity.position.y), z: roundDiagnostic(entity.position.z), distance: roundDiagnostic(entity.position.distanceTo(center))
     }))
-    return { edition: 'java', radius: safeRadius, position: vectorSnapshot(center), yaw: Number(bot.entity.yaw) || 0, pitch: Number(bot.entity.pitch) || 0, blocks, entities,
+    return { edition: 'java', radius: safeRadius, renderDistance: safeRadius > 12 ? safeRadius : undefined, position: vectorSnapshot(center), yaw: Number(bot.entity.yaw) || 0, pitch: Number(bot.entity.pitch) || 0, blocks, entities,
       blockRevision: session.worldBlockRevision || 0,
       quickBarSlot: Math.max(0, Math.min(Number(bot.quickBarSlot) || 0, 8)),
       heldItem: bot.heldItem ? { name: String(bot.heldItem.name || '').slice(0, 80), displayName: String(bot.heldItem.displayName || bot.heldItem.name || '').slice(0, 100), count: Math.max(0, Math.min(Number(bot.heldItem.count) || 0, 999)) } : null,
@@ -1536,6 +1542,37 @@ function formatReason(reason) {
 // bounded: past the depth or node cap it stops and keeps what it has gathered.
 const MAX_COMPONENT_DEPTH = 64
 const MAX_COMPONENT_NODES = 4096
+
+function worldEntityLabel(entity, registry) {
+  const entityType = String(entity.name || entity.type || '').replace(/^minecraft:/, '')
+  const keys = registry?.entitiesByName?.[entityType]?.metadataKeys || []
+  const metadata = entity.metadata || {}
+  const value = key => metadata[key] ?? (keys.indexOf(key) >= 0 ? metadata[keys.indexOf(key)] : undefined)
+  const plain = component => {
+    let nodes = 0
+    const textOf = (part, depth = 0) => {
+      if (++nodes > 256 || depth > 16 || part == null) return ''
+      if (typeof part === 'string') {
+        if (/^[\s]*[\[{"]/.test(part)) { try { return textOf(JSON.parse(part), depth + 1) } catch {} }
+        return part.slice(0, 512)
+      }
+      if (Array.isArray(part)) return part.slice(0, 32).map(child => textOf(child, depth + 1)).join('').slice(0, 512)
+      if (typeof part !== 'object') return ''
+      if (['string', 'compound', 'list'].includes(part.type)) return textOf(part.value, depth + 1)
+      if (part.value && !part.text && !part.extra) return textOf(part.value, depth + 1)
+      return (textOf(part.text, depth + 1) + textOf(part.extra, depth + 1)).slice(0, 512)
+    }
+    const text = textOf(component)
+    return String(text || '').replace(/§[0-9a-fk-orx]/gi, '').replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '').slice(0, 512)
+  }
+  const customName = plain(entity.customName ?? value('custom_name') ?? metadata[2])
+  let label
+  if (entityType === 'text_display') label = plain(entity.text ?? value('text'))
+  else if (entityType === 'item_display' || entityType === 'block_display') label = ''
+  else if (entityType === 'armor_stand') label = customName
+  else label = customName || String(entity.username || entity.displayName || entity.name || entity.type || 'entity').slice(0, 80)
+  return { entityType, label }
+}
 
 function extractText(root) {
   // Post-order walk (each level is trimmed after its children), driven by an explicit stack.
