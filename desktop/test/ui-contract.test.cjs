@@ -236,3 +236,81 @@ test('every bot:event type the main process emits has a renderer handler', () =>
   assert.match(branch, /toast\(message, 'error'\)/)
   assert.doesNotMatch(branch, /innerHTML/)
 })
+
+test('Stage 3: every window.afkDesk and macros method called in renderer and macro-editor exists in preload.cjs', () => {
+  const preload = fs.readFileSync(path.join(__dirname, '..', 'electron', 'preload.cjs'), 'utf8')
+  const main = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
+  const renderer = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer.js'), 'utf8')
+  const macroEditor = fs.readFileSync(path.join(__dirname, '..', 'src', 'macro-editor.js'), 'utf8')
+  const notifyPanel = fs.readFileSync(path.join(__dirname, '..', 'src', 'notifications-panel.js'), 'utf8')
+
+  for (const src of [renderer, macroEditor]) {
+    const directCalls = [...src.matchAll(/\bapi\.([a-zA-Z0-9_]+)\s*(?:\(|\?\.|\b)/g)]
+      .map((m) => m[1])
+      .filter((name) => name !== 'macros' && name !== 'notify')
+    for (const method of new Set(directCalls)) {
+      assert.match(preload, new RegExp(`\\b${method}\\s*:`), `Expected preload.cjs to expose api.${method}`)
+    }
+    const macroCalls = [...src.matchAll(/\bapi\.macros(?:\?\.)?\.([a-zA-Z0-9_]+)/g)].map((m) => m[1])
+    for (const method of new Set(macroCalls)) {
+      assert.match(preload, new RegExp(`\\b${method}\\s*:`), `Expected preload.cjs macros namespace to expose ${method}`)
+    }
+  }
+
+  for (const channel of ['notify:list', 'notify:save', 'notify:delete', 'notify:test']) {
+    assert.match(notifyPanel, new RegExp(channel))
+    assert.match(main, new RegExp(`handle\\('${channel}'`), `Expected main.cjs to register ${channel}`)
+  }
+  assert.match(preload, /\bonMacroRun\s*:/)
+})
+
+test('Stage 3: macro-editor.js, notifications-panel.js, and renderer.js never use innerHTML or eval and index.html is CSP-safe', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'src', 'index.html'), 'utf8')
+  const renderer = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer.js'), 'utf8')
+  const macroEditor = fs.readFileSync(path.join(__dirname, '..', 'src', 'macro-editor.js'), 'utf8')
+  const notifyPanel = fs.readFileSync(path.join(__dirname, '..', 'src', 'notifications-panel.js'), 'utf8')
+
+  for (const [name, src] of [['renderer.js', renderer], ['macro-editor.js', macroEditor], ['notifications-panel.js', notifyPanel]]) {
+    assert.doesNotMatch(src, /\.innerHTML\b|\.outerHTML\b|insertAdjacentHTML|\beval\s*\(|new\s+Function\b/, `${name} must not use innerHTML or eval`)
+  }
+
+  // CSP meta tag intact and no inline handlers or inline styles/scripts in index.html
+  assert.match(html, /Content-Security-Policy"[^>]*script-src 'self'; style-src 'self'/)
+  assert.doesNotMatch(html, /\son[a-z]+\s*=/i, 'index.html must not contain inline on*= event attributes')
+  assert.doesNotMatch(html, /\sstyle\s*=/i, 'index.html must not contain inline style= attributes')
+  assert.doesNotMatch(html, /<style\b/i, 'index.html must not contain inline <style> tags')
+  const scriptTags = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)]
+  assert.ok(scriptTags.length >= 7)
+  for (const [, attrs, body] of scriptTags) {
+    assert.match(attrs, /\bsrc="[^"]+"/, 'Every <script> in index.html must use an external src attribute')
+    assert.equal(body.trim(), '', 'Every <script> in index.html must have an empty body')
+  }
+})
+
+test('Stage 3: macro editor and notifications panel cover all contract step/trigger/condition/event types and security/accessibility rules', () => {
+  const macroContract = require('../electron/macro/contract.cjs')
+  const notifyContract = require('../electron/notify/contract.cjs')
+  const html = fs.readFileSync(path.join(__dirname, '..', 'src', 'index.html'), 'utf8')
+  const css = fs.readFileSync(path.join(__dirname, '..', 'src', 'styles.css'), 'utf8')
+  const macroEditor = fs.readFileSync(path.join(__dirname, '..', 'src', 'macro-editor.js'), 'utf8')
+  const notifyPanel = fs.readFileSync(path.join(__dirname, '..', 'src', 'notifications-panel.js'), 'utf8')
+
+  for (const stepType of Object.keys(macroContract.STEP_TYPES)) {
+    assert.match(macroEditor, new RegExp(`\\b${stepType}\\s*:\\s*\\{`), `macro-editor.js missing step type ${stepType}`)
+  }
+  for (const triggerType of Object.keys(macroContract.TRIGGER_TYPES)) {
+    assert.match(macroEditor, new RegExp(`\\b${triggerType}\\s*:\\s*\\{`), `macro-editor.js missing trigger type ${triggerType}`)
+  }
+  for (const condType of macroContract.CONDITION_TYPES) {
+    assert.match(macroEditor, new RegExp(`value:\\s*'${condType}'`), `macro-editor.js missing condition type ${condType}`)
+  }
+  for (const eventKind of notifyContract.EVENT_KINDS) {
+    assert.match(notifyPanel, new RegExp(`id:\\s*'${eventKind}'`), `notifications-panel.js missing event kind ${eventKind}`)
+  }
+
+  assert.match(html, /id="notify-webhook-url"[^>]*type="password"/)
+  assert.match(html, /id="notify-bot-token"[^>]*type="password"/)
+  assert.match(notifyPanel, /\(unchanged\)/)
+  assert.match(html, /https:\/\/github\.com\/legendary-cookie\/afk-desk\/blob\/main\/docs\/user-guide\/notifications\.md/)
+  assert.match(css, /@media\s*\(prefers-reduced-motion:\s*reduce\)/)
+})
