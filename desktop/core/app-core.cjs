@@ -21,6 +21,8 @@ const { supportedVersions, normalizeVersionSelection } = require('../electron/ve
 const { normalizeModdedProfile } = require('../electron/modded-compatibility.cjs')
 const { AlertManager, PersistentEventStore, SmartProxyManager, identityIdFor, normalizeAutomations, normalizeEdition } = require('../electron/beta-core.cjs')
 const { validateProfileId } = require('../electron/profile-path.cjs')
+const crypto = require('node:crypto')
+const { createCommandLayer } = require('./commands.cjs')
 
 class AppCore {
   constructor({ userDataPath, secretBox, notifier: notifierFactory, emitToUi = () => {}, platform = {}, timers = globalThis, now = Date.now } = {}) {
@@ -40,6 +42,7 @@ class AppCore {
     this.macroEngine = null
     this.started = false
     this._notifierFactory = notifierFactory
+    this.commands = null
   }
   async start() {
     if (this.started) return this
@@ -55,6 +58,7 @@ class AppCore {
     const resolveTargets = (macro) => { const all = this.store.list(); if (macro.targets.mode === 'all') return all.map((a) => a.id); if (macro.targets.mode === 'accounts') { const ids = new Set(all.map((a) => a.id)); return macro.targets.accountIds.filter((id) => ids.has(id)) } const tags = new Set(macro.targets.tags); return all.filter((a) => Array.isArray(a.tags) && a.tags.some((tag) => tags.has(tag))).map((a) => a.id) }
     this.macroEngine = new MacroEngine({ facade: this.facade, matcher: new TriggerMatcher({}), now: this.now, emit: (e) => this.emitMacroRunEvent(e), getAccountState: this.facade.state, resolveTargets, nextScheduleTime: macroTriggers.nextScheduleTime })
     this.macroEngine.setLibrary(this.macroLibrary.list()); this.started = true
+    this.commands = createCommandLayer({ core: this, audit: (entry) => this._appendAudit(entry), now: this.now, timers: this.timers })
     return this
   }
   async shutdown() {
@@ -64,6 +68,7 @@ class AppCore {
     try { await this.macroEngine?.shutdown() } catch {}
     try { await this.notifier?.flush?.() } catch {}
     try { this.eventStore.close?.() } catch {}
+    this.started = false
   }
   emitBotEvent(type, id, payload = {}) {
     let account; try { account = this.store.list().find((a) => a.id === id) } catch (e) { this._storageError(e) }
@@ -89,9 +94,13 @@ class AppCore {
     list: () => this.store.list().map(publicAccount),
     save: (input) => this._saveAccount(input),
     delete: (id) => { this.cancelStartupConnection(id); this.bots.disconnect(id); void this.macroEngine.stop(id, 'account-deleted'); this.store.delete(id); this.macroEngine.setLibrary(this.macroLibrary.list()) },
+    duplicate: (id) => { const a = this._require(id); const copy = this.store.save({ ...a, id: crypto.randomUUID(), profileName: `${a.profileName || a.label || a.host} copy`.slice(0, 60), connectOnStartup: false, autoDepositToChest: false }); return publicAccount(copy) },
     reorder: (ids) => this.store.reorder(ids).map(publicAccount),
     connect: (id) => this.connect(id), disconnect: (id) => this.disconnect(id),
     setAntiAfk: (id, enabled) => { const a = this._require(id); const saved = this.store.save({ ...a, antiAfk: enabled === true }); this.bots.setAntiAfk(id, saved); return publicAccount(saved) }
+  }
+  botsApi = {
+    connect: (id) => this.connect(id), disconnect: (id) => this.disconnect(id), chat: (id, m) => this.bots.sendChat(id,m), completeChat: (id,t) => this.bots.completeChat(id,t), control: (id,c,d) => this.bots.control(id,c,d), controlState: (id,c,a) => this.bots.setControlState(id,c,a), look: (id,d) => this.bots.look(id,d), lookDelta: (id,y,p) => this.bots.lookDelta(id,y,p), dropStack: (id,s) => this.bots.dropStack(id,s), dropItems: (id,s,c) => this.bots.dropItems(id,s,c), depositSlot: (id,s,c) => this.bots.depositSlot(id,s,c), windowClick: (id,s) => this.bots.clickWindowSlot(id,s), windowClose: (id) => this.bots.closeWindow(id), worldSnapshot: (id,r,b) => this.bots.worldSnapshot(id,r,b), worldAction: (id,a,t) => this.bots.worldAction(id,a,t), inventory: (id) => this.bots.inventory(id), reconnect: (id) => this.connect(id), connectAll: () => this.store.list().map((a) => this.connect(a.id)), disconnectAll: () => this.store.list().map((a) => this.disconnect(a.id)), itemLock: (id,slot,locked) => { const a=this._require(id), slots=new Set(a.lockedInventorySlots||[]); if(locked===true) slots.add(Number(slot)); else slots.delete(Number(slot)); const updated=this.store.save({...a,lockedInventorySlots:normalizeSlots([...slots])}); this.bots.setItemLocks(id,updated.lockedInventorySlots); return publicAccount(updated) }, moveInventory: async (id,s,d) => { this._require(id); const result=await this.bots.moveInventorySlot(id,s,d); return {account:this._applyLockRelocation(id,result),...result} }, equipItem: async (id,s,d) => { this._require(id); const result=await this.bots.equipInventoryItem(id,s,d); return {account:this._applyLockRelocation(id,result),...result} }, autoDeposit: (id,e) => { const a=this._require(id), updated=this.store.save({...a,autoDepositToChest:e===true}); this.bots.setAutoDeposit(id,updated.autoDepositToChest,updated.autoDepositRange); return publicAccount(updated) }
   }
   connect(id) { this.cancelStartupConnection(id); if (this.bots.java.sessions.has(id) || this.bots.bedrock.sessions.has(id)) throw new Error('This profile is already connecting or online.'); const a = this._require(id, true); this.smartProxies.release(this.assignedProxies.get(id)); this.assignedProxies.set(id, a.proxy); try { return this.bots.connect(a) } catch (e) { this.smartProxies.release(this.assignedProxies.get(id)); this.assignedProxies.delete(id); throw e } }
   disconnect(id) { this.cancelStartupConnection(id); this.bots.disconnect(id); this.smartProxies.release(this.assignedProxies.get(id)); this.assignedProxies.delete(id) }
@@ -118,6 +127,11 @@ class AppCore {
   _macroOptions() { const a = this.store.list(); return { accountIds: a.map((x) => x.id), editionOf: (id) => a.find((x) => x.id === id)?.edition } }
   get notify() { return { list: () => this.notifySettings.list(), save: (v) => this.notifySettings.save(v), delete: (id) => this.notifySettings.delete(id), test: (id) => this.notifier ? this.notifier.test(id) : { ok: false, error: 'Notifier unavailable' } } }
   get logs() { return { list: (id, o) => this.eventStore.list(id, o), clear: (id) => this.eventStore.clear(id), recent: (limit) => this.eventStore.list(undefined, { limit }) } }
+  get proxies() { return { health: () => this.smartProxies.snapshot() } }
+  get settings() { return { get: () => this.settingsStore.get(), save: (v) => { const { notifyChannels: _hidden, ...safe } = this.settingsStore.save(v); return safe } } }
+  get audit() { return { recent: (limit = 50) => this.eventStore.list(undefined, { limit, kinds: ['audit'] }) } }
+  _appendAudit(entry) { this.eventStore.append(entry.accountId, { type: 'audit', ...redactAudit(entry) }) }
+  _applyLockRelocation(id, result) { const updated=this.store.updateAccount(id,(a)=>relocateLocks(a,result.sourceSlot,result.targetSlot)); if(!updated) throw new Error('Account not found.'); this.bots.setItemLocks(id,updated.lockedInventorySlots); return publicAccount(updated) }
 }
 
 function displayName(a) { for (const v of [a?.profileName, a?.minecraftName, a?.label]) { const s = String(v || '').trim(); if (s && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s)) return s.slice(0, 60) } return 'Minecraft account' }
@@ -125,6 +139,9 @@ function publicAccount(a) { const { passwordEncrypted, password, ...proxy } = a.
 function assertMacroPayload(v) { let s; try { s = JSON.stringify(v) } catch { throw new Error('Macro payload must be JSON serializable.') } if (Buffer.byteLength(s === undefined ? 'null' : s) > LIMITS.maxIpcPayloadBytes) throw new Error('Macro payload exceeds 256 KB.') }
 function telemetryChanged(a, b) { return !a || a.health !== b.health || a.food !== b.food || a.dimension !== b.dimension || JSON.stringify(a.position) !== JSON.stringify(b.position) || JSON.stringify(a.inventory) !== JSON.stringify(b.inventory) }
 function antiAfkChanged(a, b) { return ['antiAfk','antiAfkMinDelay','antiAfkMaxDelay','antiAfkActionDuration','antiAfkWalkDistance','antiAfkLookDegrees','antiAfkJump','antiAfkLook','antiAfkSneak','antiAfkSwing','antiAfkWalk'].some((k) => a?.[k] !== b?.[k]) }
+function normalizeSlots(a) { return [...new Set((Array.isArray(a)?a:[]).map(Number).filter(x=>Number.isInteger(x)&&x>=0&&x<=255))].sort((x,y)=>x-y).slice(0,46) }
+function relocateLocks(a,s,t) { const slots=new Set(normalizeSlots(a?.lockedInventorySlots)), sl=slots.has(s), tl=slots.has(t); slots.delete(s); slots.delete(t); if(sl) slots.add(t); if(tl) slots.add(s); return {...a,lockedInventorySlots:normalizeSlots([...slots])} }
+function redactAudit(v) { if(Array.isArray(v)) return v.map(redactAudit); if(!v||typeof v!=='object') return typeof v==='string'?v.replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi,'[redacted]'):v; return Object.fromEntries(Object.entries(v).filter(([k])=>!/email|token|secret|password|credential|username/i.test(k)).map(([k,x])=>[k,redactAudit(x)])) }
 function bounded(v, min, max, fallback) { const n = Number(v); return Number.isFinite(n) ? Math.max(min, Math.min(n, max)) : fallback }
 function normalizeUuid(v) { const s = String(v || '').replace(/-/g, '').toLowerCase(); return /^[0-9a-f]{32}$/.test(s) ? s : '' }
 function normalizeMinecraftName(v) { const s = String(v || '').trim(); return /^[A-Za-z0-9_]{1,16}$/.test(s) ? s : '' }
