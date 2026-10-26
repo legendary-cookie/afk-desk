@@ -103,3 +103,19 @@ Ordered by user value against implementation cost. AFKCC is cloud-hosted; AFK De
   - **Effect on current queues.**
     - Gemini 4 Argon tasks (weekly reset, >1 day): fall back to Gemini Flash High or Codex.
     - Antigravity Claude-pool and Codex 5-hour limits: wait unless the task is urgent.
+
+## 2026-10-27 — 0.11.0-beta.1 installer and real upgrade from Beta 9
+
+- **Installer.** Built unsigned `AFK-Desk-Setup-0.11.0-beta.1.exe` (140.8 MB, Electron 43.8.3). During the build I found that the `build.files` list omitted `control/` (the Discord bot) and fixed it. The packaged app passes `--smoke-test` and reports 0.11.0-beta.1.
+- **Real upgrade, with the owner's permission to replace the installed app.**
+  - Backup first: `%APPDATA%\afkdesk` was copied to `ao/backups/afkdesk-beta9-20261027-041433` (80 files, caches excluded). The Beta 9 installer was kept, verified against GitHub's sha256 digest `9981582e…`.
+  - Silent install (`/S`) over 0.10.0-beta.9 exited 0.
+  - After first launch: 8/8 accounts with identical ids, 10/10 item locks, identical settings keys, no corrupt files.
+  - Accounts auto-connected to real servers. This is the first live-server run of 0.11; the connections worked.
+- **Macro migration on the installed build.** Run in isolation with `--user-data-dir` against synthetic Beta 9 data:
+  - 11 v1 automations became 10 v2 macros (one step-less automation is skipped by design) across 3 accounts, covering all 8 trigger types.
+  - All 11 v1 automations were kept for rollback.
+  - The owner's real data was unmodified.
+  - Note: the `APPDATA` environment variable does not isolate Electron on Windows; use `--user-data-dir`.
+- **Live finding.** One owner server's pack host (atlas.oraxen.com:8080) is unreachable. "fetch failed" errors have occurred since 2026-10-26, when Beta 9 was still installed, so this is not a regression. A download failure declines the pack, which can get bots kicked. Fix in progress: accept without loading on any download failure.
+- **Rollback path.** Run `ao/tools/installers/AFK-Desk-Setup-0.10.0-beta.9.exe`, then restore the backup folder into `%APPDATA%\afkdesk`.
