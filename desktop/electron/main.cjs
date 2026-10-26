@@ -6,6 +6,7 @@ const os = require('node:os')
 const smokeTest = process.argv.includes('--smoke-test')
 if (smokeTest) app.setPath('userData', fs.mkdtempSync(path.join(os.tmpdir(), 'afkdesk-release-smoke-')))
 const { pathToFileURL } = require('node:url')
+const { createElectronSecretBox } = require('../core/secrets.cjs')
 const { registerTrustedHandler, restrictWindow, isMicrosoftLoginUrl } = require('./ipc-security.cjs')
 const { validateProfileId } = require('./profile-path.cjs')
 const documentPath = path.join(__dirname, '..', 'src', 'index.html')
@@ -38,6 +39,7 @@ const movementDiagnosticsEnabled = process.env.AFK_DESK_MOVEMENT_DIAGNOSTICS ===
 let mainWindow
 let store
 let settingsStore
+let secretBox
 let bots
 let diagnosticLog
 let eventStore
@@ -98,9 +100,10 @@ function createWindow() {
 app.whenReady().then(async () => {
   store = new AccountStore(app.getPath('userData'))
   settingsStore = new SettingsStore(app.getPath('userData'))
+  secretBox = createElectronSecretBox(safeStorage)
   diagnosticLog = new DiagnosticLog(app.getPath('userData'))
   eventStore = new PersistentEventStore(app.getPath('userData'))
-  notifySettings = new NotifySettings(settingsStore, safeStorage)
+  notifySettings = new NotifySettings(settingsStore, secretBox)
   alerts = new AlertManager(({ title, body }) => {
     try {
       if (settingsStore.get().notificationsEnabled === true && Notification.isSupported()) {
@@ -719,8 +722,8 @@ function validateProxy(input, existing = {}) {
   const password = String(input?.password || '')
   if (password) {
     if (password.length > 512 || /[\r\n]/.test(password)) throw new Error('Proxy password is invalid.')
-    if (!safeStorage.isEncryptionAvailable()) throw new Error('Windows credential encryption is not available. Proxy password was not saved.')
-    passwordEncrypted = safeStorage.encryptString(password).toString('base64')
+    if (!secretBox.available()) throw new Error('Windows credential encryption is not available. Proxy password was not saved.')
+    passwordEncrypted = secretBox.encrypt(password)
   }
   return { enabled, type, host, port, username, passwordEncrypted }
 }
@@ -729,7 +732,7 @@ function withProxyPassword(account) {
   const proxy = account.proxy || {}
   let password = ''
   if (proxy.passwordEncrypted) {
-    try { password = safeStorage.decryptString(Buffer.from(proxy.passwordEncrypted, 'base64')) }
+    try { password = secretBox.decrypt(proxy.passwordEncrypted) }
     catch { throw new Error('Could not decrypt this account’s proxy password. Re-enter it in account settings.') }
   }
   const enabled = account.proxyMode === 'manual' ? proxy.enabled === true : account.proxyMode === 'smart' ? true : false
