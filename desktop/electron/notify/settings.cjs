@@ -3,10 +3,18 @@ const crypto = require('node:crypto')
 const { CHANNEL_TYPES, EVENT_KINDS, LIMITS, ALLOWED_HOSTS } = require('./contract.cjs')
 
 class NotifySettings {
-  constructor(settingsStore, safeStorage) { this.settingsStore = settingsStore; this.safeStorage = safeStorage }
+  constructor(settingsStore, secretBox) {
+    this.settingsStore = settingsStore
+    // Keep the historical constructor shape working for existing integrations/tests.
+    this.secretBox = secretBox?.encryptString ? {
+      available: () => Boolean(secretBox.isEncryptionAvailable?.()),
+      encrypt: (value) => secretBox.encryptString(value).toString('base64'),
+      decrypt: (value) => secretBox.decryptString(Buffer.from(value, 'base64'))
+    } : secretBox
+  }
   _all() { return this.settingsStore.getNotifyChannels?.() || [] }
-  _decrypt(value) { if (!value) return ''; try { return this.safeStorage.decryptString(Buffer.from(value, 'base64')) } catch { throw new Error('Could not decrypt notification secret. Re-enter it in notification settings.') } }
-  _encrypt(value) { if (!this.safeStorage?.isEncryptionAvailable?.()) throw new Error('Secure credential encryption is unavailable.'); return this.safeStorage.encryptString(value).toString('base64') }
+  _decrypt(value) { if (!value) return ''; try { return this.secretBox.decrypt(value) } catch { throw new Error('Could not decrypt notification secret. Re-enter it in notification settings.') } }
+  _encrypt(value) { if (!this.secretBox?.available?.()) throw new Error('Secure credential encryption is unavailable.'); return this.secretBox.encrypt(value) }
   list() { return this._all().map((c) => { const secret = this._decrypt(c.secretEncrypted); return { id: c.id, type: c.type, name: c.name, enabled: c.enabled, events: [...c.events], accountIds: c.accountIds, includeTimestamp: c.includeTimestamp, chatId: c.chatId || '', hasSecret: Boolean(secret), secretHint: secret ? `••••${secret.slice(-4)}` : '' } }) }
   getDecrypted() { return this._all().map((c) => ({ ...c, ...(c.type === 'discord' ? { webhookUrl: this._decrypt(c.secretEncrypted) } : { botToken: this._decrypt(c.secretEncrypted) }) })) }
   save(input) {
