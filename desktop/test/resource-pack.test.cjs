@@ -4,6 +4,7 @@ const crypto = require('node:crypto')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
+const zlib = require('node:zlib')
 const AdmZip = require('adm-zip')
 const { ResourcePackLoader, parseResourcePack, normalizePackEvent, resolveItemDefinition, discoverLauncherPackDirs } = require('../electron/resource-pack.cjs')
 
@@ -301,6 +302,55 @@ test('bounded extraction handles resource packs with corrupt declared expanded s
   assert.match(appearance.resourceIcon, /^data:image\/png;base64,/)
   assert.match(pack.titleAppearance('\ue001').glyphs[0].image, /^data:image\/png;base64,/)
 })
+
+test('tolerant ZIP fallback ignores corrupt extra fields and trusts central sizes', () => {
+  const bytes = syntheticZip([
+    { name: 'assets/veridian/models/item/mission.json', data: Buffer.from('{"parent":"minecraft:item/generated"}'), method: 8, badExtra: true, lyingLocalSizes: true },
+    { name: 'assets/minecraft/models/item/stone.json', data: Buffer.from('{}'), method: 0 }
+  ])
+  assert.throws(() => new AdmZip(bytes).getEntries(), /ADM-ZIP/)
+  const pack = parseResourcePack(bytes)
+  assert.ok(pack.json.has('veridian:models/item/mission.json'))
+  assert.ok(pack.json.has('minecraft:models/item/stone.json'))
+})
+
+test('tolerant ZIP extraction enforces the compression ratio and rejects traversal names', () => {
+  const bytes = syntheticZip([
+    { name: 'assets/veridian/models/item/huge.json', data: Buffer.from(' '.repeat(1_800_000) + '{}'), method: 8, badExtra: true },
+    { name: '../assets/veridian/models/item/traversal.json', data: Buffer.from('{}'), method: 0, badExtra: true }
+  ])
+  const pack = parseResourcePack(bytes)
+  assert.equal(pack.json.has('veridian:models/item/huge.json'), false)
+  assert.equal(pack.json.has('veridian:models/item/traversal.json'), false)
+})
+
+function syntheticZip(files) {
+  const locals = []
+  const centrals = []
+  let offset = 0
+  for (const file of files) {
+    const name = Buffer.from(file.name)
+    const data = file.method === 8 ? zlib.deflateRawSync(file.data) : file.data
+    const extra = file.badExtra ? Buffer.from([1, 0, 16, 0]) : Buffer.alloc(0)
+    const local = Buffer.alloc(30)
+    local.writeUInt32LE(0x04034b50, 0); local.writeUInt16LE(20, 4); local.writeUInt16LE(file.method, 8)
+    local.writeUInt32LE(file.lyingLocalSizes ? 0xffffffff : data.length, 18)
+    local.writeUInt32LE(file.lyingLocalSizes ? 0xffffffff : file.data.length, 22)
+    local.writeUInt16LE(name.length, 26)
+    locals.push(local, name, data)
+    const central = Buffer.alloc(46)
+    central.writeUInt32LE(0x02014b50, 0); central.writeUInt16LE(20, 4); central.writeUInt16LE(20, 6)
+    central.writeUInt16LE(file.method, 10); central.writeUInt32LE(data.length, 20); central.writeUInt32LE(file.data.length, 24)
+    central.writeUInt16LE(name.length, 28); central.writeUInt16LE(file.badExtra ? 0xffff : extra.length, 30); central.writeUInt32LE(offset, 42)
+    centrals.push(central, name, extra)
+    offset += local.length + name.length + data.length
+  }
+  const centralBytes = Buffer.concat(centrals)
+  const end = Buffer.alloc(22)
+  end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(files.length, 8); end.writeUInt16LE(files.length, 10)
+  end.writeUInt32LE(centralBytes.length, 12); end.writeUInt32LE(offset, 16)
+  return Buffer.concat([...locals, centralBytes, end])
+}
 
 test('loads a bounded HTTP pack, validates its hash, and caches the parsed result', async () => {
   const bytes = fixturePack()
