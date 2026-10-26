@@ -62,7 +62,7 @@ function createCommandLayer({ core, audit = () => {}, now = Date.now, timers = g
         case 'connectAll': value = await invoke('bots.connectAll'); break
         case 'disconnectAll': value = await invoke('bots.disconnectAll'); break
         case 'notify.test': value = await invoke('notify.test', args.channelId); break
-        case 'audit.recent': value = await invoke('audit.recent', args.limit || 50); break
+        case 'audit.recent': value = await (invoke('audit.recent', args.limit || 50) ?? invoke('logs.recent', args.limit || 50)); break
       }
       return await done(true, value)
     } catch (error) { return await done(false, String(error?.message || error).slice(0, 200), 'FAILED') }

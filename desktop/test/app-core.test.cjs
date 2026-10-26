@@ -2,26 +2,219 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
+const os = require('node:os')
 const path = require('node:path')
-const { createRequire } = require('node:module')
-test('AppCore module can be loaded when electron imports are forbidden', () => {
-  const filename = path.join(__dirname, '../core/app-core.cjs'), realRequire = createRequire(filename)
-  const module = { exports: {} }
-  const wrapper = new Function('require', 'module', 'exports', fs.readFileSync(filename, 'utf8'))
-  wrapper((name) => { if (name === 'electron') throw new Error('electron forbidden'); return realRequire(name) }, module, module.exports)
-  assert.equal(typeof module.exports.AppCore, 'function')
+const vm = require('node:vm')
+const Module = require('node:module')
+const { EventEmitter } = require('node:events')
+const { pathToFileURL } = require('node:url')
+
+const ORIGINAL_IPC_CHANNELS = Object.freeze([
+  'accounts:list',
+  'accounts:save',
+  'accounts:delete',
+  'accounts:duplicate-profile',
+  'accounts:reorder',
+  'bot:connect',
+  'bot:disconnect',
+  'bot:chat',
+  'bot:complete-chat',
+  'bot:control',
+  'bot:control-state',
+  'bot:look',
+  'bot:look-delta',
+  'bot:drop-stack',
+  'bot:drop-items',
+  'bot:deposit-slot',
+  'bot:item-lock',
+  'bot:inventory-move',
+  'bot:equip-item',
+  'bot:window-click',
+  'bot:window-close',
+  'bot:world-snapshot',
+  'bot:world-action',
+  'logs:list',
+  'logs:clear',
+  'macros:list',
+  'macros:save',
+  'macros:delete',
+  'macros:set-enabled',
+  'macros:run',
+  'macros:stop',
+  'macros:runs',
+  'macros:import',
+  'macros:export',
+  'notify:list',
+  'notify:save',
+  'notify:delete',
+  'notify:test',
+  'proxy:health',
+  'bot:auto-deposit',
+  'auth:open-isolated',
+  'system:open-external',
+  'settings:get',
+  'app:version',
+  'app:supported-versions',
+  'settings:save'
+])
+
+test('loading app-core.cjs with Module._load patched to throw on electron succeeds', (t) => {
+  const originalLoad = Module._load
+  const desktopRoot = path.resolve(__dirname, '..')
+  for (const key of Object.keys(require.cache)) {
+    if (key.startsWith(path.join(desktopRoot, 'core')) || key.startsWith(path.join(desktopRoot, 'electron'))) {
+      delete require.cache[key]
+    }
+  }
+  Module._load = function (request, parent, isMain) {
+    if (request === 'electron') throw new Error('electron is forbidden in AppCore')
+    return originalLoad.call(this, request, parent, isMain)
+  }
+  t.after(() => { Module._load = originalLoad })
+  const loaded = require('../core/app-core.cjs')
+  assert.equal(typeof loaded.AppCore, 'function')
 })
-test('AppCore creates stores without loading Electron', (t) => {
+
+test('main.cjs registers the exact same IPC channel set as the original main.cjs and delegates each in one line to core', async (t) => {
+  const filename = path.join(__dirname, '../electron/main.cjs')
+  const source = fs.readFileSync(filename, 'utf8')
+  const MACRO_IPC = require('../electron/macro/contract.cjs').IPC
+  const literalChannels = [...source.matchAll(/handle\('([^']+)'/g)].map((m) => m[1])
+  const macroRefChannels = [...source.matchAll(/handle\(MACRO_IPC\.([a-zA-Z0-9_]+)/g)].map((m) => MACRO_IPC[m[1]])
+  const onChannels = [...source.matchAll(/ipcMain\.on\('([^']+)'/g)].map((m) => m[1])
+  assert.equal(onChannels.length, 0)
+  assert.deepEqual([...literalChannels, ...macroRefChannels].sort(), [...ORIGINAL_IPC_CHANNELS].sort())
+
+  // Also verify runtime registration via ipcMain.handle and one-line delegation into core
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'afk-core-ipc-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const registered = []
+  const app = new EventEmitter()
+  Object.assign(app, {
+    whenReady: () => Promise.resolve(),
+    getPath: () => directory,
+    getVersion: () => '1.0.0-test',
+    getLoginItemSettings: () => ({ openAtLogin: false }),
+    setLoginItemSettings() {},
+    quit() {},
+    setPath() {}
+  })
+  class BrowserWindow {
+    constructor() {
+      this.webContents = new EventEmitter()
+      Object.assign(this.webContents, {
+        mainFrame: { url: '' },
+        send() {},
+        setWindowOpenHandler() {},
+        session: { setPermissionRequestHandler() {}, setPermissionCheckHandler() {} }
+      })
+    }
+    loadFile(file) { this.webContents.mainFrame.url = pathToFileURL(file).href }
+    isDestroyed() { return false }
+  }
+  const realRequire = Module.createRequire(filename)
+  const electron = {
+    app,
+    BrowserWindow,
+    ipcMain: {
+      handle: (name) => registered.push(name),
+      on: (name) => registered.push(name)
+    },
+    dialog: { showErrorBox() {} },
+    Notification: { isSupported: () => false },
+    safeStorage: { isEncryptionAvailable: () => false },
+    shell: { openExternal: async () => {} }
+  }
+  const sandbox = {
+    require: (name) => name === 'electron' ? electron : realRequire(name),
+    __dirname: path.dirname(filename),
+    process,
+    console,
+    Buffer,
+    URL,
+    setTimeout,
+    clearTimeout
+  }
+  vm.runInNewContext(source, sandbox, { filename })
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.deepEqual(registered.sort(), [...ORIGINAL_IPC_CHANNELS].sort())
+})
+
+test('AppCore start and shutdown with fake managers disconnects bots, flushes notifier, and wires commands with redacted audit', async (t) => {
   const { AppCore } = require('../core/app-core.cjs')
-  const userDataPath = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'afk-core-')); t.after(() => fs.rmSync(userDataPath, { recursive: true, force: true }))
-  const core = new AppCore({ userDataPath, secretBox: { available: () => true, encrypt: String, decrypt: String } })
-  assert.deepEqual(core.accounts.list(), [])
-  assert.equal(typeof core.start, 'function'); assert.equal(typeof core.shutdown, 'function')
-})
-test('main keeps the original IPC channel set', () => {
-  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8')
-  const fixed = ['accounts:list','accounts:save','accounts:delete','accounts:duplicate-profile','accounts:reorder','bot:connect','bot:disconnect','bot:chat','bot:complete-chat','bot:control','bot:control-state','bot:look','bot:look-delta','bot:drop-stack','bot:drop-items','bot:deposit-slot','bot:item-lock','bot:inventory-move','bot:equip-item','bot:window-click','bot:window-close','bot:world-snapshot','bot:world-action','logs:list','logs:clear','macros:list','macros:save','macros:delete','macros:set-enabled','macros:run','macros:stop','macros:runs','macros:import','macros:export','notify:list','notify:save','notify:delete','notify:test','proxy:health','bot:auto-deposit','auth:open-isolated','system:open-external','settings:get','app:version','app:supported-versions','settings:save','macro-run']
-  const actual = [...source.matchAll(/handle\('([^']+)'/g)].map((m) => m[1])
-  const macroChannels = Object.values(require('../electron/macro/contract.cjs').IPC)
-  assert.deepEqual([...actual, ...macroChannels].sort(), fixed.sort())
+  const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'afk-core-lifecycle-'))
+  t.after(() => fs.rmSync(userDataPath, { recursive: true, force: true }))
+
+  const connected = []
+  const disconnected = []
+  let flushed = 0
+  const sessions = new Map()
+  const fakeBots = {
+    sessions,
+    java: { sessions, reconnects: new Map() },
+    bedrock: { sessions: new Map(), reconnects: new Map() },
+    connect(account) {
+      connected.push(account.id)
+      sessions.set(account.id, { sessionId: 'sess-1', account })
+      return { id: account.id }
+    },
+    disconnect(id) {
+      disconnected.push(id)
+      sessions.delete(id)
+    },
+    sendChat() {},
+    setAutoDeposit() {},
+    setEnvironmentalMovement() {},
+    setAntiAfk() {},
+    updateAccountConfig() {}
+  }
+
+  const uiEvents = []
+  const core = new AppCore({
+    userDataPath,
+    secretBox: { available: () => true, encrypt: (s) => `enc:${s}`, decrypt: (s) => String(s).replace(/^enc:/, '') },
+    bots: fakeBots,
+    notifier: async () => ({
+      notify() {},
+      flush: async () => { flushed += 1 },
+      test: async (id) => ({ ok: true, id })
+    }),
+    emitToUi: (channel, payload) => uiEvents.push({ channel, payload }),
+    now: () => 1700000000000
+  })
+
+  await core.start()
+  assert.equal(core.started, true)
+  assert.ok(core.commands)
+
+  const saved = core.accounts.save({
+    id: 'acc-1',
+    host: 'play.example.com',
+    username: 'secret.user@example.com',
+    profileName: 'Builder',
+    antiAfk: false
+  })
+  assert.equal(saved.id, 'acc-1')
+  assert.deepEqual(core.accounts.list().map((a) => a.id), ['acc-1'])
+
+  await core.bots.connect('acc-1')
+  assert.deepEqual(connected, ['acc-1'])
+
+  // Execute a command via core.commands and verify redacted audit persistence
+  const cmdRes = await core.commands.execute(
+    { kind: 'discord', id: 'admin@example.com', scope: 'admin', ip: '127.0.0.1' },
+    'status',
+    {}
+  )
+  assert.equal(cmdRes.ok, true)
+  const audits = core.audit.recent(10)
+  assert.equal(audits.length, 1)
+  assert.equal(audits[0].command, 'status')
+  assert.equal(JSON.stringify(audits).includes('admin@example.com'), false)
+  assert.equal(JSON.stringify(audits).includes('secret.user@example.com'), false)
+
+  await core.shutdown()
+  assert.equal(core.started, false)
+  assert.deepEqual(disconnected, ['acc-1'])
+  assert.equal(flushed, 1)
 })
