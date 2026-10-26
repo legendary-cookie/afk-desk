@@ -239,20 +239,30 @@ class AppCore {
       health: () => this.smartProxies.snapshot()
     }
 
+    // Additive platform hooks (getRemoteAccess / saveRemoteAccess) for opt-in embedded server mode.
     this.settings = {
       get: () => {
         const settings = this.settingsStore.get()
         const startWithWindows = this.platform.getAutoLaunch ? Boolean(this.platform.getAutoLaunch()) : false
-        return { startWithWindows, ...settings }
+        const remoteAccess = this.platform.getRemoteAccess ? this.platform.getRemoteAccess() : undefined
+        return {
+          startWithWindows,
+          ...settings,
+          ...(remoteAccess !== undefined ? { remoteAccess } : {})
+        }
       },
       save: (input) => {
         const startWithWindows = input?.startWithWindows === true
         const settings = this.settingsStore.save(input)
         this.platform.setAutoLaunch?.(startWithWindows)
+        const remoteAccess = this.platform.saveRemoteAccess
+          ? this.platform.saveRemoteAccess(input?.remoteAccess)
+          : (this.platform.getRemoteAccess ? this.platform.getRemoteAccess() : undefined)
         const { notifyChannels: _hidden, ...safe } = settings
         return {
           startWithWindows: this.platform.getAutoLaunch ? Boolean(this.platform.getAutoLaunch()) : startWithWindows,
-          ...safe
+          ...safe,
+          ...(remoteAccess !== undefined ? { remoteAccess } : {})
         }
       }
     }
