@@ -1,0 +1,35 @@
+diff --git a/node_modules/bedrock-protocol/src/rak.js b/node_modules/bedrock-protocol/src/rak.js
+--- a/node_modules/bedrock-protocol/src/rak.js
++++ b/node_modules/bedrock-protocol/src/rak.js
+@@ -184,5 +184,5 @@ class RakJsClient extends EventEmitter {
+ 
+   async plainConnect (host = this.options.host, port = this.options.port) {
+-    this.raknet = new Client(host, port)
++    this.raknet = new Client(host, port, { protocolVersion: this.options.protocolVersion ?? 10 })
+     await this.raknet.connect()
+ 
+@@ -246,5 +246,5 @@ class RakJsServer extends EventEmitter {
+ 
+   async plainListen () {
+-    this.raknet = new Server(this.options.host, this.options.port, this.server.getAdvertisement())
++    this.raknet = new Server(this.options.host, this.options.port, this.server.getAdvertisement(), { protocolVersion: this.server.versionLessThan('1.19.30') ? 10 : 11 })
+     await this.raknet.listen(this.options.host, this.options.port)
+     this.raknet.on('openConnection', (conn) => {
+diff --git a/node_modules/bedrock-protocol/src/createClient.js b/node_modules/bedrock-protocol/src/createClient.js
+--- a/node_modules/bedrock-protocol/src/createClient.js
++++ b/node_modules/bedrock-protocol/src/createClient.js
+@@ -1,5 +1,4 @@
+ const { Client } = require('./client')
+-const { RakClient } = require('./rak')('raknet-native')
+ const { sleep } = require('./datatypes/util')
+ const assert = require('assert')
+ const Options = require('./options')
+@@ -99,6 +98,7 @@ function connect (client) {
+ }
+ 
+-async function ping ({ host, port }) {
++async function ping ({ host, port, raknetBackend = 'raknet-native' }) {
++  const { RakClient } = require('./rak')(raknetBackend)
+   const con = new RakClient({ host, port })
+ 
+   try {

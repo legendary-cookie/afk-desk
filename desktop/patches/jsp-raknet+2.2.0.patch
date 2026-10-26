@@ -1,0 +1,57 @@
+diff --git a/node_modules/jsp-raknet/js/Client.js b/node_modules/jsp-raknet/js/Client.js
+--- a/node_modules/jsp-raknet/js/Client.js
++++ b/node_modules/jsp-raknet/js/Client.js
+@@ -19,5 +19,5 @@ const Identifiers_1 = __importDefault(require("./protocol/Identifiers"));
+ const debug = require('debug')('raknet');
+ // RakNet protocol versions 
+-const RAKNET_PROTOCOL = 10;
++const DEFAULT_RAKNET_PROTOCOL = 10;
+ const RAKNET_TPS = 100;
+ const RAKNET_TICK_LENGTH = 1 / RAKNET_TPS;
+@@ -25,6 +25,7 @@ const RAKNET_TICK_LENGTH = 1 / RAKNET_TPS;
+ const START_MTU_SIZE = 1492;
+ class Client extends events_1.default {
+-    constructor(hostname, port) {
++    constructor(hostname, port, options = {}) {
+         super();
++        this.protocolVersion = options.protocolVersion ?? DEFAULT_RAKNET_PROTOCOL;
+         this.client = true;
+         this.server = false;
+@@ -96,8 +97,8 @@ class Client extends events_1.default {
+         const packet = new OpenConnectionRequest1_1.default();
+         packet.mtuSize = this.mtuSize;
+-        packet.protocol = RAKNET_PROTOCOL;
++        packet.protocol = this.protocolVersion;
+         packet.encode();
+         this.sendBuffer(packet.buffer);
+-        this.emit('connecting', { mtuSize: packet.mtuSize, protocol: RAKNET_PROTOCOL });
++        this.emit('connecting', { mtuSize: packet.mtuSize, protocol: this.protocolVersion });
+     }
+     handleUnconnectedPong(buffer) {
+diff --git a/node_modules/jsp-raknet/js/Server.js b/node_modules/jsp-raknet/js/Server.js
+--- a/node_modules/jsp-raknet/js/Server.js
++++ b/node_modules/jsp-raknet/js/Server.js
+@@ -20,10 +20,11 @@ const InetAddress_1 = __importDefault(require("./utils/InetAddress"));
+ const debug = require('debug')('raknet');
+ // RakNet protocol versions 
+-const RAKNET_PROTOCOL = 10;
++const DEFAULT_RAKNET_PROTOCOL = 10;
+ const RAKNET_TPS = 100;
+ const RAKNET_TICK_LENGTH = 1 / RAKNET_TPS;
+ class Server extends events_1.default {
+-    constructor(hostname, port, serverName) {
++    constructor(hostname, port, serverName, options = {}) {
+         super();
++        this.protocolVersion = options.protocolVersion ?? DEFAULT_RAKNET_PROTOCOL;
+         this.server = true;
+         this.client = false;
+@@ -113,7 +114,7 @@ const RAKNET_TICK_LENGTH = 1 / RAKNET_TPS;
+             throw new Error('Received an invalid offline message');
+         }
+-        if (decodedPacket.protocol !== RAKNET_PROTOCOL) {
++        if (decodedPacket.protocol !== this.protocolVersion) {
+             const packet = new IncompatibleProtocolVersion_1.default();
+-            packet.protocol = RAKNET_PROTOCOL;
++            packet.protocol = this.protocolVersion;
+             packet.serverGUID = this.serverId;
+             packet.encode();
