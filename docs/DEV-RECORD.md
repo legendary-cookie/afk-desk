@@ -84,3 +84,7 @@ Ordered by user value against implementation cost. AFKCC is cloud-hosted; AFK De
   - Claude/GPT pool: `claude-sonnet-5-5-*` for independent reviews (a different family from the authors) and as a fallback when the Gemini pool is exhausted.
   - Codex is used for scoped implementation; its sandbox cannot run `node --test` (spawn EPERM) or commit, so it is not used for large refactors that need the suite.
   - Tool versions: codex-cli 0.162.1 (0.164.0 available), agy 1.4.7. Update between tasks, never while a job is running.
+- **Codex model routing (2026-10-27).** Updated codex-cli 0.162.1 → 0.164.0 via `codex update`. The owner's `~/.codex/config.toml` defaults to `gpt-6-luna` (medium), described as "fast and affordable … for easier tasks". All earlier Codex jobs ran on it, which likely explains the incomplete R1 passes and the thin tests.
+  - The owner's global config is left unchanged.
+  - Every Codex job now passes `-m gpt-6.1-sol -c model_reasoning_effort="high"` for implementation.
+  - `gpt-6-astra` is used for security-sensitive or hard work.
