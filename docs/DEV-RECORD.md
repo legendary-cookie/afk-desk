@@ -94,3 +94,4 @@ Ordered by user value against implementation cost. AFKCC is cloud-hosted; AFK De
     - Antigravity work goes to its Claude pool (`claude-sonnet-5-5-*`) if that pool is separate.
     - Codex `gpt-6.1-sol` takes the rest, with Claude (lead) running tests and commits.
   - R2 security review (Codex `gpt-6-astra`) found 2 P1 issues and 8 P2 issues. Notably, a read token could become admin via session ids in the audit log, and remote admins could change remote-access settings and passwords. Fixes are in progress; nothing from R2 is merged until a re-review passes.
+- **2026-10-27 — Antigravity Claude pool also exhausted** (it resets after about 5 h; the Gemini pool after about 7 days). R2 security fixes moved to Codex `gpt-6-astra`; Docker (R5) is on Codex `gpt-6.1-sol`. Claude runs every suite and commit.
