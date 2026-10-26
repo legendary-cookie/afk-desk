@@ -339,6 +339,7 @@ class BotManager {
         this.emit('log', account.id, { kind: 'system', message: 'Server resource pack loaded. Custom menu art is enabled.', at: Date.now() })
         this.diagnose({ event: 'resource_pack_loaded', accountId: account.id, source: session.resourcePack.source, sha1: session.resourcePack.sha1 })
       } catch (error) {
+        const reason = String(error?.message || error).slice(0, 120)
         if (error instanceof HostPolicyError) {
           // Blocked by our own destination policy (e.g. a private/loopback host):
           // treat like the proxy case and accept without loading so the server
@@ -348,9 +349,9 @@ class BotManager {
           this.diagnose({ event: 'resource_pack_skipped_policy', accountId: account.id, host, message: String(error.message).slice(0, 180) })
           return
         }
-        rejectResourcePack(bot, first, second, pack.hash)
-        this.emit('log', account.id, { kind: 'error', message: `Server resource pack failed: ${String(error?.message || error).slice(0, 180)}`, at: Date.now() })
-        this.diagnose({ event: 'resource_pack_failed', accountId: account.id, host, message: String(error?.message || error).slice(0, 180) })
+        bot.acceptResourcePack?.()
+        this.emit('log', account.id, { kind: 'system', message: `Server resource pack could not be loaded (${reason}); accepted without custom menu art so the server will not kick.`, at: Date.now() })
+        this.diagnose({ event: 'resource_pack_unavailable', host, reason })
       }
     })
     bot.on('windowClose', () => {

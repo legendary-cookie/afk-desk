@@ -141,26 +141,39 @@ test('mobile quiesces gameplay packets during modern server configuration', () =
   assert.deepEqual(writes.at(-1), ['position', { x: 1, y: 64, z: 2 }])
 })
 
-test('mobile accepts a policy-blocked pack without loading it; real download failures still decline', async (t) => {
+test('mobile accepts a policy-blocked pack or download failure without loading it', async (t) => {
   const { PACK_POLICY_ERROR } = require('../resource-pack.cjs')
   const run = async (id, loadError) => {
     const bot = new FakeBot()
     const writes = []
+    const events = []
+    const diagnostics = []
     bot._client.write = (name, payload) => writes.push([name, payload])
     bot.acceptResourcePack = () => { bot.accepted = true }
     const manager = new BotManager({
-      profilesPath: 'profiles', emit: () => {}, createBot: () => bot,
+      profilesPath: 'profiles', emit: (...event) => events.push(event), diagnose: (entry) => diagnostics.push(entry), createBot: () => bot,
       resourcePackLoader: { load: async () => { throw loadError } }
     })
     t.after(() => manager.disconnect(id))
     manager.connect({ id, username: 'user@example.com', host: 'localhost', antiAfk: false, autoReconnect: false })
     bot.emit('resourcePack', '0123456789012345678901234567890123456789', 'http://10.0.0.5/a.zip')
     await new Promise((resolve) => setImmediate(resolve))
-    return { accepted: bot.accepted === true, declined: writes.some(([name]) => name === 'resource_pack_receive') }
+    return { accepted: bot.accepted === true, declined: writes.some(([name]) => name === 'resource_pack_receive'), events, diagnostics }
   }
   const policy = Object.assign(new Error('Resource pack host resolves to a private or non-routable address.'), { code: PACK_POLICY_ERROR })
-  assert.deepEqual(await run('policy', policy), { accepted: true, declined: false })
-  assert.deepEqual(await run('broken', new Error('Resource pack download failed with HTTP 500.')), { accepted: false, declined: true })
+  const blocked = await run('policy', policy)
+  assert.equal(blocked.accepted, true)
+  assert.equal(blocked.declined, false)
+  for (const [id, error, reasonPart] of [
+    ['broken', new Error('Resource pack download failed with HTTP 500.'), 'HTTP 500'],
+    ['timeout', new Error('Resource pack request timed out.'), 'timed out']
+  ]) {
+    const failed = await run(id, error)
+    assert.equal(failed.accepted, true)
+    assert.equal(failed.declined, false)
+    assert.equal(failed.diagnostics.some((entry) => entry.event === 'resource_pack_unavailable' && entry.host === '10.0.0.5' && entry.reason.includes(reasonPart)), true)
+    assert.match(failed.events.filter(([type]) => type === 'log').at(-1)[2].message, /accepted without custom menu art so the server will not kick/)
+  }
 })
 
 test('mobile loads resource-pack art and exposes clickable server menus', async (t) => {
