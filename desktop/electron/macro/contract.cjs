@@ -28,6 +28,16 @@
 // - maxStepsPerMacro counts the whole step tree; an empty steps array is a blocking validation error.
 // - Model extras: migrateV1 returns { library, migratedAccountIds, warnings } and accepts { now };
 //   importMacros accepts { accountIds, editionOf }. Matcher extra: rejectedMacros().
+// - Engine: RunEvent and RunRecord carry `reason` (e.g. 'busy', 'override', 'library', 'maxRuntime',
+//   'engineError'). Library/override stops end as 'cancelled' + reason; 'stopped' is reserved for the
+//   stop step, stopWhen and maxRuntime. Engine-internal errors: { runId: null, status: 'failed', reason: 'engineError' }.
+// - stepPath encoding: [i] top level; [i, 0|1, j] inside if (0 = then, 1 = else); [i, j] inside repeat.
+// - Timer phase starts at the first `spawn` of a new sessionId; Stage 2 must emit `spawn` for Bedrock too.
+// - disconnect/reconnect steps: the engine adopts the session id seen after they settle instead of
+//   fencing. Therefore the facade `reconnect` resolves only once the NEW session has spawned
+//   (or rejects TIMEOUT/ABORTED).
+// - Engine extras: constructor accepts { timers, nextScheduleTime, chatIntervalMs }; Stage 2 passes
+//   triggers.nextScheduleTime. createScheduler accepts { onError }. RunRecord keeps ≤ 200 step entries.
 
 const SCHEMA_VERSION = 2
 
