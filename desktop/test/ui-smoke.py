@@ -24,8 +24,68 @@ window.__world.blocks.push({ x: 0, y: 64, z: -2, name: 'stone_slab', solid: true
 window.__savedAccount = null;
 window.__scale = 100;
 window.__settings = { startWithWindows: false, staggerStartupConnections: true, startupConnectionDelay: 3, uiScale: 100, sidePanelWidth: 300, inventoryHeight: 220, macros: [{ label: 'Town', message: '/server towny' }] };
+window.__macroRunListeners = [];
+window.__macros = [
+  {
+    id: 'macro-seed-1',
+    name: 'Auto-eat when hunger < 14',
+    enabled: true,
+    targets: { mode: 'all' },
+    trigger: { type: 'hungerBelow', below: 14, cooldownMs: 5000 },
+    stopWhen: [{ type: 'online' }],
+    concurrency: 'skip',
+    onError: 'continue',
+    defaultDelayMs: 250,
+    maxRuntimeMs: 60000,
+    steps: [
+      { type: 'holdItem', name: 'cooked_beef' },
+      { type: 'repeat', count: 2, steps: [{ type: 'wait', ms: 900 }] }
+    ]
+  },
+  {
+    id: 'macro-seed-invalid',
+    name: 'Broken regex chat trigger',
+    enabled: false,
+    targets: { mode: 'accounts', accountIds: ['one'] },
+    trigger: { type: 'chat', match: 'regex', pattern: '[unclosed', sources: ['player'] },
+    stopWhen: [],
+    concurrency: 'skip',
+    onError: 'stop',
+    defaultDelayMs: 0,
+    maxRuntimeMs: null,
+    steps: [{ type: 'chat', message: '/ping' }]
+  }
+];
+window.__macroValidation = {
+  'macro-seed-invalid': [{ path: 'trigger.pattern', message: 'Invalid regular expression in chat trigger.' }]
+};
+window.__macroRuns = [
+  {
+    runId: 'run-101',
+    macroId: 'macro-seed-1',
+    accountId: 'one',
+    status: 'completed',
+    trigger: 'hungerBelow',
+    startedAt: Date.now() - 42000,
+    endedAt: Date.now() - 40150,
+    steps: [{ path: [0], type: 'holdItem', ok: true }]
+  },
+  {
+    runId: 'run-102',
+    macroId: 'macro-seed-1',
+    accountId: 'one',
+    status: 'failed',
+    reason: 'Step error',
+    trigger: 'manual',
+    startedAt: Date.now() - 15000,
+    endedAt: Date.now() - 14580,
+    steps: [{ path: [0], type: 'holdItem', ok: false, error: 'Item cooked_beef not found in inventory' }]
+  }
+];
+window.__notifyChannels = [];
+window.__notifyTests = [];
 window.afkDesk = {
-  listAccounts: async () => [{ id: 'one', label: 'TestPlayer', username: 'test@example.com', host: 'play.example.com', port: 25565, antiAfk: true, environmentalMovement: true }],
+  listAccounts: async () => [{ id: 'one', label: 'TestPlayer', username: 'test@example.com', host: 'play.example.com', port: 25565, edition: 'java', tags: ['lobby', 'farm'], antiAfk: true, environmentalMovement: true }],
   getSettings: async () => ({ ...window.__settings }),
   getAppVersion: async () => '0.10.0-beta.7-test',
   getSupportedVersions: async () => ['1.8.8', '1.21.11'],
@@ -46,7 +106,112 @@ window.afkDesk = {
   equipInventoryItem: async (_id, slot, destination) => { window.__equips.push([slot, destination]); return { account: {}, sourceSlot: slot, targetSlot: slot, destination: destination === 'auto' ? 'head' : destination }; },
   clickWindowSlot: async (_id, slot) => { window.__windowClicks.push(slot); }, closeServerWindow: async () => { window.__botEvent({ type: 'window', id: 'one', payload: { open: false } }); },
   saveAccount: async (value) => (window.__savedAccount = value), deleteAccount: async () => {},
-  openExternal: async () => {}, openIsolatedLogin: async () => {}
+  openExternal: async () => {}, openIsolatedLogin: async () => {},
+  macros: {
+    list: async () => ({ macros: structuredClone(window.__macros), validation: structuredClone(window.__macroValidation) }),
+    save: async (macro) => {
+      if (!macro || !macro.name || !macro.name.trim()) {
+        const err = new Error('/name: Macro name is required.');
+        err.validation = [{ path: '/name', message: 'Macro name is required.' }];
+        throw err;
+      }
+      if (!Array.isArray(macro.steps) || macro.steps.length === 0) {
+        const err = new Error('/steps: Add at least one step.');
+        err.validation = [{ path: '/steps', message: 'Add at least one step.' }];
+        throw err;
+      }
+      const saved = structuredClone({ ...macro, id: macro.id || ('macro-' + (window.__macros.length + 1)) });
+      const idx = window.__macros.findIndex((m) => m.id === saved.id);
+      if (idx === -1) window.__macros.push(saved);
+      else window.__macros[idx] = saved;
+      delete window.__macroValidation[saved.id];
+      return saved;
+    },
+    remove: async (macroId) => {
+      window.__macros = window.__macros.filter((m) => m.id !== macroId);
+      delete window.__macroValidation[macroId];
+      return true;
+    },
+    setEnabled: async (macroId, enabled) => {
+      if (window.__macroValidation[macroId]?.length && enabled) {
+        throw new Error('Cannot enable macro with validation errors.');
+      }
+      const item = window.__macros.find((m) => m.id === macroId);
+      if (item) item.enabled = Boolean(enabled);
+      return structuredClone(item);
+    },
+    run: async (accountId, macroId) => {
+      const runId = 'run-live-' + Date.now();
+      const evtStep = { status: 'step', runId, macroId, accountId, stepPath: [0], stepType: 'repeat' };
+      window.__macroRunListeners.forEach((fn) => fn(evtStep));
+      window.__macroRuns.push({
+        runId,
+        macroId,
+        accountId,
+        status: 'completed',
+        trigger: 'manual',
+        startedAt: Date.now() - 1200,
+        endedAt: Date.now(),
+        steps: [{ path: [0], type: 'repeat', ok: true }]
+      });
+      return { status: 'started', runId };
+    },
+    stop: async (accountId) => {
+      const evtStop = { status: 'stopped', reason: 'Stopped by user', accountId };
+      window.__macroRunListeners.forEach((fn) => fn(evtStop));
+      return true;
+    },
+    runs: async (macroId) => window.__macroRuns.filter((r) => !macroId || r.macroId === macroId),
+    importJson: async (raw) => {
+      const parsed = JSON.parse(raw);
+      const arr = Array.isArray(parsed) ? parsed : [parsed];
+      const imported = arr.map((m, idx) => ({ ...m, id: m.id || ('imported-' + idx) }));
+      window.__macros.push(...imported);
+      return { macros: imported, errors: [] };
+    },
+    exportJson: async (ids) => {
+      const list = Array.isArray(ids) && ids.length ? window.__macros.filter((m) => ids.includes(m.id)) : window.__macros;
+      return JSON.stringify(list, null, 2);
+    }
+  },
+  onMacroRun: (callback) => {
+    window.__macroRunListeners.push(callback);
+    return () => {
+      window.__macroRunListeners = window.__macroRunListeners.filter((fn) => fn !== callback);
+    };
+  },
+  notify: {
+    list: async () => structuredClone(window.__notifyChannels),
+    save: async (payload) => {
+      const existing = window.__notifyChannels.find((c) => c.id === payload.id);
+      const rawSecret = payload.type === 'discord' ? payload.webhookUrl : payload.botToken;
+      const secretHint = rawSecret ? ('••••' + String(rawSecret).slice(-4)) : (existing?.secretHint || '••••1234');
+      const saved = {
+        id: existing?.id || ('chan-' + (window.__notifyChannels.length + 1)),
+        type: payload.type || 'discord',
+        name: payload.name,
+        enabled: payload.enabled !== false,
+        events: payload.events || [],
+        accountIds: payload.accountIds ?? null,
+        includeTimestamp: payload.includeTimestamp === true,
+        chatId: payload.chatId || existing?.chatId || '',
+        hasSecret: true,
+        secretHint
+      };
+      const idx = window.__notifyChannels.findIndex((c) => c.id === saved.id);
+      if (idx === -1) window.__notifyChannels.push(saved);
+      else window.__notifyChannels[idx] = saved;
+      return structuredClone(saved);
+    },
+    delete: async (id) => {
+      window.__notifyChannels = window.__notifyChannels.filter((c) => c.id !== id);
+      return { ok: true };
+    },
+    test: async (id) => {
+      window.__notifyTests.push(id);
+      return { ok: true };
+    }
+  }
 };
 """
 
@@ -221,6 +386,89 @@ def run() -> None:
         page.screenshot(path=desktop)
         page.locator("#display-menu-trigger").click()
 
+        # Stage 3 Flow A/B/C: Macro Library, Editor (join -> chat, repeat with wait inside, keyboard reorder, save), Live run & Runs tab
+        page.locator("#open-automations").click()
+        page.locator("#automation-dialog").wait_for(state="visible")
+        assert page.locator(".macro-library-item").count() == 2
+        assert page.locator(".macro-library-item.has-errors input[type='checkbox']").is_disabled()
+        macro_lib_1366 = str(Path(gettempdir()) / "afkdesk-macro-library-1366.png")
+        page.screenshot(path=macro_lib_1366)
+
+        page.locator("#macro-new-btn").click()
+        page.locator("#macro-name-input").fill("Join Lobby & Loop")
+        page.locator("#macro-trigger-type").select_option("join")
+        step0 = page.locator('.macro-step-card[data-step-path="[0]"]')
+        step0.locator(".macro-step-type-select").select_option("chat")
+        step0.locator(".step-chat-message").fill("/lobby")
+
+        # Add a repeat step via step picker
+        page.locator("#macro-open-step-picker").click()
+        page.locator('#macro-step-picker [data-step-type="repeat"]').click()
+        step1 = page.locator('.macro-step-card[data-step-path="[1]"]')
+        step1.wait_for()
+        # Add a second wait step inside the repeat block via the nested step selector
+        step1.locator(".step-add-nested-select").select_option("wait")
+        assert page.locator('.macro-step-card[data-step-path="[1,0]"]').count() == 1
+        assert page.locator('.macro-step-card[data-step-path="[1,1]"]').count() == 1
+
+        # Reorder via keyboard (Alt+ArrowUp moves selected step [1] up to [0])
+        step1.focus()
+        page.keyboard.press("Alt+ArrowUp")
+        assert page.locator('.macro-step-card[data-step-path="[0]"] > .macro-step-header .macro-step-type-select').input_value() == "repeat"
+        assert page.locator('.macro-step-card[data-step-path="[1]"] > .macro-step-header .macro-step-type-select').input_value() == "chat"
+
+        # Save via keyboard Ctrl+Enter and verify it is listed in the library
+        page.keyboard.press("Control+Enter")
+        page.locator(".macro-library-item", has_text="Join Lobby & Loop").wait_for()
+        assert page.locator(".macro-library-item").count() == 3
+
+        # Trigger live run so step [0] highlights, then take editor screenshot at 1366x768
+        page.locator("#macro-run-now").click()
+        page.locator(".macro-step-card.live-running").wait_for()
+        page.locator("#macro-steps-card").scroll_into_view_if_needed()
+        macro_editor_1366 = str(Path(gettempdir()) / "afkdesk-macro-editor-1366.png")
+        page.screenshot(path=macro_editor_1366)
+
+        # Open Runs tab and take screenshot at 1366x768
+        page.locator(".macro-library-item", has_text="Auto-eat when hunger < 14").click()
+        page.locator("#macro-tab-runs").click()
+        page.locator(".macro-run-record").first.wait_for()
+        assert "Item cooked_beef not found in inventory" in page.locator("#macro-runs-list").inner_text()
+        macro_runs_1366 = str(Path(gettempdir()) / "afkdesk-macro-runs-1366.png")
+        page.screenshot(path=macro_runs_1366)
+        page.locator("#close-automation").click()
+        page.locator("#automation-dialog").wait_for(state="hidden")
+
+        # Stage 3 Flow D: Notifications panel inside Settings -> add Discord channel -> Send test -> toast
+        page.locator("#open-settings").click()
+        page.locator("#settings-dialog").wait_for(state="visible")
+        page.locator("#notifications-panel").scroll_into_view_if_needed()
+        page.locator("#add-notification-channel").click()
+        page.locator("#notification-channel-dialog").wait_for(state="visible")
+        page.locator("#notify-channel-type").select_option("discord")
+        page.locator("#notify-channel-name").fill("Ops Discord")
+        page.locator("#notify-webhook-url").fill("https://discord.com/api/webhooks/123456/abcdef9876")
+        page.locator("#save-notification-channel").click()
+        page.locator("#notification-channel-dialog").wait_for(state="hidden")
+
+        channel_row = page.locator(".notification-channel-row", has_text="Ops Discord")
+        channel_row.wait_for()
+        assert "•••• 9876" in channel_row.inner_text()
+        channel_row.locator(".notify-test-btn").click()
+        page.locator(".toast", has_text="Test notification sent to Ops Discord.").wait_for()
+
+        # Verify secret is never echoed back on Edit
+        channel_row.locator(".notify-edit-btn").click()
+        page.locator("#notification-channel-dialog").wait_for(state="visible")
+        assert page.locator("#notify-webhook-url").input_value() == ""
+        assert page.locator("#notify-webhook-url").get_attribute("placeholder") == "•••• 9876 (unchanged)"
+        page.locator("#cancel-notification-channel").click()
+        page.locator("#notification-channel-dialog").wait_for(state="hidden")
+        notifications_1366 = str(Path(gettempdir()) / "afkdesk-notifications-1366.png")
+        page.screenshot(path=notifications_1366)
+        page.locator("#close-settings").click()
+        page.locator("#settings-dialog").wait_for(state="hidden")
+
         compact = browser.new_page(viewport={"width": 860, "height": 600})
         compact.add_init_script(STUB)
         compact.goto(URL, wait_until="domcontentloaded")
@@ -243,6 +491,35 @@ def run() -> None:
         assert compact.evaluate("document.querySelector('.main-content').scrollTop > 0")
         compact_path = str(Path(gettempdir()) / "afkdesk-ui-compact.png")
         compact.screenshot(path=compact_path)
+
+        # Stage 3 screenshots at 860x600
+        compact.locator("#open-automations").click()
+        compact.locator("#automation-dialog").wait_for(state="visible")
+        macro_lib_860 = str(Path(gettempdir()) / "afkdesk-macro-library-860.png")
+        compact.screenshot(path=macro_lib_860)
+        compact.locator("#macro-open-step-picker").click()
+        compact.locator('#macro-step-picker [data-step-type="repeat"]').click()
+        compact.locator('.macro-step-card[data-step-path="[2]"]').scroll_into_view_if_needed()
+        macro_editor_860 = str(Path(gettempdir()) / "afkdesk-macro-editor-860.png")
+        compact.screenshot(path=macro_editor_860)
+        compact.locator("#macro-tab-runs").click()
+        compact.locator(".macro-run-record").first.wait_for()
+        macro_runs_860 = str(Path(gettempdir()) / "afkdesk-macro-runs-860.png")
+        compact.screenshot(path=macro_runs_860)
+        compact.locator("#close-automation").click()
+        compact.locator("#automation-dialog").wait_for(state="hidden")
+
+        compact.locator("#open-settings").click()
+        compact.locator("#settings-dialog").wait_for(state="visible")
+        compact.locator("#notifications-panel").scroll_into_view_if_needed()
+        compact.locator("#add-notification-channel").click()
+        compact.locator("#notify-channel-name").fill("Ops Discord")
+        compact.locator("#notify-webhook-url").fill("https://discord.com/api/webhooks/123456/abcdef9876")
+        compact.locator("#save-notification-channel").click()
+        compact.locator("#notifications-panel").scroll_into_view_if_needed()
+        notifications_860 = str(Path(gettempdir()) / "afkdesk-notifications-860.png")
+        compact.screenshot(path=notifications_860)
+        compact.locator("#close-settings").click()
 
         narrow = browser.new_page(viewport={"width": 700, "height": 800})
         narrow.add_init_script(STUB)
@@ -316,10 +593,21 @@ def run() -> None:
         pov.locator("#pov-dialog").wait_for(state="hidden")
         assert not errors, errors
         browser.close()
-        print(desktop)
-        print(compact_path)
-        print(narrow_path)
-        print(pov_path)
+        for p in [
+            desktop,
+            compact_path,
+            narrow_path,
+            pov_path,
+            macro_lib_1366,
+            macro_editor_1366,
+            macro_runs_1366,
+            notifications_1366,
+            macro_lib_860,
+            macro_editor_860,
+            macro_runs_860,
+            notifications_860,
+        ]:
+            print(p)
 
 
 if __name__ == "__main__":

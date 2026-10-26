@@ -27,9 +27,6 @@ let povAnimationFrame = null
 let povLastAnimationAt = 0
 let povLookAnimationFrame = null
 let povLookDelta = { accountId: null, yaw: 0, pitch: 0 }
-let automationDraft = []
-let automationIndex = 0
-let automationStepIndex = -1
 
 const ENCHANTMENT_DETAILS = {
   aqua_affinity: [1, 'Speeds up underwater mining.'],
@@ -107,8 +104,14 @@ const el = Object.fromEntries([
   'chat-form', 'chat-message', 'chat-suggestions', 'macro-pad', 'manage-macros', 'macro-dialog', 'close-macro-dialog', 'macro-editor', 'macro-rows', 'add-macro', 'cancel-macros', 'save-macros', 'account-dialog', 'account-form', 'dialog-title', 'account-id', 'identity-id', 'profile-name', 'edition', 'label',
   'username', 'host', 'port', 'version', 'modded-fields', 'mod-loader', 'mod-handshake', 'client-brand', 'mod-list', 'mod-channels', 'connect-on-startup', 'proxy-mode', 'proxy-enabled', 'proxy-fields', 'proxy-type', 'proxy-host', 'proxy-port', 'proxy-username', 'proxy-password', 'proxy-password-help', 'proxy-clear-password', 'share-proxy-pool', 'proxy-label', 'proxy-max-sessions', 'alert-disconnect', 'alert-errors', 'alert-health', 'anti-afk', 'anti-afk-min-delay', 'anti-afk-max-delay', 'anti-afk-duration', 'anti-afk-look-degrees', 'anti-afk-walk-distance', 'anti-afk-jump', 'anti-afk-look', 'anti-afk-sneak', 'anti-afk-swing', 'anti-afk-walk', 'environmental-movement', 'auto-reconnect', 'auto-reconnect-delay', 'auto-reconnect-backoff', 'auto-reconnect-max-delay', 'auto-reconnect-rate-limit-delay', 'auto-reconnect-max', 'connect-timeout', 'reconnect-reset-delay', 'auto-deposit-setting', 'auto-deposit-range', 'join-message', 'server-change-message',
   'message-delay', 'form-error', 'delete-account', 'duplicate-profile', 'login-dialog', 'login-code', 'open-login-private', 'open-login',
-  'close-login', 'ui-scale', 'ui-scale-value', 'pov-settings-refresh', 'pov-settings-fps', 'pov-settings-radius', 'pov-settings-columns', 'pov-max-feeds', 'pov-settings-view-mode', 'pov-show-hud', 'column-resizer', 'inventory-resizer', 'server-window-dialog', 'server-window-title', 'server-window-stage', 'server-window-art', 'server-window-grid', 'close-server-window', 'logs-dialog', 'close-logs', 'log-filter', 'refresh-logs', 'clear-persistent-logs', 'persistent-log-view', 'automation-dialog', 'close-automation', 'automation-json', 'automation-list', 'automation-flow', 'automation-palette', 'automation-inspector', 'automation-add', 'automation-delete', 'automation-scope', 'automation-json-toggle', 'automation-test', 'save-automations', 'stop-automation', 'pov-dialog', 'close-pov', 'pov-grid', 'pov-search', 'pov-columns', 'pov-refresh', 'pov-fps', 'pov-view-mode', 'pov-pause', 'pov-back-grid', 'pov-radius', 'pov-x', 'pov-y', 'pov-z', 'pov-detail', 'item-tooltip', 'toast-region'
+  'close-login', 'ui-scale', 'ui-scale-value', 'pov-settings-refresh', 'pov-settings-fps', 'pov-settings-radius', 'pov-settings-columns', 'pov-max-feeds', 'pov-settings-view-mode', 'pov-show-hud', 'column-resizer', 'inventory-resizer', 'server-window-dialog', 'server-window-title', 'server-window-stage', 'server-window-art', 'server-window-grid', 'close-server-window', 'logs-dialog', 'close-logs', 'log-filter', 'refresh-logs', 'clear-persistent-logs', 'persistent-log-view',
+  'automation-dialog', 'close-automation', 'macro-watch-account', 'macro-live-chip', 'macro-run-now', 'macro-stop-run', 'macro-library-pane', 'macro-library-search', 'macro-new-btn', 'macro-template-picker', 'macro-duplicate-btn', 'macro-delete-btn', 'macro-import-btn', 'macro-export-btn', 'macro-import-file', 'macro-json-panel', 'macro-json-label', 'macro-json-io', 'macro-json-error', 'macro-json-confirm-import', 'macro-json-copy', 'macro-json-close', 'macro-library-list', 'macro-detail-pane', 'macro-tab-editor', 'macro-tab-runs', 'macro-runs-badge', 'macro-undo-btn', 'macro-redo-btn', 'macro-close-editor-btn', 'macro-save-btn', 'macro-validation-banner', 'macro-empty-editor', 'macro-editor-view', 'macro-trigger-card', 'macro-editor-enabled-wrap', 'macro-editor-enabled', 'macro-name-input', 'macro-trigger-type', 'macro-trigger-cooldown', 'macro-trigger-fields', 'macro-trigger-error', 'macro-targets-card', 'macro-target-mode', 'macro-concurrency', 'macro-on-error', 'macro-default-delay', 'macro-max-runtime', 'macro-target-accounts-list', 'macro-target-tags-box', 'macro-target-tags-input', 'macro-target-tags-suggestions', 'macro-targets-error', 'macro-add-stop-cond', 'macro-stop-when-list', 'macro-steps-card', 'macro-steps-count', 'macro-open-step-picker', 'macro-step-picker', 'macro-step-list', 'macro-steps-error', 'macro-runs-view', 'macro-runs-caption', 'macro-refresh-runs', 'macro-runs-list',
+  'notifications-panel', 'add-notification-channel', 'notification-channel-list', 'notification-channel-dialog', 'notification-channel-form', 'notification-channel-dialog-title', 'close-notification-channel', 'notify-channel-id', 'notify-channel-type', 'notify-channel-name', 'notify-channel-enabled', 'notify-discord-fields', 'notify-webhook-url', 'notify-telegram-fields', 'notify-bot-token', 'notify-chat-id', 'notify-events-grid', 'notify-account-mode', 'notify-accounts-checklist', 'notify-include-timestamp', 'notify-channel-error', 'delete-notification-channel', 'test-notification-channel', 'cancel-notification-channel', 'save-notification-channel',
+  'pov-dialog', 'close-pov', 'pov-grid', 'pov-search', 'pov-columns', 'pov-refresh', 'pov-fps', 'pov-view-mode', 'pov-pause', 'pov-back-grid', 'pov-radius', 'pov-x', 'pov-y', 'pov-z', 'pov-detail', 'item-tooltip', 'toast-region'
 ].map((id) => [id, document.getElementById(id)]))
+
+let macroEditor = null
+let notificationsPanel = null
 
 async function init() {
   const [accounts, settings, appVersion, versions] = await Promise.all([api.listAccounts(), api.getSettings(), api.getAppVersion(), api.getSupportedVersions()])
@@ -122,6 +125,9 @@ async function init() {
   applyUiScale(state.settings.uiScale)
   applyVisualDesign(state.settings.workspaceDesign, state.settings.colorTheme)
   applyPanelLayout(state.settings)
+  bindDialogAccessibility()
+  macroEditor = window.afkMacroEditor?.createMacroEditor({ api, state, el, toast, cleanError, run }) || null
+  notificationsPanel = window.afkNotificationsPanel?.createNotificationsPanel({ api, state, el, toast, cleanError, run }) || null
   bindEvents()
   render()
   observePanelFit()
@@ -137,7 +143,11 @@ function bindEvents() {
   el['command-search'].addEventListener('keydown', handleCommandSearchKey)
   el['command-dialog'].addEventListener('cancel', (event) => { event.preventDefault(); closeCommandCenter() })
   document.addEventListener('keydown', (event) => {
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); openCommandCenter() }
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+      if (el['automation-dialog']?.open) return
+      event.preventDefault()
+      openCommandCenter()
+    }
   })
   el['close-settings'].addEventListener('click', () => {
     applyUiScale(state.settings.uiScale)
@@ -225,13 +235,6 @@ function bindEvents() {
   el['refresh-logs'].addEventListener('click', refreshPersistentLogs)
   el['log-filter'].addEventListener('change', refreshPersistentLogs)
   el['clear-persistent-logs'].addEventListener('click', clearPersistentLogs)
-  el['close-automation'].addEventListener('click', () => el['automation-dialog'].close())
-  el['save-automations'].addEventListener('click', saveAutomations)
-  el['stop-automation'].addEventListener('click', () => run(() => api.stopAutomation(state.selectedId)))
-  el['automation-add'].addEventListener('click', addAutomation)
-  el['automation-delete'].addEventListener('click', deleteAutomation)
-  el['automation-json-toggle'].addEventListener('change', toggleAutomationJson)
-  el['automation-test'].addEventListener('click', testAutomation)
   el['close-pov'].addEventListener('click', closePov)
   el['pov-dialog'].addEventListener('close', closePovInput)
   document.addEventListener('mousemove', handlePovMouseMove)
@@ -1495,6 +1498,7 @@ async function openSettingsDialog() {
     el['pov-show-hud'].checked = settings.povShowHud !== false
     el['ui-scale-value'].textContent = `${el['ui-scale'].value}%`
     syncStartupDelay()
+    await notificationsPanel?.load()
     el['settings-dialog'].showModal()
   } catch (error) { toast(cleanError(error), 'error') }
 }
@@ -1846,87 +1850,67 @@ async function clearPersistentLogs() {
   await refreshPersistentLogs()
 }
 
-const AUTOMATION_STEP_TYPES = {
-  chat: ['Chat', { message: '/help' }], wait: ['Wait', { milliseconds: 1000 }], move: ['Move', { control: 'forward', duration: 500 }],
-  look: ['Look', { direction: 'left' }], drop: ['Drop item', { slot: 36, count: 1 }], deposit: ['Deposit', { slot: 36, count: 64 }],
-  equip: ['Equip', { slot: 36, destination: 'hand' }], clickGui: ['GUI click', { slot: 0 }], attackNearest: ['Attack nearest', {}],
-  useHeld: ['Use held', {}], notify: ['Alert', { message: 'Automation event' }], if: ['Condition', { condition: { type: 'healthBelow', value: 6 }, then: [] }],
-  repeat: ['Repeat', { times: 2, steps: [] }]
-}
-
 function openAutomations() {
-  const account = selectedAccount()
-  if (!account) return
-  automationDraft = structuredClone(account.automations?.length ? account.automations : [{ id: cryptoId(), name: 'New workflow', enabled: true, trigger: { type: 'manual' }, steps: [{ type: 'wait', milliseconds: 1000 }] }])
-  automationIndex = 0; automationStepIndex = -1
-  el['automation-json-toggle'].checked = false; el['automation-json'].hidden = true; el['automation-workspace']?.removeAttribute('hidden')
-  renderAutomationFlow(); el['automation-dialog'].showModal()
-}
-
-function renderAutomationFlow() {
-  automationIndex = Math.max(0, Math.min(automationIndex, Math.max(0, automationDraft.length - 1)))
-  const workflow = automationDraft[automationIndex]
-  el['automation-list'].replaceChildren(...automationDraft.map((item, index) => automationTab(item, index)))
-  el['automation-flow'].replaceChildren()
-  if (!workflow) { el['automation-flow'].textContent = 'Create a workflow to begin.'; renderAutomationInspector(); return }
-  el['automation-flow'].append(automationNode(`WHEN · ${workflow.trigger?.type || 'manual'}`, triggerSummary(workflow.trigger), -1, 'trigger'))
-  ;(workflow.steps || []).forEach((step, index) => el['automation-flow'].append(automationNode(AUTOMATION_STEP_TYPES[step.type]?.[0] || step.type, stepSummary(step), index, 'action')))
-  const add = document.createElement('button'); add.type = 'button'; add.className = 'automation-add-node'; add.textContent = '＋ Add a step'; add.addEventListener('click', () => el['automation-palette'].scrollIntoView({ behavior: 'smooth', block: 'nearest' })); el['automation-flow'].append(add)
-  renderAutomationPalette(); renderAutomationInspector()
-}
-
-function automationTab(item, index) { const button = document.createElement('button'); button.type = 'button'; button.className = `automation-tab${index === automationIndex ? ' selected' : ''}`; button.textContent = item.name || `Workflow ${index + 1}`; button.addEventListener('click', () => { automationIndex = index; automationStepIndex = -1; renderAutomationFlow() }); return button }
-function automationNode(title, summary, index, kind) { const button = document.createElement('button'); button.type = 'button'; button.className = `automation-node ${kind}${automationStepIndex === index ? ' selected' : ''}`; const name = document.createElement('span'); name.textContent = title; const detail = document.createElement('small'); detail.textContent = summary; button.append(name, detail); button.addEventListener('click', () => { automationStepIndex = index; renderAutomationFlow() }); return button }
-function triggerSummary(trigger = {}) { return trigger.type === 'timer' ? `Every ${trigger.intervalSeconds || 60}s` : trigger.type === 'chat' ? `Message contains “${trigger.contains || ''}”` : trigger.type === 'health' ? `Health below ${trigger.below || 6}` : `Runs on ${trigger.type || 'manual'}` }
-function stepSummary(step = {}) { return step.message || step.direction || step.destination || (step.type === 'wait' ? `${step.milliseconds || 0} ms` : step.type === 'repeat' ? `${step.count || 1} times` : step.type === 'if' ? step.condition?.type || 'condition' : 'Configured action') }
-
-function renderAutomationPalette() { el['automation-palette'].replaceChildren(...Object.entries(AUTOMATION_STEP_TYPES).map(([type, [label]]) => { const button = document.createElement('button'); button.type = 'button'; button.className = 'automation-palette-item'; button.textContent = `＋ ${label}`; button.addEventListener('click', () => addAutomationStep(type)); return button })) }
-function addAutomationStep(type) { const workflow = automationDraft[automationIndex]; if (!workflow) return; const defaults = structuredClone(AUTOMATION_STEP_TYPES[type]?.[1] || {}); workflow.steps ||= []; workflow.steps.push({ type, ...defaults }); automationStepIndex = workflow.steps.length - 1; renderAutomationFlow() }
-
-function renderAutomationInspector() {
-  const workflow = automationDraft[automationIndex]; el['automation-inspector'].replaceChildren(); if (!workflow) return
-  if (automationStepIndex < 0) {
-    addInspectorField('Workflow name', workflow.name || '', (value) => { workflow.name = value; renderAutomationFlow() })
-    addInspectorSelect('Trigger', ['manual', 'connected', 'disconnected', 'chat', 'health', 'inventory', 'window', 'timer'], workflow.trigger?.type || 'manual', (value) => { workflow.trigger = { type: value }; renderAutomationFlow() })
-    const trigger = workflow.trigger || (workflow.trigger = { type: 'manual' })
-    if (trigger.type === 'chat') addInspectorField('Contains', trigger.contains || '', (value) => { trigger.contains = value })
-    if (trigger.type === 'timer') addInspectorNumber('Interval seconds', trigger.intervalSeconds || 60, 1, 86400, (value) => { trigger.intervalSeconds = value })
-    if (trigger.type === 'health') addInspectorNumber('Health below', trigger.below || 6, 1, 20, (value) => { trigger.below = value })
-    addInspectorToggle('Enabled', workflow.enabled !== false, (value) => { workflow.enabled = value })
+  if (macroEditor) {
+    void macroEditor.open()
     return
   }
-  const step = workflow.steps[automationStepIndex]; if (!step) return
-  addInspectorSelect('Action', Object.keys(AUTOMATION_STEP_TYPES), step.type, (value) => { workflow.steps[automationStepIndex] = { type: value, ...structuredClone(AUTOMATION_STEP_TYPES[value]?.[1] || {}) }; renderAutomationFlow() })
-  for (const [key, value] of Object.entries(step).filter(([key]) => key !== 'type')) {
-    if (typeof value === 'number') addInspectorNumber(formatMinecraftName(key), value, 0, 86400000, (next) => { step[key] = next })
-    else if (typeof value === 'boolean') addInspectorToggle(formatMinecraftName(key), value, (next) => { step[key] = next })
-    else if (typeof value === 'string') addInspectorField(formatMinecraftName(key), value, (next) => { step[key] = next })
-    else addInspectorJson(formatMinecraftName(key), value, (next) => { step[key] = next })
+  el['automation-dialog']?.showModal()
+}
+
+function bindDialogAccessibility() {
+  const origShowModal = HTMLDialogElement.prototype.showModal
+  const origClose = HTMLDialogElement.prototype.close
+
+  HTMLDialogElement.prototype.showModal = function patchedShowModal(...args) {
+    if (!this.open && document.activeElement && document.activeElement !== document.body) {
+      this.__returnFocusEl = document.activeElement
+    }
+    return origShowModal.apply(this, args)
   }
-  const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'button danger'; remove.textContent = 'Remove step'; remove.addEventListener('click', () => { workflow.steps.splice(automationStepIndex, 1); automationStepIndex = -1; renderAutomationFlow() }); el['automation-inspector'].append(remove)
+
+  HTMLDialogElement.prototype.close = function patchedClose(...args) {
+    const active = document.activeElement
+    const shouldRestore = !active || active === document.body || this.contains(active)
+    const result = origClose.apply(this, args)
+    if (shouldRestore && this.__returnFocusEl?.isConnected) {
+      this.__returnFocusEl.focus()
+    }
+    return result
+  }
+
+  document.querySelectorAll('dialog').forEach((dialog) => {
+    dialog.addEventListener('close', () => {
+      const active = document.activeElement
+      if ((!active || active === document.body || dialog.contains(active)) && dialog.__returnFocusEl?.isConnected) {
+        dialog.__returnFocusEl.focus()
+      }
+    })
+  })
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Tab') return
+    const openDialogs = [...document.querySelectorAll('dialog[open]')]
+    const topDialog = openDialogs[openDialogs.length - 1]
+    if (!topDialog) return
+    const focusables = [...topDialog.querySelectorAll(
+      'a[href], button:not(:disabled), input:not(:disabled):not([type="hidden"]), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])'
+    )].filter((node) => !node.closest('[hidden]') && (node.offsetParent !== null || node.getClientRects().length > 0))
+    if (!focusables.length) return
+    const first = focusables[0]
+    const last = focusables[focusables.length - 1]
+    if (!topDialog.contains(document.activeElement)) {
+      event.preventDefault()
+      first.focus()
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault()
+      first.focus()
+    } else if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault()
+      last.focus()
+    }
+  })
 }
-
-function inspectorRow(label, control) { const row = document.createElement('label'); row.className = 'field'; const caption = document.createElement('span'); caption.textContent = label; row.append(caption, control); el['automation-inspector'].append(row) }
-function addInspectorField(label, value, update) { const input = document.createElement('input'); input.value = value; input.addEventListener('change', () => update(input.value)); inspectorRow(label, input) }
-function addInspectorNumber(label, value, min, max, update) { const input = document.createElement('input'); input.type = 'number'; input.min = min; input.max = max; input.value = value; input.addEventListener('change', () => update(Number(input.value))); inspectorRow(label, input) }
-function addInspectorSelect(label, options, value, update) { const select = document.createElement('select'); select.replaceChildren(...options.map((item) => { const option = document.createElement('option'); option.value = item; option.textContent = formatMinecraftName(item); return option })); select.value = value; select.addEventListener('change', () => update(select.value)); inspectorRow(label, select) }
-function addInspectorToggle(label, value, update) { const input = document.createElement('input'); input.type = 'checkbox'; input.checked = value; input.addEventListener('change', () => update(input.checked)); inspectorRow(label, input) }
-function addInspectorJson(label, value, update) { const input = document.createElement('textarea'); input.rows = 5; input.value = JSON.stringify(value, null, 2); input.addEventListener('change', () => { try { update(JSON.parse(input.value)); input.setCustomValidity('') } catch { input.setCustomValidity('Invalid JSON'); input.reportValidity() } }); inspectorRow(label, input) }
-
-function addAutomation() { automationDraft.push({ id: cryptoId(), name: `Workflow ${automationDraft.length + 1}`, enabled: true, trigger: { type: 'manual' }, steps: [{ type: 'wait', milliseconds: 1000 }] }); automationIndex = automationDraft.length - 1; automationStepIndex = -1; renderAutomationFlow() }
-function deleteAutomation() { if (!automationDraft[automationIndex] || !confirm('Delete this workflow?')) return; automationDraft.splice(automationIndex, 1); automationIndex = Math.max(0, automationIndex - 1); automationStepIndex = -1; renderAutomationFlow() }
-function toggleAutomationJson() { const json = el['automation-json-toggle'].checked; const workspace = document.querySelector('.automation-workspace'); if (json) { el['automation-json'].value = JSON.stringify(automationDraft, null, 2); el['automation-json'].hidden = false; workspace.hidden = true } else { try { const parsed = JSON.parse(el['automation-json'].value); if (!Array.isArray(parsed)) throw new Error('Root must be an array.'); automationDraft = parsed; el['automation-json'].hidden = true; workspace.hidden = false; renderAutomationFlow() } catch (error) { el['automation-json-toggle'].checked = true; toast(cleanError(error), 'error') } } }
-
-async function saveAutomations() {
-  try {
-    if (el['automation-json-toggle'].checked) { const parsed = JSON.parse(el['automation-json'].value); if (!Array.isArray(parsed)) throw new Error('Automation JSON must be an array.'); automationDraft = parsed }
-    const targets = el['automation-scope'].value === 'all' ? state.accounts : [selectedAccount()].filter(Boolean)
-    for (const account of targets) { const saved = await api.saveAccount({ ...account, automations: structuredClone(automationDraft) }); Object.assign(account, saved) }
-    renderAutomationFlow(); toast(`Automations validated and saved to ${targets.length} profile${targets.length === 1 ? '' : 's'}.`)
-  } catch (error) { toast(cleanError(error), 'error') }
-}
-async function testAutomation() { await saveAutomations(); const workflow = automationDraft[automationIndex]; if (workflow) await run(() => api.runAutomation(state.selectedId, workflow.id)) }
-function cryptoId() { return `macro-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}` }
 
 function openPov() {
   if (!state.accounts.length) return

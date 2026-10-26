@@ -359,6 +359,20 @@
             <label class="field"><span>Workspace design</span><select id="workspace-design"><option value="operations">Operations Console</option><option value="community">Community Chat</option><option value="command">Command Center</option><option value="hybrid">Recommended Hybrid</option><option value="studio">Studio</option><option value="telemetry">Telemetry</option></select><small>Rearranges density and emphasis. Every function stays available.</small></label>
             <label class="field"><span>Color theme</span><select id="color-theme"><option value="obsidian">Obsidian Lime</option><option value="midnight">Midnight Blue</option><option value="graphite">Graphite Mono</option><option value="ember">Ember</option><option value="arctic">Arctic Light</option><option value="high-contrast">High Contrast</option></select><small>CSS-token palettes add no runtime dependency.</small></label>
           </div>
+          <section id="notifications-panel" class="notifications-panel" aria-labelledby="notifications-panel-title">
+            <div class="notifications-panel-header">
+              <div>
+                <h3 id="notifications-panel-title">Discord &amp; Telegram notifications</h3>
+                <p>Send alerts to Discord webhooks or Telegram chats when accounts disconnect, take damage, or fail macros.</p>
+              </div>
+              <button id="add-notification-channel" class="button secondary compact-btn" type="button">＋ Add channel</button>
+            </div>
+            <div class="notifications-help-box" role="note">
+              <p><strong>Discord:</strong> In Server Settings → Integrations → Webhooks, create a webhook and copy its URL. <a href="https://github.com/legendary-cookie/afk-desk/blob/main/docs/user-guide/notifications.md" class="notify-guide-link" data-external-url="https://github.com/legendary-cookie/afk-desk/blob/main/docs/user-guide/notifications.md">Guide</a></p>
+              <p><strong>Telegram:</strong> Message <code>@BotFather</code> with <code>/newbot</code> to get a token, then message your bot and copy the chat ID. <a href="https://github.com/legendary-cookie/afk-desk/blob/main/docs/user-guide/notifications.md" class="notify-guide-link" data-external-url="https://github.com/legendary-cookie/afk-desk/blob/main/docs/user-guide/notifications.md">Guide</a></p>
+            </div>
+            <div id="notification-channel-list" class="notification-channel-list" role="list" aria-label="Notification channels"></div>
+          </section>
           <section class="settings-about" aria-label="About AFK Desk"><img src="../assets/afk-desk-icon.png" alt="" /><div><strong>AFK Desk</strong><span id="settings-app-version">Version …</span></div></section>
         </div>
         <footer class="dialog-footer">
@@ -366,6 +380,78 @@
           <button id="save-settings" class="button primary" type="button">Save settings</button>
         </footer>
       </div>
+    </dialog>
+
+    <dialog id="notification-channel-dialog" aria-labelledby="notification-channel-dialog-title">
+      <form id="notification-channel-form" class="account-form" novalidate>
+        <header class="dialog-header">
+          <div><div class="eyebrow">External alerts</div><h2 id="notification-channel-dialog-title">Add notification channel</h2></div>
+          <button id="close-notification-channel" class="icon-button" type="button" aria-label="Close channel dialog">×</button>
+        </header>
+        <input id="notify-channel-id" type="hidden" />
+        <div class="form-grid">
+          <label class="field">
+            <span>Channel type</span>
+            <select id="notify-channel-type">
+              <option value="discord">Discord webhook</option>
+              <option value="telegram">Telegram bot</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Channel name</span>
+            <input id="notify-channel-name" type="text" maxlength="80" placeholder="Main Alert Channel" required />
+          </label>
+          <label class="toggle-row full">
+            <input id="notify-channel-enabled" type="checkbox" checked />
+            <span class="toggle" aria-hidden="true"></span>
+            <span><strong>Enable channel</strong><small>Deliver matching events to this channel.</small></span>
+          </label>
+          <div id="notify-discord-fields" class="form-grid full">
+            <label class="field full">
+              <span>Webhook URL</span>
+              <input id="notify-webhook-url" type="password" autocomplete="off" placeholder="https://discord.com/api/webhooks/..." />
+              <small>Stored encrypted locally; only sent when changed. Create one in Discord Server Settings → Integrations → Webhooks. <a href="https://github.com/legendary-cookie/afk-desk/blob/main/docs/user-guide/notifications.md" class="notify-guide-link" data-external-url="https://github.com/legendary-cookie/afk-desk/blob/main/docs/user-guide/notifications.md">Guide</a></small>
+            </label>
+          </div>
+          <div id="notify-telegram-fields" class="form-grid full" hidden>
+            <label class="field full">
+              <span>Bot token</span>
+              <input id="notify-bot-token" type="password" autocomplete="off" placeholder="123456789:ABCdefGHIjklMNOpqrSTUvwxYZ" />
+              <small>Create a bot with @BotFather on Telegram to obtain a token; only sent when changed. <a href="https://github.com/legendary-cookie/afk-desk/blob/main/docs/user-guide/notifications.md" class="notify-guide-link" data-external-url="https://github.com/legendary-cookie/afk-desk/blob/main/docs/user-guide/notifications.md">Guide</a></small>
+            </label>
+            <label class="field full">
+              <span>Chat ID</span>
+              <input id="notify-chat-id" type="text" autocomplete="off" placeholder="-1001234567890 or 123456789" />
+            </label>
+          </div>
+          <div class="form-section full">
+            <h3>Events</h3>
+            <p>Choose which account and macro events trigger a message.</p>
+          </div>
+          <div id="notify-events-grid" class="action-grid full" role="group" aria-label="Notification events"></div>
+          <label class="field full">
+            <span>Account filter</span>
+            <select id="notify-account-mode">
+              <option value="all">All accounts</option>
+              <option value="selected">Selected accounts only</option>
+            </select>
+          </label>
+          <div id="notify-accounts-checklist" class="action-grid full" role="group" aria-label="Filtered accounts" hidden></div>
+          <label class="toggle-row full">
+            <input id="notify-include-timestamp" type="checkbox" checked />
+            <span class="toggle" aria-hidden="true"></span>
+            <span><strong>Include timestamp</strong><small>Attach event time to outgoing notifications.</small></span>
+          </label>
+        </div>
+        <p id="notify-channel-error" class="form-error" role="alert" hidden></p>
+        <footer class="dialog-footer">
+          <button id="delete-notification-channel" class="button danger" type="button" hidden>Delete</button>
+          <button id="test-notification-channel" class="button secondary" type="button" hidden>Send test</button>
+          <span class="footer-spacer"></span>
+          <button id="cancel-notification-channel" class="button secondary" type="button">Cancel</button>
+          <button id="save-notification-channel" class="button primary" type="submit">Save channel</button>
+        </footer>
+      </form>
     </dialog>
 
     <dialog id="macro-dialog" class="wide-dialog" aria-labelledby="macro-dialog-title">
@@ -418,18 +504,195 @@
     </dialog>
 
     <dialog id="automation-dialog" class="wide-dialog automation-dialog" aria-labelledby="automation-title">
-      <div class="beta-dialog-content automation-shell">
-        <header class="dialog-header"><div><div class="eyebrow">Visual event automation beta</div><h2 id="automation-title">Automations</h2></div><div class="dialog-header-actions"><select id="automation-scope" aria-label="Save automation to"><option value="selected">Selected profile</option><option value="all">All profiles</option></select><button id="close-automation" class="icon-button" type="button" aria-label="Close automations">×</button></div></header>
-        <div class="automation-toolbar"><div id="automation-list" class="automation-list"></div><button id="automation-add" class="button secondary" type="button">＋ New workflow</button><button id="automation-delete" class="button danger" type="button">Delete</button><label class="compact-toggle"><input id="automation-json-toggle" type="checkbox" /><span>Advanced JSON</span></label></div>
-        <div class="automation-workspace">
-          <main id="automation-flow" class="automation-flow" aria-label="Automation flow"></main>
-          <aside class="automation-side">
-            <section><h3>Steps</h3><div id="automation-palette" class="automation-palette"></div></section>
-            <section><h3>Inspector</h3><div id="automation-inspector" class="automation-inspector"></div></section>
+      <div class="beta-dialog-content automation-shell macro-v2-shell">
+        <header class="dialog-header">
+          <div>
+            <div class="eyebrow">Macro Engine v2</div>
+            <h2 id="automation-title">Macros &amp; Automations</h2>
+          </div>
+          <div class="dialog-header-actions">
+            <label class="macro-watch-label">
+              <span>Watching</span>
+              <select id="macro-watch-account" aria-label="Account to watch live macro run"></select>
+            </label>
+            <span id="macro-live-chip" class="macro-status-chip" hidden></span>
+            <button id="macro-run-now" class="button secondary compact-btn" type="button" title="Run selected macro now on watched account">▶ Run now</button>
+            <button id="macro-stop-run" class="button danger compact-btn" type="button" title="Stop running macro on watched account">■ Stop</button>
+            <button id="close-automation" class="icon-button" type="button" aria-label="Close automations">×</button>
+          </div>
+        </header>
+
+        <div class="macro-v2-workspace">
+          <aside id="macro-library-pane" class="macro-library-pane" aria-label="Macro library">
+            <div class="macro-library-toolbar">
+              <input id="macro-library-search" type="search" placeholder="Search macros…" aria-label="Search macros" />
+              <div class="macro-library-buttons">
+                <button id="macro-new-btn" class="button primary compact-btn" type="button">＋ New</button>
+                <select id="macro-template-picker" class="compact-select" aria-label="Create from starter template">
+                  <option value="">Templates…</option>
+                </select>
+                <button id="macro-duplicate-btn" class="button secondary compact-btn" type="button" title="Duplicate selected macro (Ctrl+D)">Duplicate</button>
+                <button id="macro-delete-btn" class="button danger compact-btn" type="button" title="Delete selected macro">Delete</button>
+              </div>
+              <div class="macro-library-io">
+                <button id="macro-import-btn" class="button secondary compact-btn" type="button">Import JSON</button>
+                <button id="macro-export-btn" class="button secondary compact-btn" type="button">Export JSON</button>
+                <input id="macro-import-file" type="file" accept=".json,application/json" hidden />
+              </div>
+            </div>
+
+            <div id="macro-json-panel" class="macro-json-panel" hidden>
+              <label class="field">
+                <span id="macro-json-label">Import / Export Macro JSON</span>
+                <textarea id="macro-json-io" rows="5" spellcheck="false" placeholder="Paste macro JSON array or object here…"></textarea>
+              </label>
+              <p id="macro-json-error" class="form-error" role="alert" hidden></p>
+              <div class="macro-json-actions">
+                <button id="macro-json-confirm-import" class="button primary compact-btn" type="button">Import</button>
+                <button id="macro-json-copy" class="button secondary compact-btn" type="button" hidden>Copy JSON</button>
+                <button id="macro-json-close" class="button secondary compact-btn" type="button">Close</button>
+              </div>
+            </div>
+
+            <div id="macro-library-list" class="macro-library-list" role="listbox" aria-label="Saved macros"></div>
           </aside>
+
+          <main id="macro-detail-pane" class="macro-detail-pane" aria-label="Macro editor and run history">
+            <div class="macro-detail-topbar">
+              <div class="segmented" role="tablist" aria-label="Macro view">
+                <button id="macro-tab-editor" class="segment active" type="button" role="tab" aria-selected="true" data-macro-tab="editor">Editor</button>
+                <button id="macro-tab-runs" class="segment" type="button" role="tab" aria-selected="false" data-macro-tab="runs">Runs <span id="macro-runs-badge" class="badge">0</span></button>
+              </div>
+              <div class="macro-editor-actions">
+                <span class="macro-shortcut-hint" aria-hidden="true"><kbd>Space</kbd>/<kbd>Ctrl+K</kbd> Add · <kbd>↑↓</kbd> Select · <kbd>Ctrl+Z</kbd> Undo · <kbd>Ctrl+Enter</kbd> Save</span>
+                <button id="macro-undo-btn" class="button secondary compact-btn" type="button" title="Undo (Ctrl+Z)" disabled>↶ Undo</button>
+                <button id="macro-redo-btn" class="button secondary compact-btn" type="button" title="Redo (Ctrl+Shift+Z)" disabled>↷ Redo</button>
+                <button id="macro-close-editor-btn" class="button secondary compact-btn" type="button" title="Close editor (Esc)">Close</button>
+                <button id="macro-save-btn" class="button primary compact-btn" type="button" title="Save macro (Ctrl+Enter)">Save macro</button>
+              </div>
+            </div>
+
+            <div id="macro-validation-banner" class="macro-validation-banner" role="alert" hidden></div>
+
+            <div id="macro-empty-editor" class="macro-empty-editor" hidden>
+              <p>Select a macro from the library or click <strong>＋ New</strong> to build an automation.</p>
+            </div>
+
+            <div id="macro-editor-view" class="macro-editor-view">
+              <section id="macro-trigger-card" class="macro-card" aria-labelledby="macro-trigger-heading">
+                <div class="macro-card-header">
+                  <div>
+                    <span class="eyebrow">When</span>
+                    <h3 id="macro-trigger-heading">Trigger &amp; identity</h3>
+                  </div>
+                  <label id="macro-editor-enabled-wrap" class="compact-toggle">
+                    <input id="macro-editor-enabled" type="checkbox" checked />
+                    <span>Enabled</span>
+                  </label>
+                </div>
+                <div class="macro-form-grid">
+                  <label class="field">
+                    <span>Macro name</span>
+                    <input id="macro-name-input" type="text" maxlength="80" placeholder="Join lobby &amp; queue" />
+                  </label>
+                  <label class="field">
+                    <span>Trigger type</span>
+                    <select id="macro-trigger-type" aria-label="Trigger type"></select>
+                  </label>
+                  <label class="field">
+                    <span>Cooldown (seconds)</span>
+                    <input id="macro-trigger-cooldown" type="number" min="0" max="86400" step="0.5" value="0" />
+                  </label>
+                </div>
+                <div id="macro-trigger-fields" class="macro-form-grid"></div>
+                <p id="macro-trigger-error" class="macro-field-error" role="alert" hidden></p>
+              </section>
+
+              <section id="macro-targets-card" class="macro-card" aria-labelledby="macro-targets-heading">
+                <div class="macro-card-header">
+                  <div>
+                    <span class="eyebrow">Where &amp; How</span>
+                    <h3 id="macro-targets-heading">Targets, options &amp; stop conditions</h3>
+                  </div>
+                </div>
+                <div class="macro-form-grid">
+                  <label class="field">
+                    <span>Target accounts</span>
+                    <select id="macro-target-mode">
+                      <option value="all">All accounts</option>
+                      <option value="accounts">Selected accounts</option>
+                      <option value="tags">Matching tags</option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>If already running</span>
+                    <select id="macro-concurrency">
+                      <option value="skip">Skip new trigger</option>
+                      <option value="override">Override (cancel &amp; restart)</option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>On step error</span>
+                    <select id="macro-on-error">
+                      <option value="stop">Stop run</option>
+                      <option value="continue">Continue to next step</option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>Default step delay (ms)</span>
+                    <input id="macro-default-delay" type="number" min="0" max="60000" step="50" value="0" />
+                  </label>
+                  <label class="field">
+                    <span>Max runtime (seconds)</span>
+                    <input id="macro-max-runtime" type="number" min="1" max="3600" step="1" value="300" />
+                  </label>
+                </div>
+                <div id="macro-target-accounts-list" class="action-grid macro-targets-checklist" role="group" aria-label="Target accounts checklist" hidden></div>
+                <div id="macro-target-tags-box" class="macro-tags-box" hidden>
+                  <label class="field">
+                    <span>Account tags (comma-separated)</span>
+                    <input id="macro-target-tags-input" type="text" placeholder="lobby, farm, survival" />
+                  </label>
+                  <div id="macro-target-tags-suggestions" class="macro-tag-suggestions"></div>
+                </div>
+                <p id="macro-targets-error" class="macro-field-error" role="alert" hidden></p>
+
+                <div class="macro-stop-conditions">
+                  <div class="macro-sub-header">
+                    <strong>Stop conditions (abort run when any matches)</strong>
+                    <button id="macro-add-stop-cond" class="button secondary compact-btn" type="button">＋ Add stop condition</button>
+                  </div>
+                  <div id="macro-stop-when-list" class="macro-stop-when-list"></div>
+                </div>
+              </section>
+
+              <section id="macro-steps-card" class="macro-card" aria-labelledby="macro-steps-heading">
+                <div class="macro-card-header">
+                  <div>
+                    <span class="eyebrow">Then</span>
+                    <h3 id="macro-steps-heading">Steps <span id="macro-steps-count" class="badge">0</span></h3>
+                  </div>
+                  <div class="macro-step-header-actions">
+                    <button id="macro-open-step-picker" class="button primary compact-btn" type="button">＋ Add step</button>
+                  </div>
+                </div>
+
+                <div id="macro-step-picker" class="macro-step-picker" role="region" aria-label="Add step picker" hidden></div>
+
+                <div id="macro-step-list" class="macro-step-list" role="list" aria-label="Macro steps" tabindex="0"></div>
+                <p id="macro-steps-error" class="macro-field-error" role="alert" hidden></p>
+              </section>
+            </div>
+
+            <div id="macro-runs-view" class="macro-runs-view" hidden>
+              <div class="macro-runs-toolbar">
+                <span id="macro-runs-caption" class="dialog-copy">Recent executions for this macro.</span>
+                <button id="macro-refresh-runs" class="button secondary compact-btn" type="button">Refresh</button>
+              </div>
+              <div id="macro-runs-list" class="macro-runs-list" role="list" aria-label="Macro run records"></div>
+            </div>
+          </main>
         </div>
-        <textarea id="automation-json" class="automation-json" spellcheck="false" aria-label="Automation JSON" hidden></textarea>
-        <footer class="dialog-footer"><button id="stop-automation" class="button danger" type="button">Stop running</button><button id="automation-test" class="button secondary" type="button">Test run</button><span class="footer-spacer"></span><button id="save-automations" class="button primary" type="button">Validate &amp; save</button></footer>
       </div>
     </dialog>
 
@@ -458,6 +721,8 @@
     <script src="../assets/pov-math.js"></script>
     <script src="../assets/pov-renderer.js"></script>
     <script src="../assets/compatibility-capabilities.js"></script>
+    <script src="macro-editor.js"></script>
+    <script src="notifications-panel.js"></script>
     <script src="renderer.js"></script>
   </body>
 </html>
