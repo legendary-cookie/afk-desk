@@ -58,6 +58,7 @@
     "files": [
       "core/**/*",
       "server/**/*",
+      "control/**/*",
       "electron/**/*",
       "src/**/*",
       "assets/**/*",
