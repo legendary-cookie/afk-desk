@@ -119,3 +119,10 @@ Ordered by user value against implementation cost. AFKCC is cloud-hosted; AFK De
   - Note: the `APPDATA` environment variable does not isolate Electron on Windows; use `--user-data-dir`.
 - **Live finding.** One owner server's pack host (atlas.oraxen.com:8080) is unreachable. "fetch failed" errors have occurred since 2026-10-26, when Beta 9 was still installed, so this is not a regression. A download failure declines the pack, which can get bots kicked. Fix in progress: accept without loading on any download failure.
 - **Rollback path.** Run `ao/tools/installers/AFK-Desk-Setup-0.10.0-beta.9.exe`, then restore the backup folder into `%APPDATA%\afkdesk`.
+- **Owner policy: reasoning effort (2026-10-27).** No worker runs above `high` effort. Default to `low` or `medium`; use `high` only for hard debugging or security work.
+  - Codex: pass `-c model_reasoning_effort="low|medium"` by default.
+  - Antigravity: choose `-low` / `-medium` model variants by default.
+- **Resource-pack root cause (2026-10-27).** `ResourcePackLoader` writes `<sha1>.zip` to its disk cache but never reads it, so every connect re-downloads. When the owner's pack host became unreachable, AFK Desk had no fallback. The owner's Modrinth profile ("Fabulously Optimized") kept serving the pack from its own `downloads` cache.
+  - Planned fix: before fetching, load a hash-matched pack from the AFK Desk cache.
+  - Then, read-only, from Minecraft launcher caches (vanilla `.minecraft/downloads` and `server-resource-packs`, Modrinth profiles, CurseForge instances).
+  - Exact sha1 match only.
