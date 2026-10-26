@@ -1,0 +1,163 @@
+[
+  {
+    "id": "acct-alpha",
+    "profileName": "Alpha main",
+    "edition": "java",
+    "username": "AlphaMain",
+    "host": "play.example.net",
+    "port": 25565,
+    "autoReconnect": true,
+    "lockedSlots": [0, 1],
+    "automations": [
+      {
+        "id": "auto-join",
+        "name": "Join /afk",
+        "enabled": true,
+        "trigger": { "type": "connected", "contains": "", "below": 8, "intervalSeconds": 60 },
+        "steps": [
+          { "type": "chat", "message": "/afk", "unknownField": "dropped" },
+          { "type": "wait", "milliseconds": 1500 },
+          { "type": "look", "direction": "right" },
+          { "type": "move", "control": "forward", "duration": 500 },
+          { "type": "notify", "message": "Alpha joined" }
+        ]
+      },
+      {
+        "id": "auto-health",
+        "name": "Heal when low",
+        "enabled": true,
+        "trigger": { "type": "health", "below": 6 },
+        "steps": [
+          { "type": "chat", "message": "/heal" },
+          { "type": "useHeld" },
+          { "type": "attackNearest" },
+          { "type": "clickGui", "slot": 13 },
+          { "type": "drop", "slot": 9, "count": 4 },
+          { "type": "deposit", "slot": 10, "count": 8 }
+        ]
+      },
+      {
+        "id": "auto-timer",
+        "name": "Look around",
+        "enabled": true,
+        "trigger": { "type": "timer", "intervalSeconds": 300 },
+        "steps": [
+          { "type": "repeat", "times": 3, "steps": [{ "type": "look", "direction": "left" }, { "type": "wait", "milliseconds": 200 }] },
+          { "type": "set", "variable": "n", "value": 5 },
+          {
+            "type": "if",
+            "condition": { "type": "variableEquals", "name": "n", "value": 5 },
+            "then": [{ "type": "chat", "message": "n is five" }],
+            "else": [{ "type": "notify", "message": "n is not five" }]
+          }
+        ]
+      },
+      {
+        "id": "auto-chat",
+        "name": "Greet on welcome",
+        "enabled": true,
+        "trigger": { "type": "chat", "contains": "welcome" },
+        "steps": [
+          {
+            "type": "if",
+            "condition": { "type": "status", "value": "online" },
+            "then": [{ "type": "chat", "message": "thanks!" }],
+            "else": []
+          },
+          {
+            "type": "if",
+            "condition": { "type": "status", "value": "offline" },
+            "then": [{ "type": "notify", "message": "offline?" }],
+            "else": []
+          }
+        ]
+      },
+      {
+        "id": "auto-lossy",
+        "name": "Equip then chat",
+        "enabled": true,
+        "trigger": { "type": "manual" },
+        "steps": [
+          { "type": "equip", "slot": 38, "destination": "head" },
+          { "type": "chat", "message": "equipped" },
+          {
+            "type": "if",
+            "condition": { "type": "chatContains", "value": "yes" },
+            "then": [{ "type": "chat", "message": "heard yes" }],
+            "else": []
+          }
+        ]
+      },
+      {
+        "id": "auto-window",
+        "name": "Hold sneak on window",
+        "enabled": false,
+        "trigger": { "type": "window" },
+        "steps": [{ "type": "move", "control": "sneak", "duration": 400 }]
+      },
+      {
+        "id": "auto-inventory",
+        "name": "Inventory check",
+        "enabled": true,
+        "trigger": { "type": "inventory" },
+        "steps": [
+          {
+            "type": "if",
+            "condition": { "type": "hasItem", "name": "diamond", "count": 3 },
+            "then": [{ "type": "chat", "message": "rich" }],
+            "else": [{ "type": "if", "condition": { "type": "hungerBelow", "value": 10 }, "then": [{ "type": "chat", "message": "hungry" }], "else": [] }]
+          }
+        ]
+      },
+      {
+        "id": "auto-disconnect",
+        "name": "On disconnect",
+        "enabled": false,
+        "trigger": { "type": "disconnected" },
+        "steps": [{ "type": "notify", "message": "Alpha disconnected" }]
+      },
+      {
+        "id": "auto-empty",
+        "name": "No steps",
+        "trigger": { "type": "manual" },
+        "steps": []
+      }
+    ]
+  },
+  {
+    "id": "acct-beta",
+    "profileName": "Beta alt",
+    "edition": "java",
+    "username": "BetaAlt",
+    "automations": [
+      {
+        "id": "auto-join",
+        "name": "Join (beta) with colliding id",
+        "enabled": true,
+        "trigger": { "type": "connected" },
+        "steps": [{ "type": "chat", "message": "/spawn" }, { "type": "wait", "milliseconds": 800 }, { "type": "chat", "message": "hello" }]
+      }
+    ]
+  },
+  {
+    "id": "acct-gamma",
+    "profileName": "Gamma bedrock",
+    "edition": "bedrock",
+    "username": "GammaBE",
+    "automations": [
+      {
+        "id": "auto-bedrock",
+        "name": "Bedrock greeter",
+        "enabled": true,
+        "trigger": { "type": "chat", "contains": "hello gamma" },
+        "steps": [{ "type": "wait", "milliseconds": 1000 }, { "type": "chat", "message": "hi there" }, { "type": "notify", "message": "greeted" }]
+      }
+    ]
+  },
+  {
+    "id": "acct-delta",
+    "profileName": "Delta no automations",
+    "edition": "java",
+    "username": "DeltaNone"
+  }
+]
