@@ -1748,20 +1748,21 @@ test('resource packs are not downloaded directly when the account uses a proxy',
   assert.equal(allowed.bot.accepted, true)
 })
 
-test('a pack blocked by destination policy is accepted without loading; real download failures still decline', async () => {
+test('a pack blocked by destination policy or a download failure is accepted without loading', async () => {
   const { HostPolicyError } = require('../electron/net-policy.cjs')
   const run = async (loadError) => {
     const bot = new FakeBot()
     const diagnostics = []
+    const events = []
     bot.acceptResourcePack = () => { bot.accepted = true }
     const manager = new BotManager({
-      profilesPath: 'profiles', emit: () => {}, diagnose: (entry) => diagnostics.push(entry), createBot: () => bot,
+      profilesPath: 'profiles', emit: (...event) => events.push(event), diagnose: (entry) => diagnostics.push(entry), createBot: () => bot,
       resourcePackLoader: { load: async () => { throw loadError } }
     })
     manager.connect({ id: 'pack-policy', username: 'user@example.com', host: 'localhost', antiAfk: false, autoReconnect: false })
     bot.emit('resourcePack', '0123456789012345678901234567890123456789', 'http://10.0.0.5/a.zip')
     await new Promise((resolve) => setImmediate(resolve))
-    return { bot, diagnostics, declined: bot.writes.some(([name]) => name === 'resource_pack_receive') }
+    return { bot, diagnostics, events, declined: bot.writes.some(([name]) => name === 'resource_pack_receive') }
   }
 
   const blocked = await run(new HostPolicyError('Resource pack host is not allowed (private or loopback address).'))
@@ -1770,8 +1771,15 @@ test('a pack blocked by destination policy is accepted without loading; real dow
   assert.equal(blocked.diagnostics.some((entry) => entry.event === 'resource_pack_skipped_policy'), true)
 
   const broken = await run(new Error('Resource pack download failed with HTTP 500.'))
-  assert.equal(broken.bot.accepted, undefined)
-  assert.equal(broken.declined, true)
+  assert.equal(broken.bot.accepted, true)
+  assert.equal(broken.declined, false)
+  assert.equal(broken.diagnostics.some((entry) => entry.event === 'resource_pack_unavailable' && entry.host === '10.0.0.5' && entry.reason.includes('HTTP 500')), true)
+  assert.match(broken.events.filter(([type]) => type === 'log').at(-1)[2].message, /accepted without custom menu art so the server will not kick/)
+
+  const timeout = await run(new Error('Resource pack request timed out.'))
+  assert.equal(timeout.bot.accepted, true)
+  assert.equal(timeout.declined, false)
+  assert.equal(timeout.diagnostics.some((entry) => entry.event === 'resource_pack_unavailable' && entry.reason.includes('timed out')), true)
 })
 
 test('allowPrivatePackHosts from the account config is passed to the pack loader', async () => {

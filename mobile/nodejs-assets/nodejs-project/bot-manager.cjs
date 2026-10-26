@@ -25,9 +25,10 @@ const CONFIGURATION_BLOCKED_GAMEPLAY_PACKETS = new Set([
 ])
 
 class BotManager {
-  constructor({ profilesPath, emit, createBot = mineflayer.createBot, scheduleReconnectTimer = setTimeout, clearReconnectTimer = clearTimeout, resourcePackLoader }) {
+  constructor({ profilesPath, emit, diagnose = () => {}, createBot = mineflayer.createBot, scheduleReconnectTimer = setTimeout, clearReconnectTimer = clearTimeout, resourcePackLoader }) {
     this.profilesPath = profilesPath
     this.emit = emit
+    this.diagnose = diagnose
     this.createBot = createBot
     this.scheduleReconnectTimer = scheduleReconnectTimer
     this.clearReconnectTimer = clearReconnectTimer
@@ -194,6 +195,7 @@ class BotManager {
         this.emit('log', account.id, { kind: 'system', message: 'Server resource pack loaded. Custom menu art is enabled.', at: Date.now() })
       } catch (error) {
         if (this.sessions.get(account.id) !== session) return
+        const reason = String(error?.message || error).slice(0, 120)
         if (error?.code === PACK_POLICY_ERROR) {
           // Blocked by our own destination policy: accept without loading so a
           // server that requires its pack does not kick the account.
@@ -201,8 +203,9 @@ class BotManager {
           this.emit('log', account.id, { kind: 'system', message: `Server resource pack not downloaded: ${String(error.message).slice(0, 160)} The pack was accepted so the server will not kick; custom menu art is off.`, at: Date.now() })
           return
         }
-        rejectResourcePack(bot, first, second, pack.hash)
-        this.emit('log', account.id, { kind: 'error', message: `Server resource pack failed: ${String(error?.message || error).slice(0, 180)}`, at: Date.now() })
+        bot.acceptResourcePack?.()
+        this.emit('log', account.id, { kind: 'system', message: `Server resource pack could not be loaded (${reason}); accepted without custom menu art so the server will not kick.`, at: Date.now() })
+        this.diagnose({ event: 'resource_pack_unavailable', host, reason })
       }
     })
     bot.on('spawn', markReady)
