@@ -141,6 +141,8 @@ function boundedLimit(value, maximum) {
 
 async function validatePackDestination(url, allowPrivatePackHosts, lookup) {
   if (!['http:', 'https:'].includes(url.protocol)) throw policyError('Resource pack URL must use HTTP or HTTPS.')
+  // Never forward server-supplied credentials (runs on every redirect hop).
+  if (url.username || url.password) throw policyError('Resource pack URL must not contain credentials.')
   if (allowPrivatePackHosts === true) return
   const hostname = url.hostname.replace(/^\[|\]$/g, '').toLowerCase()
   const addresses = net.isIP(hostname) ? [{ address: hostname }] : await lookup(hostname, { all: true, verbatim: true })
@@ -168,9 +170,15 @@ function isRestrictedAddress(address) {
   const r = right ? right.split(':') : []
   const words = [...l, ...Array(Math.max(0, 8 - l.length - r.length)).fill('0'), ...r].map(part => parseInt(part || '0', 16))
   if (words.length !== 8 || words.some(n => !Number.isFinite(n))) return true
-  if (words.slice(0, 5).every(n => n === 0) && words[5] === 0xffff) return isRestrictedAddress(`${words[6] >> 8}.${words[6] & 255}.${words[7] >> 8}.${words[7] & 255}`)
-  return words.every(n => n === 0) || (words.slice(0, 7).every(n => n === 0) && words[7] === 1) ||
-    (words[0] & 0xfe00) === 0xfc00 || (words[0] & 0xffc0) === 0xfe80 || (words[0] & 0xff00) === 0xff00
+  const embeddedV4 = (hi, lo) => `${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`
+  if (words.every(n => n === 0) || (words.slice(0, 7).every(n => n === 0) && words[7] === 1)) return true
+  // IPv4-mapped ::ffff:a.b.c.d and deprecated IPv4-compatible ::a.b.c.d
+  if (words.slice(0, 5).every(n => n === 0) && (words[5] === 0xffff || words[5] === 0)) return isRestrictedAddress(embeddedV4(words[6], words[7]))
+  // NAT64 64:ff9b::/96 embeds the IPv4 target in the last 32 bits
+  if (words[0] === 0x64 && words[1] === 0xff9b && words.slice(2, 6).every(n => n === 0)) return isRestrictedAddress(embeddedV4(words[6], words[7]))
+  // 6to4 2002::/16 embeds the IPv4 address in bits 16-47
+  if (words[0] === 0x2002) return isRestrictedAddress(embeddedV4(words[1], words[2]))
+  return (words[0] & 0xfe00) === 0xfc00 || (words[0] & 0xffc0) === 0xfe80 || (words[0] & 0xffc0) === 0xfec0 || (words[0] & 0xff00) === 0xff00
 }
 
 class ParsedResourcePack {

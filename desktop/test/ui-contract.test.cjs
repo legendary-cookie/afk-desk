@@ -222,3 +222,17 @@ test('desktop movement supports held buttons and physical WASD plus Space contro
   assert.match(preload, /setControlState:.*bot:control-state/)
   assert.match(main, /bot:control-state.*setControlState/)
 })
+
+
+test('every bot:event type the main process emits has a renderer handler', () => {
+  // Review finding: main sent 'storage-warning' but the renderer silently dropped it.
+  const main = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
+  const script = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer.js'), 'utf8')
+  const emitted = [...main.matchAll(/'bot:event',\s*\{\s*type:\s*'([a-z-]+)'/g)].map((match) => match[1])
+  assert.ok(emitted.includes('storage-warning'))
+  for (const type of emitted) assert.match(script, new RegExp(`type === '${type}'`), type)
+  // The warning reaches the user through the textContent-based toast, not innerHTML.
+  const branch = script.slice(script.indexOf("type === 'storage-warning'"), script.indexOf("type === 'telemetry'"))
+  assert.match(branch, /toast\(message, 'error'\)/)
+  assert.doesNotMatch(branch, /innerHTML/)
+})

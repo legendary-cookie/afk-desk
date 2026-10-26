@@ -1271,6 +1271,15 @@ function handleBotEvent({ type, id, payload }) {
     state.logs.set(id, [...logs.slice(-499), payload])
     if (id === state.selectedId) renderConsole()
   }
+  if (type === 'storage-warning') {
+    // Main already rate-limits these (one per error code per minute).
+    const code = String(payload?.code || 'unknown').slice(0, 24)
+    const message = `${String(payload?.message || 'Event history could not be saved.').slice(0, 120)} (${code}) Check free disk space and folder permissions.`
+    toast(message, 'error')
+    const logs = state.logs.get(id) || []
+    state.logs.set(id, [...logs.slice(-499), { kind: 'error', message, at: Number(payload?.at) || Date.now() }])
+    if (id === state.selectedId) renderConsole()
+  }
   if (type === 'telemetry') {
     state.telemetry.set(id, payload)
     if (id === state.selectedId) renderTelemetry()

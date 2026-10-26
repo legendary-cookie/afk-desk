@@ -112,6 +112,8 @@ async function assertPublicHost(hostname, { lookup = dns.promises.lookup, allowP
 function parseHttpUrl(value) {
   const url = value instanceof URL ? new URL(value.href) : new URL(String(value || ''))
   if (!['http:', 'https:'].includes(url.protocol)) throw new HostPolicyError('Resource pack URL must use HTTP or HTTPS.')
+  // Never forward server-supplied credentials (also checked on every redirect hop).
+  if (url.username || url.password) throw new HostPolicyError('Resource pack URL must not contain credentials.')
   return url
 }
 

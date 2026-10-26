@@ -219,6 +219,31 @@ test('rejects private DNS answers and revalidates every manually followed redire
   assert.ok(await allowed.load('http://localhost/allowed.zip', '', { allowPrivatePackHosts: true }))
 })
 
+test('embedded-IPv4 IPv6 forms and credentialed URLs never reach fetch', async () => {
+  // Review finding: ::a.b.c.d (IPv4-compatible) previously bypassed the private check.
+  const hostile = ['::10.0.0.1', '::7f00:1', '::ffff:192.168.1.1', '64:ff9b::a00:1', '2002:c0a8:101::1', 'fec0::1', '::', '::1']
+  for (const address of hostile) {
+    let fetched = false
+    const loader = new ResourcePackLoader({ lookup: async () => [{ address }], fetchImpl: async () => { fetched = true; throw new Error('reached') } })
+    await assert.rejects(loader.load('https://packs.example/p.zip'), (error) => error.code === 'PACK_HOST_POLICY', address)
+    assert.equal(fetched, false, address)
+  }
+  for (const literal of ['http://[::10.0.0.1]/p.zip', 'http://2130706433/p.zip', 'http://0x7f.1/p.zip']) {
+    let fetched = false
+    const loader = new ResourcePackLoader({ lookup: async () => [{ address: '93.184.216.34' }], fetchImpl: async () => { fetched = true; throw new Error('reached') } })
+    await assert.rejects(loader.load(literal), (error) => error.code === 'PACK_HOST_POLICY', literal)
+    assert.equal(fetched, false, literal)
+  }
+  let fetched = false
+  const creds = new ResourcePackLoader({ lookup: async () => [{ address: '93.184.216.34' }], fetchImpl: async () => { fetched = true; throw new Error('reached') } })
+  await assert.rejects(creds.load('https://user:secret@packs.example/p.zip'), /credentials/)
+  assert.equal(fetched, false)
+  // Public IPv6 still allowed.
+  const ok = new ResourcePackLoader({ lookup: async () => [{ address: '2606:2800:220:1:248:1893:25c8:1946' }], fetchImpl: async () => { fetched = true; return new Response(null, { status: 500 }) } })
+  await assert.rejects(ok.load('https://packs.example/public.zip'), /HTTP 500/)
+  assert.equal(fetched, true)
+})
+
 test('parsed pack survives an optional disk cache failure', async () => {
   const warnings = []
   const fsImpl = { mkdirSync() { throw new Error('injected disk failure') } }
