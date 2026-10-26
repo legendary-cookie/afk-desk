@@ -874,7 +874,7 @@ test('loads and accepts a server resource pack before refreshing custom menu art
   bot.emit('resourcePack', '0123456789012345678901234567890123456789', 'https://packs.example/menu.zip?token=private')
   await new Promise((resolve) => setImmediate(resolve))
 
-  assert.deepEqual(loaded, ['https://packs.example/menu.zip?token=private', '0123456789012345678901234567890123456789'])
+  assert.deepEqual(loaded, ['https://packs.example/menu.zip?token=private', '0123456789012345678901234567890123456789', { allowPrivateHosts: false }])
   assert.equal(accepted, 1)
   const menu = events.filter(([type]) => type === 'window').at(-1)[2]
   assert.equal(menu.title, 'Custom server menu')
@@ -921,6 +921,7 @@ test('automatically reconnects after a kick and manual disconnect cancels retrie
     emit: (...event) => events.push(event),
     createBot: () => bots[created++],
     scheduleReconnectTimer: (callback, delay) => { scheduled = { callback, delay }; return 'retry-timer' },
+    random: () => 0.5,
     clearReconnectTimer: (timer) => cleared.push(timer)
   })
   const account = {
@@ -949,7 +950,7 @@ test('only resets reconnect backoff after a stable minute online', () => {
   const manager = new BotManager({
     profilesPath: 'profiles', emit: () => {}, createBot: () => bot,
     scheduleNetworkTimer: (callback, delay) => { networkTimers.push({ callback, delay }); return `network-${networkTimers.length}` },
-    clearNetworkTimer: () => {},
+    clearNetworkTimer: () => {}, random: () => 0.5,
     scheduleReconnectTimer: (callback, delay) => { reconnectTimer = { callback, delay }; return 'reconnect' }
   })
   const account = { id: 'stable', username: 'user@example.com', host: 'localhost', antiAfk: false, autoReconnect: true, autoReconnectDelay: 5 }
@@ -992,7 +993,7 @@ test('ends a stuck network session so auto-reconnect can recover it', () => {
     emit: (...event) => events.push(event),
     createBot: () => bot,
     scheduleNetworkTimer: (callback, delay) => { networkTimers.push({ callback, delay }); return `network-${networkTimers.length}` },
-    clearNetworkTimer: () => {},
+    clearNetworkTimer: () => {}, random: () => 0.5,
     scheduleReconnectTimer: (callback, delay) => { reconnectTimer = { callback, delay }; return 'reconnect' }
   })
   manager.connect({ id: 'network', username: 'user@example.com', host: 'localhost', antiAfk: false, autoReconnect: true, autoReconnectDelay: 5 })
@@ -1539,4 +1540,216 @@ test('environment diagnostics expose detected current without synthetic fallback
     serverCorrections: 0,
     stalledCorrections: 0
   })
+})
+
+
+// --- Server-controlled component trees: bounded, iterative traversal ---
+
+function deepExtraChain(depth, leafText = 'deep') {
+  const root = { text: '', extra: [] }
+  let current = root
+  for (let index = 0; index < depth; index++) {
+    const child = { text: '', extra: [] }
+    current.extra.push(child)
+    current = child
+  }
+  current.text = leafText
+  return root
+}
+
+test('a 12,000-level nested chat component chain does not overflow the stack', () => {
+  const chain = deepExtraChain(12_000)
+  let segments
+  assert.doesNotThrow(() => { segments = parseInteractiveChat(chain, 'deep', 'deep') })
+  assert.equal(Array.isArray(segments), true)
+  assert.equal(segments.map((segment) => segment.text).join(''), 'deep')
+  assert.doesNotThrow(() => extractText(chain))
+  assert.doesNotThrow(() => extractText({ text: '', extra: { value: { value: chain.extra } } }))
+})
+
+test('component walkers stop at depth 64 and keep what was gathered', () => {
+  const within = deepExtraChain(60, 'near')
+  within.text = 'head '
+  assert.equal(extractText(within), 'head near')
+  assert.equal(parseInteractiveChat(within, 'head near', 'head near').map((segment) => segment.text).join(''), 'head near')
+  const beyond = deepExtraChain(200, 'far')
+  beyond.text = 'head'
+  assert.equal(extractText(beyond), 'head')
+  const bot = new FakeBot()
+  const item = { slot: 36, name: 'stone', count: 1, customLore: [deepExtraChain(12_000)] }
+  bot.inventory.slots[36] = item
+  bot.inventory.items = () => [item]
+  assert.doesNotThrow(() => buildTelemetry(bot))
+})
+
+test('a 100k-node wide component is capped by the node budget', () => {
+  const wide = { text: 'start', extra: Array.from({ length: 100_000 }, (_, index) => ({ text: `n${index}` })) }
+  const started = Date.now()
+  const segments = parseInteractiveChat(wide, 'start', 'start')
+  assert.equal(segments.length <= 256, true)
+  assert.equal(extractText(wide).length < 100_000 * 3, true)
+  assert.equal(extractText(wide).startsWith('startn0n1'), true)
+  assert.equal(Date.now() - started < 2000, true)
+})
+
+test('normal chat keeps click events, colors, and nested styling', () => {
+  const message = {
+    text: '[Shop] ', color: 'gold',
+    extra: [
+      { text: 'Click', color: '#112233', bold: true, clickEvent: { action: 'run_command', value: '/warp shop' }, hoverEvent: { action: 'show_text', value: 'Teleport' } },
+      { text: ' now', extra: [{ text: '!' }] }
+    ]
+  }
+  const segments = parseInteractiveChat(message, '[Shop] Click now!', '')
+  assert.deepEqual(segments.map((segment) => segment.text), ['[Shop] ', 'Click', ' now', '!'])
+  assert.equal(segments[0].color, '#ffaa00')
+  assert.deepEqual(segments[1].click, { action: 'run_command', value: '/warp shop' })
+  assert.equal(segments[1].color, '#112233')
+  assert.equal(segments[1].bold, true)
+  assert.equal(segments[3].color, '#ffaa00')
+  assert.equal(extractText({ text: 'a', extra: [{ text: 'b' }, 'c'] }), 'abc')
+})
+
+// --- Reconnect: live account config, jitter, ghost sessions ---
+
+function reconnectHarness(overrides = {}) {
+  const bots = []
+  const events = []
+  const timers = []
+  const cleared = []
+  const manager = new BotManager({
+    profilesPath: 'profiles',
+    emit: (...event) => events.push(event),
+    createBot: (options) => { const bot = new FakeBot(); bot.options = options; bots.push(bot); return bot },
+    scheduleReconnectTimer: (callback, delay) => { const timer = { callback, delay, id: `retry-${timers.length}` }; timers.push(timer); return timer },
+    clearReconnectTimer: (timer) => cleared.push(timer),
+    random: () => 0.5,
+    ...overrides
+  })
+  const account = { id: 'cfg', username: 'user@example.com', host: 'old.example', port: 25565, antiAfk: false, autoReconnect: true, autoReconnectDelay: 5 }
+  return { manager, bots, events, timers, cleared, account }
+}
+
+test('updateAccountConfig disabling auto-reconnect cancels the pending retry', () => {
+  const { manager, bots, events, timers, cleared, account } = reconnectHarness()
+  manager.connect(account)
+  bots[0].emit('end', 'socketClosed')
+  assert.equal(timers.length, 1)
+
+  assert.equal(manager.updateAccountConfig({ ...account, autoReconnect: false }), true)
+  assert.deepEqual(cleared, [timers[0]])
+  assert.equal(events.filter(([type]) => type === 'status').at(-1)[2].status, 'offline')
+  timers[0].callback()
+  assert.equal(bots.length, 1)
+})
+
+test('updateAccountConfig applies a changed destination to the next reconnect', () => {
+  const { manager, bots, timers, account } = reconnectHarness()
+  manager.connect(account)
+  bots[0].emit('end', 'socketClosed')
+  manager.updateAccountConfig({ ...account, host: 'new.example', port: 25570 })
+  timers[0].callback()
+  assert.equal(bots.length, 2)
+  assert.equal(bots[1].options.host, 'new.example')
+  assert.equal(bots[1].options.port, 25570)
+  manager.disconnect('cfg')
+})
+
+test('a session started before the profile save uses the saved config on its next disconnect', () => {
+  const stale = reconnectHarness()
+  stale.manager.connect(stale.account)
+  stale.manager.updateAccountConfig({ ...stale.account, autoReconnect: false })
+  stale.bots[0].emit('end', 'socketClosed')
+  assert.equal(stale.timers.length, 0)
+  assert.equal(stale.events.filter(([type]) => type === 'status').at(-1)[2].status, 'offline')
+
+  const moved = reconnectHarness()
+  moved.manager.connect(moved.account)
+  moved.manager.updateAccountConfig({ ...moved.account, host: 'moved.example' })
+  moved.bots[0].emit('end', 'socketClosed')
+  moved.timers[0].callback()
+  assert.equal(moved.bots[1].options.host, 'moved.example')
+  moved.manager.disconnect('cfg')
+})
+
+test('updateAccountConfig never drops a live session', () => {
+  const { manager, bots, account } = reconnectHarness()
+  manager.connect(account)
+  let quit = 0
+  bots[0].quit = () => { quit++ }
+  assert.equal(manager.updateAccountConfig({ ...account, autoReconnect: false, host: 'elsewhere.example' }), true)
+  assert.equal(quit, 0)
+  assert.equal(manager.sessions.has('cfg'), true)
+  assert.equal(manager.updateAccountConfig({ id: 'unknown', username: 'x' }), false)
+})
+
+test('reconnect delays get +/-20% jitter from the injected random source', () => {
+  for (const [random, expected] of [[0, 4000], [0.5, 5000], [1, 6000]]) {
+    const { manager, bots, timers, account } = reconnectHarness({ random: () => random })
+    manager.connect(account)
+    bots[0].emit('end', 'socketClosed')
+    assert.equal(timers[0].delay, expected)
+  }
+})
+
+test('duplicate-login kicks wait at least thirty seconds plus jitter', () => {
+  for (const reason of ['You are already connected to this proxy!', 'Player already online', 'You logged in from another location', 'already logged in']) {
+    const low = reconnectHarness({ random: () => 0 })
+    low.manager.connect(low.account)
+    low.bots[0].emit('kicked', reason)
+    low.bots[0].emit('end', 'socketClosed')
+    assert.equal(low.timers[0].delay, 30_000, reason)
+
+    const high = reconnectHarness({ random: () => 1 })
+    high.manager.connect(high.account)
+    high.bots[0].emit('kicked', reason)
+    high.bots[0].emit('end', 'socketClosed')
+    assert.equal(high.timers[0].delay, 36_000, reason)
+  }
+  assert.equal(reconnectDelaySeconds({ autoReconnectDelay: 5 }, 'already connected', 1), 30)
+  assert.equal(reconnectDelaySeconds({ autoReconnectDelay: 5 }, 'Kicked for flying', 1), 5)
+})
+
+// --- Resource packs: proxy routing and destination policy ---
+
+function packHarness(account) {
+  const bot = new FakeBot()
+  const events = []
+  const diagnostics = []
+  let loaded
+  bot.acceptResourcePack = () => { bot.accepted = true }
+  const manager = new BotManager({
+    profilesPath: 'profiles',
+    emit: (...event) => events.push(event),
+    diagnose: (entry) => diagnostics.push(entry),
+    createBot: () => bot,
+    resourcePackLoader: { load: async (...args) => { loaded = args; return { source: 'x', sha1: 'y', itemAppearance: () => ({}), titleAppearance: () => null } } }
+  })
+  manager.connect({ id: 'pack-acct', username: 'user@example.com', host: 'localhost', antiAfk: false, autoReconnect: false, ...account })
+  return { bot, events, diagnostics, getLoaded: () => loaded }
+}
+
+test('resource packs are not downloaded directly when the account uses a proxy', async () => {
+  const proxy = { enabled: true, type: 'socks5', host: '127.0.0.1', port: 1080 }
+  const blocked = packHarness({ proxy })
+  blocked.bot.emit('resourcePack', '0123456789012345678901234567890123456789', 'https://packs.example/a.zip')
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(blocked.getLoaded(), undefined)
+  assert.equal(blocked.bot.accepted, undefined)
+  assert.match(blocked.events.filter(([type]) => type === 'log').at(-1)[2].message, /proxy/i)
+  assert.equal(blocked.diagnostics.some((entry) => entry.event === 'resource_pack_skipped_proxy'), true)
+  assert.equal(blocked.bot.writes.some(([name]) => name === 'resource_pack_receive'), true)
+
+  const allowed = packHarness({ proxy, allowDirectPackDownload: true })
+  allowed.bot.emit('resourcePack', '0123456789012345678901234567890123456789', 'https://packs.example/a.zip')
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(allowed.getLoaded()[0], 'https://packs.example/a.zip')
+  assert.equal(allowed.bot.accepted, true)
+})
+
+test('allowPrivatePackHosts from the account config is passed to the pack loader', async () => {
+  const harness = packHarness({ allowPrivatePackHosts: true })
+  harness.bot.emit('resourcePack', '0123456789012345678901234567890123456789', 'http://192.168.1.5/a.zip')
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.deepEqual(harness.getLoaded()[2], { allowPrivateHosts: true })
 })
