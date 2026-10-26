@@ -1,6 +1,6 @@
-# Macros (Coming in 0.11 / In Development)
+# Macros (available in 0.11 (pre-release))
 
-> **Status: Coming in 0.11 / In development.**
+> **Status: available in 0.11 (pre-release).**
 > Windows `0.10.0-beta.9` includes an early per-account **Automations (beta)** dialog for basic workflows. The declarative **Macro Engine v2** described on this page is currently in development on the `feature/macro-engine` branch (see [`docs/design/macro-engine.md`](../design/macro-engine.md)) and is not yet in a published release.
 
 ![Current Automations beta dialog in 0.10.0-beta.9](../images/automation-dialog.png)
@@ -119,4 +119,4 @@ When an account's inventory fills up at a farm, deposits all unlocked items into
 
 ---
 
-**Next:** [Notifications (Coming in 0.11 / In Development) →](notifications.md)
+**Next:** [Notifications (available in 0.11 (pre-release)) →](notifications.md)

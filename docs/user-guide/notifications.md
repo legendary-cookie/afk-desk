@@ -1,6 +1,6 @@
-# Notifications (Coming in 0.11 / In Development)
+# Notifications (available in 0.11 (pre-release))
 
-> **Status: Coming in 0.11 / In development.**
+> **Status: available in 0.11 (pre-release).**
 > Windows `0.10.0-beta.9` supports local desktop notifications (in **Settings → Desktop notifications** and per-account **Alerts**). Outbound **Discord webhook** and **Telegram bot** channels are currently in development for `0.11` (see [`desktop/electron/notify/contract.cjs`](../../desktop/electron/notify/contract.cjs)) and are not yet in a published release.
 
 ## How outbound notifications work
@@ -56,4 +56,4 @@ Each Discord or Telegram channel can subscribe to any combination of these event
 
 ---
 
-**Next:** [Troubleshooting →](troubleshooting.md)
+**Next:** [Self-Hosting & Server Mode →](self-hosting.md)

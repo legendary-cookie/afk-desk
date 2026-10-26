@@ -95,8 +95,15 @@ All releases and source archives are listed on the [GitHub Releases page](https:
 - [Inventory and Auto-Deposit](docs/user-guide/inventory-and-auto-deposit.md) — Gear/inventory grids, item locks, dropping stacks, and chest auto-deposit
 - [POV View and Server Menus](docs/user-guide/pov-and-server-menus.md) — 3D/map POV controls, coordinate actions, and resource-pack server menus
 - [Android App](docs/user-guide/android.md) — APK installation, foreground service & battery settings, and mobile boundaries
-- [Macros (Coming in 0.11 / In Development)](docs/user-guide/macros.md) — Declarative trigger-to-steps macro engine v2 preview and example macros
-- [Notifications (Coming in 0.11 / In Development)](docs/user-guide/notifications.md) — Outbound Discord webhook and Telegram bot alert setup and privacy
+- [Macros (available in 0.11 (pre-release))](docs/user-guide/macros.md) — Declarative trigger-to-steps macro engine v2 preview and example macros
+- [Notifications (available in 0.11 (pre-release))](docs/user-guide/notifications.md) — Outbound Discord webhook and Telegram bot alert setup and privacy
+- [Self-Hosting & Server Mode](docs/user-guide/self-hosting.md) — Headless server operation, Docker quick start, admin setup, device-code sign-in, and backup/restore
+- [Remote Access via Tailscale](docs/user-guide/remote-access-tailscale.md) — Secure private access via Tailscale, desktop remote settings, sidecar compose, and MagicDNS
+- [Reverse Proxy Setup](docs/user-guide/reverse-proxy.md) — Caddy auto-HTTPS and Nginx reverse proxy configurations, trustProxy, and security warnings
+- [API Tokens & Automation](docs/user-guide/api-tokens.md) — REST API and WebSocket tokens, permission scopes (read/control/admin), and curl examples
+- [Discord Bot Control](docs/user-guide/discord-bot.md) — Slash commands (/afk), bot creation, guild authorizations, interactive confirmations, and ephemeral replies
+- [Bedrock Edition](docs/user-guide/bedrock.md) — Bedrock Edition support, current feature matrix (Phases 1–2), telemetry, forms, and stationary anti-AFK
+- [Security Model](docs/user-guide/security.md) — Threat model, CSRF/Origin/Host defences, scrypt hashing, rate limits, and audit logs
 - [Troubleshooting](docs/user-guide/troubleshooting.md) — Connection errors, version mismatches, sign-in tips, proxy resource packs, and storage warnings
 - [FAQ](docs/user-guide/faq.md) — Common questions on security, server rules, performance, and local files
 
