@@ -314,3 +314,18 @@ test('Stage 3: macro editor and notifications panel cover all contract step/trig
   assert.match(html, /https:\/\/github\.com\/legendary-cookie\/afk-desk\/blob\/main\/docs\/user-guide\/notifications\.md/)
   assert.match(css, /@media\s*\(prefers-reduced-motion:\s*reduce\)/)
 })
+
+
+test('every IPC channel the preload invokes is registered by main.cjs, and notify:* is exposed', () => {
+  // Regression: the notifications panel shipped calling api.notify.* while preload had no notify namespace.
+  const preload = fs.readFileSync(path.join(__dirname, '..', 'electron', 'preload.cjs'), 'utf8')
+  const main = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
+  const invoked = [...preload.matchAll(/ipcRenderer\.invoke\('([^']+)'/g)].map((match) => match[1])
+  for (const channel of ['notify:list', 'notify:save', 'notify:delete', 'notify:test']) assert.ok(invoked.includes(channel), channel)
+  const { IPC: MACRO_IPC } = require('../electron/macro/contract.cjs')
+  const viaConstant = new Set(Object.entries(MACRO_IPC).filter(([key]) => main.includes(`MACRO_IPC.${key}`)).map(([, value]) => value))
+  for (const channel of new Set(invoked)) {
+    const literal = main.includes(`'${channel}'`) || main.includes(`"${channel}"`)
+    assert.ok(literal || viaConstant.has(channel), `main.cjs registers ${channel}`)
+  }
+})

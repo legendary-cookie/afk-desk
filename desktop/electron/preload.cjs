@@ -40,6 +40,14 @@ contextBridge.exposeInMainWorld('afkDesk', {
     importJson: (json) => ipcRenderer.invoke('macros:import', json),
     exportJson: (ids) => ipcRenderer.invoke('macros:export', ids)
   },
+  // Discord/Telegram notification channels. Secrets are write-only: list()
+  // returns hasSecret + a masked hint, never the webhook URL or bot token.
+  notify: {
+    list: () => ipcRenderer.invoke('notify:list'),
+    save: (channel) => ipcRenderer.invoke('notify:save', channel),
+    delete: (id) => ipcRenderer.invoke('notify:delete', id),
+    test: (id) => ipcRenderer.invoke('notify:test', id)
+  },
   getProxyHealth: () => ipcRenderer.invoke('proxy:health'),
   openIsolatedLogin: (id, url, code) => ipcRenderer.invoke('auth:open-isolated', { id, url, code }),
   openExternal: (url) => ipcRenderer.invoke('system:open-external', url),
