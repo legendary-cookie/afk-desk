@@ -584,6 +584,9 @@ function createApiRouter({
           }
         })
       }
+      if (rateCheck.delayMs > 0) {
+        await auth.delay(rateCheck.delayMs)
+      }
 
       let valid
       try { valid = await auth.verifyAdminPassword(password, username) } catch (error) {

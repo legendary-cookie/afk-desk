@@ -161,12 +161,12 @@ test('R2-4: complete origins and session-bound WS CSRF reject cross-port, cross-
   assert.ok((await h.upgrade(f.session)).ws)
 })
 
-test('R2-5: parallel logins reserve attempts before hashing and reject a fifth concurrent hash', async t => {
+test('R2-5: parallel logins reserve attempts before hashing and reject beyond 2 concurrency slots', async t => {
   const f = fixture(t)
   f.auth.setAdminPasswordSync(PASSWORD)
   const responses = await Promise.all(Array.from({ length: 12 }, (_, i) => f.request('/api/login', { username: `user${i}`, password: 'wrong-password' }, null)))
-  assert.equal(responses.filter(r => r.status === 401).length, 4)
-  assert.equal(responses.filter(r => r.status === 429).length, 8)
+  assert.equal(responses.filter(r => r.status === 401).length, 2)
+  assert.equal(responses.filter(r => r.status === 429).length, 10)
   assert.equal(f.auth.loginAttemptsByIp.get('127.0.0.1').attempts.length, 5)
   assert.equal(f.auth.loginAttemptsByUser.size, 5)
 })
@@ -183,9 +183,11 @@ test('R2-5: bearer work is rate-limited before scrypt; tracker maps and credenti
     f.auth.bearerAttemptsByIp.set(`ip${i}`, [now])
   }
   f.auth.bearerAttemptsByIp.delete('attacker')
-  assert.equal(f.auth.checkApiRateLimit('extra').allowed, false)
-  assert.equal(f.auth.reserveLoginAttempt('extra', 'extra').allowed, false)
-  assert.equal(f.auth.checkWindow(f.auth.bearerAttemptsByIp, 'extra', 120).allowed, false)
+  assert.equal(f.auth.checkApiRateLimit('extra').allowed, true)
+  assert.equal(f.auth.apiCallsByActor.has('actor0'), false)
+  assert.equal(f.auth.apiCallsByActor.has('extra'), true)
+  assert.equal(f.auth.reserveLoginAttempt('extra', 'extra').allowed, true)
+  assert.equal(f.auth.checkWindow(f.auth.bearerAttemptsByIp, 'extra', 120).allowed, true)
   for (const map of [f.auth.apiCallsByActor, f.auth.loginAttemptsByIp, f.auth.loginAttemptsByUser, f.auth.bearerAttemptsByIp]) assert.equal(map.size, MAX_TRACKERS)
   now += TRACKER_TTL_MS + 1
   for (const map of [f.auth.apiCallsByActor, f.auth.loginAttemptsByIp, f.auth.loginAttemptsByUser, f.auth.bearerAttemptsByIp]) { f.auth.pruneTrackers(map); assert.equal(map.size, 0) }
@@ -198,9 +200,9 @@ test('R2-5: bearer work is rate-limited before scrypt; tracker maps and credenti
   assert.throws(() => f.auth.createTokenSync({}), /capacity/)
 })
 
-test('R2-5: token issuance shares the four-hash budget and reserves token capacity before await', async t => {
+test('R2-5: token issuance shares the two-hash bearer budget and reserves token capacity before await', async t => {
   const f = fixture(t)
-  const pending = Array.from({ length: 4 }, () => f.auth.createToken())
+  const pending = Array.from({ length: 2 }, () => f.auth.createToken())
   assert.throws(() => f.auth.createTokenSync(), e => e.statusCode === 429)
   await assert.rejects(f.auth.verifyBearerToken('Bearer afk_1234567890abcdef_1234567890123456'), e => e.statusCode === 429)
   await assert.rejects(f.auth.createToken(), e => e.statusCode === 429)
@@ -368,4 +370,389 @@ test('R2-sweep: populated API and WS fixtures never expose proxy/webhook/bot sec
   for (const secret of [...Object.values(secrets), '@example.com', token.record.id, token.token.split('_')[2]]) assert.ok(!all.includes(secret), secret)
   const account = (await f.invoke('accounts:list')).json.result[0]
   assert.deepEqual(Object.keys(account).sort(), ['edition', 'id', 'name', 'server', 'status'])
+})
+
+test('Security re-review 1: lockout DoS immunity for loopback/recently-authenticated, (IP, username) lockout, global username delay, hash starvation separation, unauthenticated bearer flood rejection, tracker overflow eviction', async (t) => {
+  let now = 10_000
+  const dir = '.'
+  const auth = new MemoryAuth({ dataDir: '.', now: () => now })
+  auth.setAdminPasswordSync('AdminSecured!123')
+
+  // 1A. Attacker at remote IP fails 5 times on 'admin'
+  const attackerIp = '198.51.100.23'
+  for (let i = 0; i < 5; i++) {
+    const rate = auth.checkLoginRateLimit(attackerIp, 'admin')
+    assert.equal(rate.allowed, true)
+    auth.recordLoginAttempt(attackerIp, 'admin', false)
+  }
+  // Attacker IP is now locked out
+  assert.equal(auth.checkLoginRateLimit(attackerIp, 'admin').allowed, false)
+
+  // Loopback (127.0.0.1 and ::1) is NOT locked out by username lockout
+  assert.equal(auth.checkLoginRateLimit('127.0.0.1', 'admin').allowed, true)
+  assert.equal(auth.checkLoginRateLimit('::1', 'admin').allowed, true)
+
+  // An IP that recently authenticated successfully is NOT locked out
+  const goodIp = '192.168.1.15'
+  auth.recordLoginAttempt(goodIp, 'admin', true)
+  assert.equal(auth.isRecentlyAuthenticated(goodIp), true)
+  assert.equal(auth.checkLoginRateLimit(goodIp, 'admin').allowed, true)
+
+  // Global per-username threshold (10 attempts across IPs) adds delay (max 30 s), never a full lockout
+  for (let i = 0; i < 10; i++) {
+    auth.recordLoginAttempt(`10.0.1.${i}`, 'admin', false)
+  }
+  const newIpRate = auth.checkLoginRateLimit('198.51.100.99', 'admin')
+  assert.equal(newIpRate.allowed, true)
+  assert.ok(newIpRate.delayMs > 0 && newIpRate.delayMs <= 30_000)
+  // Loopback and recently authenticated IP have 0 delay
+  assert.equal(auth.checkLoginRateLimit('127.0.0.1', 'admin').delayMs, 0)
+  assert.equal(auth.checkLoginRateLimit(goodIp, 'admin').delayMs, 0)
+
+  // 1B. Hash starvation: separate concurrency slots (2 login + 2 bearer)
+  // Saturate 2 bearer slots
+  const bearerHold1 = auth.createToken()
+  const bearerHold2 = auth.createToken()
+  // 3rd bearer hash is rejected
+  await assert.rejects(auth.createToken(), (e) => e.statusCode === 429)
+  // But login attempt can STILL run concurrently because login has its own 2 slots!
+  const loginResult = await auth.verifyAdminPassword('AdminSecured!123', 'admin')
+  assert.equal(loginResult, true)
+  await Promise.all([bearerHold1, bearerHold2])
+
+  // 1C. Reject unauthenticated bearer floods per IP before reaching the queue
+  const floodIp = '203.0.113.88'
+  for (let i = 0; i < 10; i++) {
+    await auth.verifyBearerToken(`Bearer afk_${i}1234567_${'a'.repeat(24)}`, floodIp)
+  }
+  // 11th unauthenticated attempt from floodIp throws 429 before queue
+  await assert.rejects(auth.verifyBearerToken(`Bearer afk_99999999_${'a'.repeat(24)}`, floodIp), (e) => e.statusCode === 429)
+
+  // 1D. Tracker overflow evicts oldest entries and does not lock out new keys
+  const map = new Map()
+  for (let i = 0; i < MAX_TRACKERS; i++) {
+    map.set(`key${i}`, [now])
+  }
+  const checkExtra = auth.checkWindow(map, 'new-key', 10)
+  assert.equal(checkExtra.allowed, true)
+  assert.equal(map.has('key0'), false) // oldest evicted
+  assert.equal(map.has('new-key'), true) // new key added
+  assert.equal(map.size, MAX_TRACKERS)
+})
+
+test('Security re-review 2: WS limit 4 per session, closes oldest socket when session exceeds limit, 5 per token', async (t) => {
+  const f = fixture(t), h = wsHarness(t, f)
+  // 4 sockets connect simultaneously for a session
+  const sSockets = []
+  for (let i = 0; i < 4; i++) {
+    const { ws } = await h.upgrade(f.session)
+    assert.ok(ws)
+    sSockets.push(ws)
+  }
+  // 5th socket connects for the same session: oldest (sSockets[0]) is closed
+  const oldestClosePromise = new Promise((resolve) => sSockets[0].on('close', resolve))
+  const { ws: ws5 } = await h.upgrade(f.session)
+  assert.ok(ws5)
+  await oldestClosePromise
+  assert.equal(sSockets[0].closed, 4000)
+
+  // Token limit is 5; 6th is rejected with 429
+  const token = f.auth.createTokenSync({ scope: 'read' }).token
+  const tSockets = []
+  for (let i = 0; i < 5; i++) {
+    const { ws } = await h.upgrade(token)
+    assert.ok(ws)
+    tSockets.push(ws)
+  }
+  const overToken = await h.upgrade(token)
+  assert.match(overToken.rejected, /429/)
+})
+
+test('Security re-review 3: browser-bridge clears CSRF, stops reconnect, and prompts login on 4401/1008 or 401/403; exponential backoff on other closes', async () => {
+  class MockWs extends EventEmitter {
+    constructor(url, protocols) {
+      super()
+      this.url = url
+      this.protocols = protocols
+      this.readyState = 1
+      MockWs.lastInstance = this
+      MockWs.instances.push(this)
+    }
+    addEventListener(event, fn) { this.on(event, fn) }
+    removeEventListener(event, fn) { this.off(event, fn) }
+    close(code) {
+      this.closedCode = code
+      this.readyState = 3
+      this.emit('close', { code })
+    }
+  }
+  MockWs.instances = []
+
+  function mockDoc() {
+    return {
+      body: { append() {} },
+      getElementById: () => null,
+      createElement: () => ({
+        style: {}, focus() {}, append() {}, addEventListener() {},
+        setAttribute() {}, remove() {}, showModal() {}
+      })
+    }
+  }
+
+  // 3A. WS close with 4401
+  const bridge = createBrowserBridge({
+    WebSocketImpl: MockWs,
+    documentObj: mockDoc(),
+    fetchImpl: async (url) => {
+      if (url === '/api/login') return { ok: true, json: async () => ({ ok: true, csrfToken: 'csrf-1', scope: 'admin' }) }
+      return { ok: true, json: async () => ({}) }
+    }
+  })
+  await bridge.login('password')
+  assert.equal(bridge._getCsrfToken(), 'csrf-1')
+  bridge.onBotEvent(() => {})
+  const activeWs = MockWs.lastInstance
+  assert.ok(activeWs)
+
+  activeWs.close(4401)
+  assert.equal(bridge._getCsrfToken(), null)
+  bridge._close()
+
+  // 3B. WS close with 1008
+  MockWs.instances = []
+  const bridge1008 = createBrowserBridge({
+    WebSocketImpl: MockWs,
+    documentObj: mockDoc(),
+    fetchImpl: async (url) => {
+      if (url === '/api/login') return { ok: true, json: async () => ({ ok: true, csrfToken: 'csrf-2', scope: 'admin' }) }
+      return { ok: true, json: async () => ({}) }
+    }
+  })
+  await bridge1008.login('password')
+  assert.equal(bridge1008._getCsrfToken(), 'csrf-2')
+  bridge1008.onBotEvent(() => {})
+  MockWs.lastInstance.close(1008)
+  assert.equal(bridge1008._getCsrfToken(), null)
+  bridge1008._close()
+
+  // 3C. HTTP 401 / 403 from /api/session
+  for (const status of [401, 403]) {
+    const bridgeSession = createBrowserBridge({
+      WebSocketImpl: MockWs,
+      documentObj: mockDoc(),
+      fetchImpl: async () => ({ status, ok: false, json: async () => ({ ok: false }) })
+    })
+    const sessionRes = await bridgeSession.getSession()
+    assert.equal(sessionRes, null)
+    assert.equal(bridgeSession._getCsrfToken(), null)
+    bridgeSession._close()
+  }
+
+  // 3D. Exponential backoff on other closes (e.g. 1006)
+  const scheduledTimeouts = []
+  const origSetTimeout = globalThis.setTimeout
+  const bridgeBackoff = createBrowserBridge({
+    WebSocketImpl: MockWs,
+    documentObj: mockDoc(),
+    fetchImpl: async () => ({ ok: true, json: async () => ({ ok: true, csrfToken: 'csrf-bo', scope: 'admin' }) })
+  })
+  await bridgeBackoff.login('pass')
+  bridgeBackoff.onBotEvent(() => {})
+  globalThis.setTimeout = (fn, delay) => {
+    scheduledTimeouts.push(delay)
+    return 123
+  }
+  try {
+    MockWs.lastInstance.close(1006)
+    MockWs.lastInstance.close(1006)
+    MockWs.lastInstance.close(1006)
+    MockWs.lastInstance.close(1006)
+    MockWs.lastInstance.close(1006)
+    assert.deepEqual(scheduledTimeouts, [2000, 4000, 8000, 16000, 30000])
+  } finally {
+    globalThis.setTimeout = origSetTimeout
+    bridgeBackoff._close()
+  }
+})
+
+test('Security re-review 4: startup race buffer holds up to 200 bot and macro events and replays to first subscriber', async () => {
+  class MockWs extends EventEmitter {
+    constructor(url, protocols) {
+      super()
+      this.url = url
+      this.protocols = protocols
+      this.readyState = 1
+      MockWs.lastInstance = this
+    }
+    addEventListener(event, fn) { this.on(event, fn) }
+    removeEventListener(event, fn) { this.off(event, fn) }
+    emitMsg(channel, payload) {
+      this.emit('message', { data: JSON.stringify({ channel, payload }) })
+    }
+  }
+
+  const bridge = createBrowserBridge({
+    WebSocketImpl: MockWs,
+    fetchImpl: async () => ({ ok: true, json: async () => ({ ok: true, csrfToken: 'csrf-buf', scope: 'admin' }) })
+  })
+  await bridge.login('pass')
+  const ws = MockWs.lastInstance
+
+  // Push 250 bot events before any subscriber exists
+  for (let i = 1; i <= 250; i++) {
+    ws.emitMsg('bot:event', { seq: i, text: `event-${i}` })
+  }
+  // Push 2 macro events
+  ws.emitMsg('macro-run', { macroId: 'm1', status: 'running' })
+  ws.emitMsg('macro-run', { macroId: 'm1', status: 'stopped' })
+
+  // First subscriber to bot:event
+  const receivedBot = []
+  bridge.onBotEvent((ev) => receivedBot.push(ev))
+
+  // Buffer bounded to last 200 events: 51 through 250
+  assert.equal(receivedBot.length, 200)
+  assert.equal(receivedBot[0].seq, 51)
+  assert.equal(receivedBot[199].seq, 250)
+
+  // Second subscriber to bot:event should NOT receive the replay backlog
+  const receivedSecond = []
+  bridge.onBotEvent((ev) => receivedSecond.push(ev))
+  assert.equal(receivedSecond.length, 0)
+
+  // Live event goes to both
+  ws.emitMsg('bot:event', { seq: 251, text: 'live' })
+  assert.equal(receivedBot.length, 201)
+  assert.equal(receivedSecond.length, 1)
+
+  // First subscriber to macro-run
+  const receivedMacro = []
+  bridge.onMacroRun((ev) => receivedMacro.push(ev))
+  assert.equal(receivedMacro.length, 2)
+  assert.equal(receivedMacro[0].status, 'running')
+  assert.equal(receivedMacro[1].status, 'stopped')
+
+  bridge._close()
+})
+
+test('Security re-review 5: browser mode remote access settings section is read-only with desktop-only note and never sends remoteAccess in settings:save', async () => {
+  const { mountRemoteAccessSettingsUi } = require('../server/browser-bridge.js')
+
+  function makeElement(tag) {
+    const el = {
+      tag, id: '', className: '', textContent: '', value: '', type: '', readOnly: false, disabled: false,
+      children: [], attributes: {}, listeners: {},
+      append(...nodes) { this.children.push(...nodes) },
+      insertBefore(node, _ref) { this.children.unshift(node) },
+      replaceChildren(...nodes) { this.children = [...nodes] },
+      setAttribute(k, v) { this.attributes[k] = v },
+      getAttribute(k) { return this.attributes[k] },
+      addEventListener(ev, fn) { this.listeners[ev] = fn },
+      querySelector(sel) {
+        if (sel === '.settings-body') return el.body
+        if (sel === '.settings-about') return el.about
+        return null
+      }
+    }
+    return el
+  }
+
+  const openBtn = makeElement('button')
+  openBtn.id = 'open-settings'
+  const settingsDialog = makeElement('dialog')
+  settingsDialog.id = 'settings-dialog'
+  const settingsBody = makeElement('div')
+  settingsBody.className = 'settings-body'
+  const settingsAbout = makeElement('div')
+  settingsAbout.className = 'settings-about'
+  settingsBody.append(settingsAbout)
+  settingsDialog.body = settingsBody
+  settingsDialog.about = settingsAbout
+
+  const elementsById = {
+    'open-settings': openBtn,
+    'settings-dialog': settingsDialog
+  }
+  const mockDoc = {
+    getElementById: (id) => elementsById[id] || null,
+    createElement: makeElement
+  }
+
+  const savedPayloads = []
+  const bridge = createBrowserBridge({
+    fetchImpl: async (url, init) => {
+      if (url === '/api/login') return { ok: true, json: async () => ({ ok: true, csrfToken: 'csrf-set', scope: 'admin' }) }
+      if (url === '/api/invoke') {
+        const body = JSON.parse(init.body)
+        savedPayloads.push(body)
+        return { ok: true, json: async () => ({ ok: true, result: body.args }) }
+      }
+      return { ok: true, json: async () => ({}) }
+    }
+  })
+  await bridge.login('pass')
+
+  // Test that bridge.saveSettings strips remoteAccess before invoke
+  await bridge.saveSettings({
+    uiScale: 110,
+    remoteAccess: { enabled: true, bind: '0.0.0.0', port: 9999 }
+  })
+  assert.equal(savedPayloads.length, 1)
+  assert.equal(savedPayloads[0].channel, 'settings:save')
+  assert.equal(savedPayloads[0].args.uiScale, 110)
+  assert.equal(Object.hasOwn(savedPayloads[0].args, 'remoteAccess'), false)
+
+  // Mount UI and click open-settings
+  globalThis.afkDesk = {
+    getSettings: async () => ({
+      uiScale: 100,
+      remoteAccess: {
+        bind: '100.85.14.94',
+        port: 8787,
+        allowedHosts: ['myhost.tailscale.ts.net'],
+        running: true,
+        tokens: [{ id: 't1', name: 'Home Assistant', scope: 'read', tokenHint: '••••abcd' }]
+      }
+    })
+  }
+
+  mountRemoteAccessSettingsUi(mockDoc)
+  await openBtn.listeners['click']?.()
+
+  const section = settingsBody.children.find((c) => c.id === 'remote-access-settings-section')
+  assert.ok(section, 'remote-access-settings-section must exist')
+
+  const note = section.children.find((c) => c.id === 'remote-access-desktop-only-note')
+  assert.ok(note, 'note element must exist')
+  assert.match(note.textContent, /desktop app/i)
+
+  const statusEl = section.children.find((c) => c.id === 'remote-access-status')
+  assert.match(statusEl.textContent, /Running on 100\.85\.14\.94:8787/)
+
+  const grid = section.children.find((c) => c.className === 'settings-visual-grid')
+  const bindInput = grid.children[0].children[1]
+  assert.equal(bindInput.value, '100.85.14.94')
+  assert.equal(bindInput.readOnly, true)
+  assert.equal(bindInput.disabled, true)
+
+  const portInput = grid.children[1].children[1]
+  assert.equal(portInput.value, '8787')
+  assert.equal(portInput.readOnly, true)
+  assert.equal(portInput.disabled, true)
+
+  const hostsInput = grid.children[2].children[1]
+  assert.equal(hostsInput.value, 'myhost.tailscale.ts.net')
+  assert.equal(hostsInput.readOnly, true)
+  assert.equal(hostsInput.disabled, true)
+
+  const tokenList = section.children.find((c) => c.id === 'remote-access-token-list')
+  assert.equal(tokenList.children.length, 1)
+  assert.match(tokenList.children[0].children[0].textContent, /Home Assistant \[read\] ••••abcd/)
+  assert.equal(tokenList.children[0].children.length, 1)
+
+  assert.equal(section.children.some((c) => c.id === 'remote-access-apply'), false)
+  assert.equal(section.children.some((c) => c.id === 'remote-access-token-create'), false)
+
+  delete globalThis.afkDesk
+  bridge._close()
 })

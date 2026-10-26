@@ -24,7 +24,17 @@
     let loginDialogPromise = null
     let ws = null
     let wsReconnectTimer = null
+    let wsReconnectDelay = 2000
     let wsStopped = false
+
+    // Startup race resolution (Option A):
+    // Browser-bridge buffers bot and macro events received before any listener subscribes
+    // (bounded to the last 200 events) and replays them to the first subscriber.
+    // This prevents missed initial status/telemetry snapshots if the WebSocket connects
+    // before renderer event listeners are registered.
+    const MAX_BUFFERED_EVENTS = 200
+    const bufferedBotEvents = []
+    const bufferedMacroEvents = []
 
     const botListeners = new Set()
     const macroListeners = new Set()
@@ -68,33 +78,65 @@
         const socket = new WebSocketImpl(wsUrl, [`afk-csrf.${csrfToken}`])
         ws = socket
 
-        socket.addEventListener('message', (event) => {
+        const addSocketListener = (evt, handler) => {
+          if (typeof socket.addEventListener === 'function') socket.addEventListener(evt, handler)
+          else if (typeof socket.on === 'function') socket.on(evt, handler)
+        }
+
+        addSocketListener('open', () => {
+          wsReconnectDelay = 2000
+        })
+
+        addSocketListener('message', (event) => {
           let parsed
           try {
-            parsed = JSON.parse(String(event.data || '{}'))
+            const raw = typeof event === 'object' && event !== null && 'data' in event ? event.data : event
+            parsed = JSON.parse(String(raw || '{}'))
           } catch {
             return
           }
           if (parsed.channel === 'bot:event' && parsed.payload) {
-            for (const listener of botListeners) {
-              try { listener(parsed.payload) } catch {}
+            if (botListeners.size === 0) {
+              if (bufferedBotEvents.length >= MAX_BUFFERED_EVENTS) bufferedBotEvents.shift()
+              bufferedBotEvents.push(parsed.payload)
+            } else {
+              for (const listener of botListeners) {
+                try { listener(parsed.payload) } catch {}
+              }
             }
           } else if (parsed.channel === 'macro-run' && parsed.payload) {
-            for (const listener of macroListeners) {
-              try { listener(parsed.payload) } catch {}
+            if (macroListeners.size === 0) {
+              if (bufferedMacroEvents.length >= MAX_BUFFERED_EVENTS) bufferedMacroEvents.shift()
+              bufferedMacroEvents.push(parsed.payload)
+            } else {
+              for (const listener of macroListeners) {
+                try { listener(parsed.payload) } catch {}
+              }
             }
           }
         })
 
-        socket.addEventListener('close', () => {
+        addSocketListener('close', (event) => {
           if (ws === socket) ws = null
+          const code = typeof event === 'number' ? event : event?.code
+          if (code === 4401 || code === 1008) {
+            csrfToken = null
+            currentScope = null
+            clearTimeout(wsReconnectTimer)
+            wsReconnectTimer = null
+            wsStopped = true
+            promptLoginDialog(code === 4401 ? 'Your session expired. Sign in again.' : 'Connection closed. Sign in again.')
+            return
+          }
           if (!wsStopped && csrfToken && (botListeners.size > 0 || macroListeners.size > 0)) {
             clearTimeout(wsReconnectTimer)
-            wsReconnectTimer = setTimeout(() => ensureWebSocket(), 2000)
+            const delay = wsReconnectDelay
+            wsReconnectDelay = Math.min(30000, wsReconnectDelay * 2)
+            wsReconnectTimer = setTimeout(() => ensureWebSocket(), delay)
           }
         })
 
-        socket.addEventListener('error', () => {
+        addSocketListener('error', () => {
           try { socket.close() } catch {}
         })
       } catch {}
@@ -192,13 +234,13 @@
             errorBox.textContent = String(err?.message || err)
             errorBox.hidden = false
             submitBtn.disabled = false
-            passInput.focus()
+            try { passInput?.focus?.() } catch {}
           }
         })
 
         if (typeof dialog.showModal === 'function') dialog.showModal()
         else dialog.setAttribute('open', 'true')
-        setTimeout(() => passInput.focus(), 0)
+        setTimeout(() => { try { passInput?.focus?.() } catch {} }, 0)
       })
 
       return loginDialogPromise
@@ -220,6 +262,8 @@
       }
       csrfToken = data.csrfToken || null
       currentScope = data.scope || 'admin'
+      wsStopped = false
+      wsReconnectDelay = 2000
       if (data.capabilities) {
         capabilities = data.capabilities
         applyCapabilitiesToDom(capabilities)
@@ -233,15 +277,20 @@
         method: 'GET',
         credentials: 'same-origin'
       })
-      if (response.status === 401) {
+      if (response.status === 401 || response.status === 403) {
         csrfToken = null
         currentScope = null
+        wsStopped = true
+        closeWebSocket()
+        promptLoginDialog(response.status === 401 ? 'Authentication required.' : 'Access forbidden.')
         return null
       }
       const data = await response.json().catch(() => ({}))
       if (!response.ok || !data.ok) return null
       csrfToken = data.csrfToken || null
       currentScope = data.scope || 'read'
+      wsStopped = false
+      wsReconnectDelay = 2000
       if (data.capabilities) {
         capabilities = data.capabilities
         applyCapabilitiesToDom(capabilities)
@@ -362,7 +411,13 @@
       openIsolatedLogin: (id, url, code) => invoke('auth:open-isolated', { id, url, code }),
       openExternal: (url) => invoke('system:open-external', url),
       getSettings: () => invoke('settings:get'),
-      saveSettings: (settings) => invoke('settings:save', settings),
+      saveSettings: (settings) => {
+        if (settings && typeof settings === 'object') {
+          const { remoteAccess: _omit, ...rest } = settings
+          return invoke('settings:save', rest)
+        }
+        return invoke('settings:save', settings)
+      },
       getAppVersion: () => invoke('app:version'),
       getSupportedVersions: () => invoke('app:supported-versions'),
       setUiScale: (percent) => {
@@ -371,12 +426,28 @@
         documentObj.documentElement.style.zoom = String(factor)
       },
       onBotEvent: (callback) => {
+        const isFirst = botListeners.size === 0
         botListeners.add(callback)
+        if (isFirst && bufferedBotEvents.length > 0) {
+          const replay = bufferedBotEvents.slice()
+          bufferedBotEvents.length = 0
+          for (const item of replay) {
+            try { callback(item) } catch {}
+          }
+        }
         ensureWebSocket()
         return () => botListeners.delete(callback)
       },
       onMacroRun: (callback) => {
+        const isFirst = macroListeners.size === 0
         macroListeners.add(callback)
+        if (isFirst && bufferedMacroEvents.length > 0) {
+          const replay = bufferedMacroEvents.slice()
+          bufferedMacroEvents.length = 0
+          for (const item of replay) {
+            try { callback(item) } catch {}
+          }
+        }
         ensureWebSocket()
         return () => macroListeners.delete(callback)
       },
@@ -415,20 +486,11 @@
     if (!openSettingsBtn || !settingsDialog || !settingsBody) return
 
     let section = null
-    let enabledCheck = null
-    let bindSelect = null
-    let bindWarning = null
-    let portInput = null
-    let allowedHostsInput = null
-    let adminPassInput = null
     let statusText = null
-    let tokenNameInput = null
-    let tokenScopeSelect = null
-    let createTokenBtn = null
-    let createdTokenOutput = null
+    let bindVal = null
+    let portVal = null
+    let allowedHostsVal = null
     let tokenListContainer = null
-    let applyBtn = null
-    let currentSettingsCache = null
 
     function ensureSection() {
       if (section) return section
@@ -438,28 +500,15 @@
 
       const heading = doc.createElement('h3')
       heading.textContent = 'Remote access'
-      const subtitle = doc.createElement('p')
-      subtitle.textContent = 'Opt-in local web server for private networks. Disabled by default.'
+
+      const note = doc.createElement('p')
+      note.id = 'remote-access-desktop-only-note'
+      note.className = 'field-note'
+      note.textContent = 'Remote access settings can only be configured in the desktop app.'
 
       statusText = doc.createElement('small')
       statusText.id = 'remote-access-status'
       statusText.textContent = 'Status: Disabled'
-
-      const toggleRow = doc.createElement('label')
-      toggleRow.className = 'toggle-row'
-      enabledCheck = doc.createElement('input')
-      enabledCheck.type = 'checkbox'
-      enabledCheck.id = 'remote-access-enabled'
-      const toggleSpan = doc.createElement('span')
-      toggleSpan.className = 'toggle'
-      toggleSpan.setAttribute('aria-hidden', 'true')
-      const toggleCopy = doc.createElement('span')
-      const toggleStrong = doc.createElement('strong')
-      toggleStrong.textContent = 'Enable remote access web server'
-      const toggleSmall = doc.createElement('small')
-      toggleSmall.textContent = 'Requires setting an administrator password (minimum 12 characters).'
-      toggleCopy.append(toggleStrong, toggleSmall)
-      toggleRow.append(enabledCheck, toggleSpan, toggleCopy)
 
       const grid = doc.createElement('div')
       grid.className = 'settings-visual-grid'
@@ -468,109 +517,49 @@
       bindField.className = 'field'
       const bindLabel = doc.createElement('span')
       bindLabel.textContent = 'Bind address'
-      bindSelect = doc.createElement('select')
-      bindSelect.id = 'remote-access-bind'
-      bindWarning = doc.createElement('small')
-      bindWarning.id = 'remote-access-bind-warning'
-      bindWarning.textContent = '127.0.0.1 is loopback only.'
-      bindField.append(bindLabel, bindSelect, bindWarning)
-
-      bindSelect.addEventListener('change', () => {
-        if (bindSelect.value === '0.0.0.0') {
-          bindWarning.textContent = 'Warning: 0.0.0.0 exposes the server on all network interfaces.'
-        } else {
-          bindWarning.textContent = 'Bind to loopback or a private VPN interface.'
-        }
-      })
+      bindVal = doc.createElement('input')
+      bindVal.id = 'remote-access-bind'
+      bindVal.type = 'text'
+      bindVal.readOnly = true
+      bindVal.disabled = true
+      bindField.append(bindLabel, bindVal)
 
       const portField = doc.createElement('label')
       portField.className = 'field'
       const portLabel = doc.createElement('span')
       portLabel.textContent = 'Port'
-      portInput = doc.createElement('input')
-      portInput.id = 'remote-access-port'
-      portInput.type = 'number'
-      portInput.min = '1'
-      portInput.max = '65535'
-      portInput.value = '8787'
-      portField.append(portLabel, portInput)
+      portVal = doc.createElement('input')
+      portVal.id = 'remote-access-port'
+      portVal.type = 'text'
+      portVal.readOnly = true
+      portVal.disabled = true
+      portField.append(portLabel, portVal)
 
       const hostsField = doc.createElement('label')
       hostsField.className = 'field'
       const hostsLabel = doc.createElement('span')
-      hostsLabel.textContent = 'Allowed hosts (comma-separated)'
-      allowedHostsInput = doc.createElement('input')
-      allowedHostsInput.id = 'remote-access-allowed-hosts'
-      allowedHostsInput.type = 'text'
-      allowedHostsInput.placeholder = 'mybox.tailnet.ts.net'
-      hostsField.append(hostsLabel, allowedHostsInput)
+      hostsLabel.textContent = 'Allowed hosts'
+      allowedHostsVal = doc.createElement('input')
+      allowedHostsVal.id = 'remote-access-allowed-hosts'
+      allowedHostsVal.type = 'text'
+      allowedHostsVal.readOnly = true
+      allowedHostsVal.disabled = true
+      hostsField.append(hostsLabel, allowedHostsVal)
 
-      const passField = doc.createElement('label')
-      passField.className = 'field'
-      const passLabel = doc.createElement('span')
-      passLabel.textContent = 'Admin password (set or change)'
-      adminPassInput = doc.createElement('input')
-      adminPassInput.id = 'remote-access-password'
-      adminPassInput.type = 'password'
-      adminPassInput.autocomplete = 'new-password'
-      adminPassInput.placeholder = 'Minimum 12 characters'
-      passField.append(passLabel, adminPassInput)
-
-      grid.append(bindField, portField, hostsField, passField)
-
-      applyBtn = doc.createElement('button')
-      applyBtn.type = 'button'
-      applyBtn.id = 'remote-access-apply'
-      applyBtn.className = 'button secondary'
-      applyBtn.textContent = 'Apply remote access settings'
-      applyBtn.addEventListener('click', () => void applyRemoteSettings())
+      grid.append(bindField, portField, hostsField)
 
       const tokenHeading = doc.createElement('h4')
       tokenHeading.textContent = 'API tokens'
-
-      const tokenCreateRow = doc.createElement('div')
-      tokenCreateRow.className = 'settings-visual-grid'
-
-      tokenNameInput = doc.createElement('input')
-      tokenNameInput.id = 'remote-access-token-name'
-      tokenNameInput.type = 'text'
-      tokenNameInput.placeholder = 'Token name (e.g. Home Assistant)'
-
-      tokenScopeSelect = doc.createElement('select')
-      tokenScopeSelect.id = 'remote-access-token-scope'
-      for (const s of ['read', 'control', 'admin']) {
-        const opt = doc.createElement('option')
-        opt.value = s
-        opt.textContent = `Scope: ${s}`
-        tokenScopeSelect.append(opt)
-      }
-
-      createTokenBtn = doc.createElement('button')
-      createTokenBtn.type = 'button'
-      createTokenBtn.id = 'remote-access-token-create'
-      createTokenBtn.className = 'button secondary'
-      createTokenBtn.textContent = 'Create API token'
-      createTokenBtn.addEventListener('click', () => void createRemoteToken())
-
-      tokenCreateRow.append(tokenNameInput, tokenScopeSelect, createTokenBtn)
-
-      createdTokenOutput = doc.createElement('pre')
-      createdTokenOutput.id = 'remote-access-token-created'
-      createdTokenOutput.hidden = true
 
       tokenListContainer = doc.createElement('div')
       tokenListContainer.id = 'remote-access-token-list'
 
       section.append(
         heading,
-        subtitle,
+        note,
         statusText,
-        toggleRow,
         grid,
-        applyBtn,
         tokenHeading,
-        tokenCreateRow,
-        createdTokenOutput,
         tokenListContainer
       )
 
@@ -583,123 +572,28 @@
     function renderRemoteSection(ra) {
       if (!ra || typeof ra !== 'object') return
       ensureSection()
-      enabledCheck.checked = ra.enabled === true
-      portInput.value = String(ra.port || 8787)
-      allowedHostsInput.value = Array.isArray(ra.allowedHosts) ? ra.allowedHosts.join(', ') : String(ra.allowedHosts || '')
-      adminPassInput.value = ''
-      adminPassInput.placeholder = ra.hasAdmin ? 'Admin password configured (enter to change)' : 'Required: min 12 characters'
+      bindVal.value = String(ra.bind || '127.0.0.1')
+      portVal.value = String(ra.port || 8787)
+      allowedHostsVal.value = Array.isArray(ra.allowedHosts) ? ra.allowedHosts.join(', ') : String(ra.allowedHosts || '')
 
-      const statusParts = [ra.running ? `Running on ${ra.bind}:${ra.port}` : 'Stopped']
-      if (ra.error) statusParts.push(`Error: ${ra.error}`)
-      statusText.textContent = `Status: ${statusParts.join(' · ')}`
-
-      const interfaces = Array.isArray(ra.interfaces) ? ra.interfaces : []
-      const options = []
-      const seen = new Set()
-      const addOption = (addr, labelText) => {
-        if (seen.has(addr)) return
-        seen.add(addr)
-        const opt = doc.createElement('option')
-        opt.value = addr
-        opt.textContent = labelText
-        options.push(opt)
-      }
-      addOption('127.0.0.1', '127.0.0.1 (Loopback only)')
-      for (const iface of interfaces) {
-        addOption(iface.address, iface.label || `${iface.address} (${iface.name})`)
-      }
-      addOption('0.0.0.0', '0.0.0.0 (All interfaces — warning)')
-      bindSelect.replaceChildren(...options)
-      if (ra.bind && seen.has(ra.bind)) bindSelect.value = ra.bind
-      else bindSelect.value = '127.0.0.1'
+      const statusParts = [ra.running ? 'Running on ' + ra.bind + ':' + ra.port : 'Stopped']
+      if (ra.error) statusParts.push('Error: ' + ra.error)
+      statusText.textContent = 'Status: ' + statusParts.join(' · ')
 
       const tokens = Array.isArray(ra.tokens) ? ra.tokens.filter((t) => !t.revokedAt) : []
       tokenListContainer.replaceChildren(...tokens.map((t) => {
         const row = doc.createElement('div')
         row.className = 'macro-row'
         const label = doc.createElement('span')
-        label.textContent = `${t.name} [${t.scope}] ${t.tokenHint || ''}`
-        const revokeBtn = doc.createElement('button')
-        revokeBtn.type = 'button'
-        revokeBtn.className = 'button danger'
-        revokeBtn.textContent = 'Revoke'
-        revokeBtn.addEventListener('click', () => void revokeRemoteToken(t.id))
-        row.append(label, revokeBtn)
+        label.textContent = t.name + ' [' + t.scope + '] ' + (t.tokenHint || '')
+        row.append(label)
         return row
       }))
-    }
-
-    async function applyRemoteSettings() {
-      if (!globalScope.afkDesk?.saveSettings) return
-      try {
-        const base = currentSettingsCache || await globalScope.afkDesk.getSettings()
-        const payload = {
-          ...base,
-          remoteAccess: {
-            _update: true,
-            enabled: enabledCheck.checked,
-            bind: bindSelect.value,
-            port: Number(portInput.value) || 8787,
-            allowedHosts: allowedHostsInput.value.split(',').map((s) => s.trim()).filter(Boolean),
-            ...(adminPassInput.value ? { adminPassword: adminPassInput.value } : {})
-          }
-        }
-        const saved = await globalScope.afkDesk.saveSettings(payload)
-        currentSettingsCache = saved
-        if (saved?.remoteAccess) renderRemoteSection(saved.remoteAccess)
-      } catch (err) {
-        if (statusText) statusText.textContent = `Error: ${String(err?.message || err)}`
-      }
-    }
-
-    async function createRemoteToken() {
-      if (!globalScope.afkDesk?.saveSettings) return
-      try {
-        const base = currentSettingsCache || await globalScope.afkDesk.getSettings()
-        const saved = await globalScope.afkDesk.saveSettings({
-          ...base,
-          remoteAccess: {
-            _update: true,
-            action: 'create-token',
-            tokenName: tokenNameInput.value.trim() || 'API token',
-            tokenScope: tokenScopeSelect.value || 'read'
-          }
-        })
-        currentSettingsCache = saved
-        if (saved?.remoteAccess?.createdToken) {
-          createdTokenOutput.textContent = `New token (shown once): ${saved.remoteAccess.createdToken}`
-          createdTokenOutput.hidden = false
-          tokenNameInput.value = ''
-        }
-        if (saved?.remoteAccess) renderRemoteSection(saved.remoteAccess)
-      } catch (err) {
-        if (statusText) statusText.textContent = `Error: ${String(err?.message || err)}`
-      }
-    }
-
-    async function revokeRemoteToken(tokenId) {
-      if (!globalScope.afkDesk?.saveSettings) return
-      try {
-        const base = currentSettingsCache || await globalScope.afkDesk.getSettings()
-        const saved = await globalScope.afkDesk.saveSettings({
-          ...base,
-          remoteAccess: {
-            _update: true,
-            action: 'revoke-token',
-            tokenId
-          }
-        })
-        currentSettingsCache = saved
-        if (saved?.remoteAccess) renderRemoteSection(saved.remoteAccess)
-      } catch (err) {
-        if (statusText) statusText.textContent = `Error: ${String(err?.message || err)}`
-      }
     }
 
     openSettingsBtn.addEventListener('click', async () => {
       try {
         const s = await globalScope.afkDesk?.getSettings?.()
-        currentSettingsCache = s
         if (s?.remoteAccess) renderRemoteSection(s.remoteAccess)
       } catch {}
     })

@@ -34,23 +34,74 @@ const TRACKER_TTL_MS = 2 * MAX_LOCKOUT_MS
 const MAX_SESSIONS = 1000
 const MAX_SESSIONS_PER_USER = 10
 const MAX_TOKENS = 100
+const GLOBAL_USER_LOGIN_LIMIT = 10
+const MAX_UNAUTHENTICATED_BEARER_PER_IP = 10
+
+const MAX_LOGIN_HASHES = 2
+const MAX_BEARER_HASHES = 2
+let activeLoginHashes = 0
+let activeBearerHashes = 0
 let activeHashes = 0
+
 function busyError() {
   return Object.assign(new Error('Authentication capacity exceeded.'), { statusCode: 429, code: 'RATE_LIMITED' })
 }
-async function limitedHash(work) {
-  if (activeHashes >= 4) throw busyError()
+
+async function limitedLoginHash(work) {
+  if (activeLoginHashes >= MAX_LOGIN_HASHES) throw busyError()
+  activeLoginHashes++
   activeHashes++
-  try { return await work() } finally { activeHashes-- }
-}
-function limitedHashSync(work) {
-  if (activeHashes >= 4) throw busyError()
-  activeHashes++
-  try { return work() } finally { activeHashes-- }
+  try { return await work() } finally { activeLoginHashes--; activeHashes-- }
 }
 
-const WS_LIMIT_PER_SESSION = 1
+function limitedLoginHashSync(work) {
+  if (activeLoginHashes >= MAX_LOGIN_HASHES) throw busyError()
+  activeLoginHashes++
+  activeHashes++
+  try { return work() } finally { activeLoginHashes--; activeHashes-- }
+}
+
+async function limitedBearerHash(work) {
+  if (activeBearerHashes >= MAX_BEARER_HASHES) throw busyError()
+  activeBearerHashes++
+  activeHashes++
+  try { return await work() } finally { activeBearerHashes--; activeHashes-- }
+}
+
+function limitedBearerHashSync(work) {
+  if (activeBearerHashes >= MAX_BEARER_HASHES) throw busyError()
+  activeBearerHashes++
+  activeHashes++
+  try { return work() } finally { activeBearerHashes--; activeHashes-- }
+}
+
+async function limitedHash(work) {
+  return limitedLoginHash(work)
+}
+
+function limitedHashSync(work) {
+  return limitedLoginHashSync(work)
+}
+
+const WS_LIMIT_PER_SESSION = 4
 const WS_LIMIT_PER_TOKEN = 5
+
+function normalizeIp(ip) {
+  const raw = String(ip || '').trim().replace(/^\[|\]$/g, '')
+  if (raw.toLowerCase().startsWith('::ffff:')) {
+    const v4 = raw.slice(7)
+    if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(v4)) return v4
+  }
+  return raw.toLowerCase()
+}
+
+function isLoopbackIp(ip) {
+  const clean = normalizeIp(ip)
+  if (clean === 'localhost' || clean === '::1' || clean === '127.0.0.1') return true
+  const m = /^127\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(clean)
+  if (!m) return false
+  return [m[1], m[2], m[3]].every((octet) => Number(octet) >= 0 && Number(octet) <= 255)
+}
 
 const COMMON_PASSWORDS = Object.freeze(new Set([
   'password1234',
@@ -205,6 +256,7 @@ class AuthManager {
   constructor({
     dataDir,
     now = Date.now,
+    sleep = null,
     onSessionRevoked = () => {},
     onTokenRevoked = () => {}
   } = {}) {
@@ -212,14 +264,18 @@ class AuthManager {
     this.dataDir = dataDir
     this.file = path.join(dataDir, 'auth.json')
     this.now = now
+    this.sleep = sleep
     this.onSessionRevoked = onSessionRevoked
     this.onTokenRevoked = onTokenRevoked
 
     this.sessions = new Map()
     this.loginAttemptsByIp = new Map()
     this.loginAttemptsByUser = new Map()
+    this.loginAttemptsByIpUser = new Map()
+    this.recentAuthIps = new Map()
     this.apiCallsByActor = new Map()
     this.bearerAttemptsByIp = new Map()
+    this.unauthenticatedBearerByIp = new Map()
     this.wsConnections = new Map()
     this.pendingTokens = 0
     this.setupToken = null
@@ -227,6 +283,22 @@ class AuthManager {
     this._dummySalt = crypto.randomBytes(SALT_BYTES).toString('hex')
     this._dummyHash = crypto.randomBytes(KEY_BYTES).toString('hex')
     this.state = this._load()
+  }
+
+  delay(ms) {
+    if (!ms || ms <= 0) return Promise.resolve()
+    if (this.sleep) return this.sleep(ms)
+    return new Promise((resolve) => setTimeout(resolve, ms))
+  }
+
+  isRecentlyAuthenticated(ip) {
+    const clean = normalizeIp(ip)
+    const last = this.recentAuthIps.get(clean)
+    if (last && (this.now() - last < 24 * 60 * 60 * 1000)) return true
+    for (const session of this.sessions.values()) {
+      if (session.ip && normalizeIp(session.ip) === clean) return true
+    }
+    return false
   }
 
   _load() {
@@ -274,7 +346,7 @@ class AuthManager {
     const err = validatePassword(password)
     if (err) throw new Error(err)
     const cleanUser = String(username || this.state.admin?.username || 'admin').trim().slice(0, 64) || 'admin'
-    const { salt, hash, params } = limitedHashSync(() => hashSecretSync(password))
+    const { salt, hash, params } = limitedLoginHashSync(() => hashSecretSync(password))
     const timestamp = this.now()
     this.state.admin = {
       username: cleanUser,
@@ -293,7 +365,7 @@ class AuthManager {
     const err = validatePassword(password)
     if (err) throw new Error(err)
     const cleanUser = String(username || this.state.admin?.username || 'admin').trim().slice(0, 64) || 'admin'
-    const { salt, hash, params } = await limitedHash(() => hashSecret(password))
+    const { salt, hash, params } = await limitedLoginHash(() => hashSecret(password))
     if (!authorize()) throw Object.assign(new Error('Session expired or credentials changed.'), { statusCode: 401, code: 'UNAUTHORIZED' })
     const timestamp = this.now()
     this.state.admin = {
@@ -311,7 +383,7 @@ class AuthManager {
 
   async verifyAdminPassword(password, username = 'admin') {
     if (!this.hasAdmin() || typeof password !== 'string') {
-      await limitedHash(() => verifySecret(String(password || '').slice(0, MAX_PASSWORD_LENGTH), this._dummySalt, this._dummyHash))
+      await limitedLoginHash(() => verifySecret(String(password || '').slice(0, MAX_PASSWORD_LENGTH), this._dummySalt, this._dummyHash))
       return false
     }
     const expectedUser = this.state.admin.username || 'admin'
@@ -319,7 +391,7 @@ class AuthManager {
     const userMatches = timingSafeEqualStrings(suppliedUser, expectedUser)
     if (password.length > MAX_PASSWORD_LENGTH) return false
     const admin = this.state.admin
-    const passMatches = await limitedHash(() => verifySecret(password, admin.salt, admin.hash))
+    const passMatches = await limitedLoginHash(() => verifySecret(password, admin.salt, admin.hash))
     if (this.state.admin !== admin) return false
     return userMatches && passMatches
   }
@@ -367,6 +439,8 @@ class AuthManager {
     const id = crypto.randomBytes(32).toString('hex')
     const csrfToken = crypto.randomBytes(32).toString('hex')
     const timestamp = this.now()
+    const cleanIp = normalizeIp(ip)
+    if (cleanIp) this.recentAuthIps.set(cleanIp, timestamp)
     const session = {
       id,
       csrfToken,
@@ -425,7 +499,7 @@ class AuthManager {
 
   createTokenSync({ name = 'API token', scope = 'read', expiresAt = null, ttlMs = null, expiresInDays = null } = {}) {
     const prepared = this._prepareToken({ name, scope, expiresAt, ttlMs, expiresInDays })
-    return this._storeToken(prepared, limitedHashSync(() => hashSecretSync(prepared.secret)))
+    return this._storeToken(prepared, limitedBearerHashSync(() => hashSecretSync(prepared.secret)))
   }
 
   _prepareToken({ name = 'API token', scope = 'read', expiresAt = null, ttlMs = null, expiresInDays = null } = {}) {
@@ -481,7 +555,7 @@ class AuthManager {
   async createToken(options = {}) {
     const prepared = this._prepareToken(options)
     this.pendingTokens++
-    try { return this._storeToken(prepared, await limitedHash(() => hashSecret(prepared.secret))) }
+    try { return this._storeToken(prepared, await limitedBearerHash(() => hashSecret(prepared.secret))) }
     finally { this.pendingTokens-- }
   }
 
@@ -501,22 +575,50 @@ class AuthManager {
     return true
   }
 
+  recordUnauthenticatedBearer(ip) {
+    const cleanIp = normalizeIp(ip)
+    this.pruneTrackers(this.unauthenticatedBearerByIp, API_WINDOW_MS)
+    if (!this.unauthenticatedBearerByIp.has(cleanIp) && this.unauthenticatedBearerByIp.size >= MAX_TRACKERS) {
+      const oldest = this.unauthenticatedBearerByIp.keys().next().value
+      this.unauthenticatedBearerByIp.delete(oldest)
+    }
+    const recent = this.unauthenticatedBearerByIp.get(cleanIp) || []
+    recent.push(this.now())
+    this.unauthenticatedBearerByIp.set(cleanIp, recent)
+  }
+
+  isUnauthenticatedBearerFlooding(ip) {
+    const cleanIp = normalizeIp(ip)
+    this.pruneTrackers(this.unauthenticatedBearerByIp, API_WINDOW_MS)
+    const timestamp = this.now()
+    const recent = (this.unauthenticatedBearerByIp.get(cleanIp) || []).filter(t => timestamp - t < API_WINDOW_MS)
+    return recent.length >= MAX_UNAUTHENTICATED_BEARER_PER_IP
+  }
+
   async verifyBearerToken(authHeader, ip = 'unknown') {
     if (!authHeader || typeof authHeader !== 'string') return null
     const match = /^Bearer\s+afk_([0-9a-fA-F]{8,32})_([A-Za-z0-9_-]{16,128})$/.exec(authHeader.trim())
     if (!match) return null
     const [, id, secret] = match
-    if (!this.checkWindow(this.bearerAttemptsByIp, String(ip), 120).allowed) throw busyError()
+    const cleanIp = normalizeIp(ip)
+    if (!this.checkWindow(this.bearerAttemptsByIp, cleanIp, 120).allowed) throw busyError()
+    if (this.isUnauthenticatedBearerFlooding(cleanIp)) throw busyError()
     const entry = this.state.tokens.find((t) => t.id === id)
     if (!entry) {
-      await limitedHash(() => verifySecret(secret, this._dummySalt, this._dummyHash))
+      this.recordUnauthenticatedBearer(cleanIp)
+      await limitedBearerHash(() => verifySecret(secret, this._dummySalt, this._dummyHash))
       return null
     }
     const timestamp = this.now()
-    if (entry.revokedAt !== null) return null
-    if (entry.expiresAt !== null && timestamp >= entry.expiresAt) return null
-    const valid = await limitedHash(() => verifySecret(secret, entry.salt, entry.hash))
-    if (!valid || !this.isActorValid({ kind: 'token', id })) return null
+    if (entry.revokedAt !== null || (entry.expiresAt !== null && timestamp >= entry.expiresAt)) {
+      this.recordUnauthenticatedBearer(cleanIp)
+      return null
+    }
+    const valid = await limitedBearerHash(() => verifySecret(secret, entry.salt, entry.hash))
+    if (!valid || !this.isActorValid({ kind: 'token', id })) {
+      this.recordUnauthenticatedBearer(cleanIp)
+      return null
+    }
     entry.lastUsedAt = timestamp
     return this._publicToken(entry)
   }
@@ -604,7 +706,10 @@ class AuthManager {
 
   checkWindow(map, key, limit) {
     this.pruneTrackers(map, API_WINDOW_MS)
-    if (!map.has(key) && map.size >= MAX_TRACKERS) return { allowed: false, retryAfterMs: API_WINDOW_MS }
+    if (!map.has(key) && map.size >= MAX_TRACKERS) {
+      const oldest = map.keys().next().value
+      map.delete(oldest)
+    }
     const timestamp = this.now()
     const recent = (map.get(key) || []).filter(t => timestamp - t < API_WINDOW_MS)
     if (recent.length >= limit) return { allowed: false, retryAfterMs: API_WINDOW_MS - (timestamp - recent[0]) }
@@ -623,15 +728,21 @@ class AuthManager {
   reserveLoginAttempt(ip, username) {
     const rate = this.checkLoginRateLimit(ip, username)
     if (!rate.allowed) return rate
-    for (const [map, key] of [[this.loginAttemptsByIp, String(ip || 'unknown')], [this.loginAttemptsByUser, String(username || 'admin').trim().toLowerCase()]]) {
-      this._getLoginTracker(map, key).attempts.push(this.now())
-    }
+    const cleanIp = normalizeIp(ip)
+    const cleanUser = String(username || 'admin').trim().toLowerCase()
+    const timestamp = this.now()
+    this._getLoginTracker(this.loginAttemptsByIpUser, cleanIp + ':' + cleanUser).attempts.push(timestamp)
+    this._getLoginTracker(this.loginAttemptsByIp, cleanIp).attempts.push(timestamp)
+    this._getLoginTracker(this.loginAttemptsByUser, cleanUser).attempts.push(timestamp)
     return rate
   }
 
   _getLoginTracker(map, key) {
     this.pruneTrackers(map)
-    if (!map.has(key) && map.size >= MAX_TRACKERS) return { attempts: [], failures: 0, lockedUntil: this.now() + LOGIN_WINDOW_MS }
+    if (!map.has(key) && map.size >= MAX_TRACKERS) {
+      const oldest = map.keys().next().value
+      map.delete(oldest)
+    }
 
     let state = map.get(key)
     if (!state) {
@@ -646,40 +757,68 @@ class AuthManager {
 
   checkLoginRateLimit(ip, username = 'admin') {
     const timestamp = this.now()
-    const ipState = this._getLoginTracker(this.loginAttemptsByIp, String(ip || 'unknown'))
-    if (ipState.lockedUntil > timestamp || ipState.attempts.length >= LOGIN_RATE_LIMIT) return { allowed: false, retryAfterMs: Math.max(LOGIN_WINDOW_MS, ipState.lockedUntil - timestamp) }
-    const userState = this._getLoginTracker(this.loginAttemptsByUser, String(username || 'admin').trim().toLowerCase())
+    const cleanIp = normalizeIp(ip)
+    const cleanUser = String(username || 'admin').trim().toLowerCase()
+    const ipUserKey = cleanIp + ':' + cleanUser
 
-    for (const state of [ipState, userState]) {
+    const isExempt = isLoopbackIp(cleanIp) || this.isRecentlyAuthenticated(cleanIp)
+
+    const ipUserState = this._getLoginTracker(this.loginAttemptsByIpUser, ipUserKey)
+    const ipState = this._getLoginTracker(this.loginAttemptsByIp, cleanIp)
+
+    // Primary failed-attempt lockout is per (IP, username). Also check per-IP.
+    for (const state of [ipUserState, ipState]) {
       if (state.lockedUntil > timestamp) {
-        return { allowed: false, retryAfterMs: state.lockedUntil - timestamp }
+        return { allowed: false, retryAfterMs: state.lockedUntil - timestamp, delayMs: 0 }
       }
       if (state.attempts.length >= LOGIN_RATE_LIMIT) {
         const exponent = Math.max(0, Math.max(state.failures, state.attempts.length) - LOGIN_RATE_LIMIT)
         const lockoutMs = Math.min(MAX_LOCKOUT_MS, BASE_LOCKOUT_MS * (2 ** exponent))
         state.lockedUntil = Math.max(state.lockedUntil, timestamp + lockoutMs)
-        return { allowed: false, retryAfterMs: state.lockedUntil - timestamp }
+        return { allowed: false, retryAfterMs: state.lockedUntil - timestamp, delayMs: 0 }
       }
     }
-    return { allowed: true, retryAfterMs: 0 }
+
+    // Separate, higher global per-username threshold that only adds delay (max 30 s), never a full lockout
+    const userState = this._getLoginTracker(this.loginAttemptsByUser, cleanUser)
+    let delayMs = 0
+    if (!isExempt && userState.attempts.length >= GLOBAL_USER_LOGIN_LIMIT) {
+      const exponent = Math.max(0, Math.max(userState.failures, userState.attempts.length) - GLOBAL_USER_LOGIN_LIMIT)
+      delayMs = Math.min(30_000, 1000 * (2 ** exponent))
+    }
+
+    return { allowed: true, retryAfterMs: 0, delayMs }
   }
 
   recordLoginAttempt(ip, username = 'admin', success = false, reserved = false) {
     const timestamp = this.now()
-    const ipKey = String(ip || 'unknown')
-    const userKey = String(username || 'admin').trim().toLowerCase()
-    const ipState = this._getLoginTracker(this.loginAttemptsByIp, ipKey)
-    const userState = this._getLoginTracker(this.loginAttemptsByUser, userKey)
+    const cleanIp = normalizeIp(ip)
+    const cleanUser = String(username || 'admin').trim().toLowerCase()
+    const ipUserKey = cleanIp + ':' + cleanUser
 
-    if (!reserved) { ipState.attempts.push(timestamp); userState.attempts.push(timestamp) }
+    const ipUserState = this._getLoginTracker(this.loginAttemptsByIpUser, ipUserKey)
+    const ipState = this._getLoginTracker(this.loginAttemptsByIp, cleanIp)
+    const userState = this._getLoginTracker(this.loginAttemptsByUser, cleanUser)
+
+    if (!reserved) {
+      ipUserState.attempts.push(timestamp)
+      ipState.attempts.push(timestamp)
+      userState.attempts.push(timestamp)
+    }
 
     if (success) {
+      ipUserState.failures = 0
+      ipUserState.lockedUntil = 0
+      ipState.failures = 0
+      ipState.lockedUntil = 0
       userState.failures = 0
       userState.lockedUntil = 0
+      this.recentAuthIps.set(cleanIp, timestamp)
       return
     }
 
-    for (const state of [ipState, userState]) {
+    // Primary lockout is per (IP, username)
+    for (const state of [ipUserState, ipState]) {
       state.failures += 1
       if (state.attempts.length >= LOGIN_RATE_LIMIT || state.failures >= LOGIN_RATE_LIMIT) {
         const exponent = Math.max(0, Math.max(state.failures, state.attempts.length) - LOGIN_RATE_LIMIT)
@@ -687,6 +826,10 @@ class AuthManager {
         state.lockedUntil = Math.max(state.lockedUntil, timestamp + lockoutMs)
       }
     }
+
+    // Global per-username tracker: only adds delay, NEVER a full lockout
+    userState.failures += 1
+    userState.lockedUntil = 0
   }
 
   checkApiRateLimit(actorKey) {
@@ -697,27 +840,39 @@ class AuthManager {
 
   canAttachWebSocket(actor) {
     if (!actor || !actor.kind || !actor.id) return false
-    // Lazy TTL cleanup bounds sockets retained for credentials that expired
-    // while the server was otherwise quiet (no event deliveries).
     for (const [key, sockets] of this.wsConnections) {
       const [kind, id] = key.split(':')
       if (this.isActorValid({ kind, id })) continue
       this.wsConnections.delete(key)
       for (const ws of sockets) { try { ws.close(4401, 'Credential expired or revoked.') } catch {} }
     }
-    const key = `${actor.kind}:${actor.id}`
-    if (!this.wsConnections.has(key) && this.wsConnections.size >= MAX_TRACKERS) return false
-    const limit = actor.kind === 'session' ? WS_LIMIT_PER_SESSION : WS_LIMIT_PER_TOKEN
+    const key = actor.kind + ':' + actor.id
+    if (!this.wsConnections.has(key) && this.wsConnections.size >= MAX_TRACKERS) {
+      const oldestKey = this.wsConnections.keys().next().value
+      const sockets = this.wsConnections.get(oldestKey)
+      this.wsConnections.delete(oldestKey)
+      if (sockets) {
+        for (const ws of sockets) { try { ws.close(1008, 'Tracker capacity exceeded.') } catch {} }
+      }
+    }
+    if (actor.kind === 'session') return true
     const active = this.wsConnections.get(key)
-    return !active || active.size < limit
+    return !active || active.size < WS_LIMIT_PER_TOKEN
   }
 
   attachWebSocket(actor, ws) {
-    const key = `${actor.kind}:${actor.id}`
+    const key = actor.kind + ':' + actor.id
     let set = this.wsConnections.get(key)
     if (!set) {
       set = new Set()
       this.wsConnections.set(key, set)
+    }
+    if (actor.kind === 'session') {
+      while (set.size >= WS_LIMIT_PER_SESSION) {
+        const oldest = set.values().next().value
+        set.delete(oldest)
+        try { oldest.close(4000, 'Session connection limit exceeded; closed oldest connection.') } catch {}
+      }
     }
     set.add(ws)
     return () => {
@@ -744,6 +899,11 @@ module.exports = {
   API_RATE_LIMIT,
   WS_LIMIT_PER_SESSION,
   WS_LIMIT_PER_TOKEN,
+  MAX_LOGIN_HASHES,
+  MAX_BEARER_HASHES,
+  GLOBAL_USER_LOGIN_LIMIT,
+  normalizeIp,
+  isLoopbackIp,
   COMMON_PASSWORDS,
   validatePassword,
   hashSecret,

@@ -505,11 +505,27 @@ test('WebSocket /ws enforces auth, Origin, Host, concurrency caps, scope-filtere
 
   const sessionWs1 = await connectWs({ port, headers: { Cookie: cookie, 'Sec-WebSocket-Protocol': `afk-csrf.${csrf}` } })
   assert.equal(sessionWs1.ok, true)
-  t.after(() => sessionWs1.ws.close())
+  t.after(() => { try { sessionWs1.ws.close() } catch {} })
 
+  // Session limit is 4 concurrent sockets; up to 4 succeed
   const sessionWs2 = await connectWs({ port, headers: { Cookie: cookie, 'Sec-WebSocket-Protocol': `afk-csrf.${csrf}` } })
-  assert.equal(sessionWs2.ok, false)
-  assert.equal(sessionWs2.statusCode, 429)
+  const sessionWs3 = await connectWs({ port, headers: { Cookie: cookie, 'Sec-WebSocket-Protocol': `afk-csrf.${csrf}` } })
+  const sessionWs4 = await connectWs({ port, headers: { Cookie: cookie, 'Sec-WebSocket-Protocol': `afk-csrf.${csrf}` } })
+  assert.equal(sessionWs2.ok, true)
+  assert.equal(sessionWs3.ok, true)
+  assert.equal(sessionWs4.ok, true)
+  t.after(() => {
+    try { sessionWs2.ws.close() } catch {}
+    try { sessionWs3.ws.close() } catch {}
+    try { sessionWs4.ws.close() } catch {}
+  })
+
+  // 5th connection closes the oldest socket (sessionWs1) instead of rejecting
+  const s1Closed = new Promise((resolve) => sessionWs1.ws.once('close', resolve))
+  const sessionWs5 = await connectWs({ port, headers: { Cookie: cookie, 'Sec-WebSocket-Protocol': `afk-csrf.${csrf}` } })
+  assert.equal(sessionWs5.ok, true)
+  t.after(() => { try { sessionWs5.ws.close() } catch {} })
+  await s1Closed
 
   // 5. WS scope filtering: read token gets status/telemetry/logs, but NOT login-code; admin session gets login-code
   const readWs = await connectWs({ port, headers: { Authorization: `Bearer ${readTok}` } })
@@ -522,15 +538,15 @@ test('WebSocket /ws enforces auth, Origin, Host, concurrency caps, scope-filtere
   await new Promise((r) => setTimeout(r, 60))
 
   // Admin session received both status and login-code (headless device-code sign-in)
-  assert.ok(sessionWs1.messages.some((m) => m.channel === 'bot:event' && m.payload.type === 'status'))
-  assert.ok(sessionWs1.messages.some((m) => m.channel === 'bot:event' && m.payload.type === 'login-code' && m.payload.payload.userCode === 'ABCD-1234'))
+  assert.ok(sessionWs5.messages.some((m) => m.channel === 'bot:event' && m.payload.type === 'status'))
+  assert.ok(sessionWs5.messages.some((m) => m.channel === 'bot:event' && m.payload.type === 'login-code' && m.payload.payload.userCode === 'ABCD-1234'))
 
   // Read token received status, but NOT login-code
   assert.ok(readWs.messages.some((m) => m.channel === 'bot:event' && m.payload.type === 'status'))
   assert.equal(readWs.messages.some((m) => m.channel === 'bot:event' && m.payload.type === 'login-code'), false)
 
-  // 6. Logging out session immediately closes sessionWs1
-  const closedPromise = new Promise((resolve) => sessionWs1.ws.once('close', (code) => resolve(code)))
+  // 6. Logging out session immediately closes active sessionWs5
+  const closedPromise = new Promise((resolve) => sessionWs5.ws.once('close', (code) => resolve(code)))
   await httpJson({
     port,
     path: '/api/logout',
