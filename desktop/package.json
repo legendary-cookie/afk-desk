@@ -17,6 +17,7 @@
   "dependencies": {
     "adm-zip": "^0.6.1",
     "bedrock-protocol": "^3.58.3",
+    "discord.js": "14.27.0",
     "minecraft-protocol-forge": "github:PrismarineJS/node-minecraft-protocol-forge#54fc6a2f",
     "mineflayer": "4.37.1",
     "mineflayer-pathfinder": "^2.4.5",
