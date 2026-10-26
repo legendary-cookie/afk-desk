@@ -17,6 +17,13 @@ class MultiEditionBotManager {
     return result
   }
 
+  // Routes a saved profile to the manager that owns its live session/retry state (else by edition).
+  updateAccountConfig(account) {
+    const edition = this.editions.get(account?.id) || (account?.edition === 'bedrock' ? 'bedrock' : 'java')
+    const manager = this[edition]
+    if (typeof manager?.updateAccountConfig === 'function') return manager.updateAccountConfig(account)
+  }
+
   disconnect(id) { return this.manager(id).disconnect(id) }
   manager(id) { return this[this.editions.get(id) || 'java'] }
 }

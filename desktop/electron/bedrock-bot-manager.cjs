@@ -50,7 +50,17 @@ class BedrockBotManager {
       this.emit('identity', account.id, { username: client.profile?.name || client.username || account.label, uuid: client.profile?.id || '', edition: 'bedrock', at: Date.now() })
       this.emit('version', account.id, { version: client.version || account.version || 'auto', stable: true, edition: 'bedrock', at: Date.now() })
       this.emitTelemetry(account.id)
-      if (account.joinMessage) this.timers.setTimeout(() => { try { this.sendChat(account.id, account.joinMessage) } catch {} }, Math.max(0, Number(account.messageDelay) || 0) * 1000)
+      const joinMessage = session.account.joinMessage
+      if (joinMessage) {
+        if (session.joinTimer) this.timers.clearTimeout(session.joinTimer)
+        const joinTimer = this.timers.setTimeout(() => {
+          // A stale timer must never chat on behalf of a replacement session.
+          if (session.joinTimer !== joinTimer || this.sessions.get(account.id) !== session || session.closing) return
+          session.joinTimer = null
+          try { this.sendChat(account.id, joinMessage) } catch {}
+        }, Math.max(0, Number(session.account.messageDelay) || 0) * 1000)
+        session.joinTimer = joinTimer
+      }
     })
     client.on('start_game', (packet) => {
       session.runtimeEntityId = packet.runtime_entity_id
@@ -83,12 +93,36 @@ class BedrockBotManager {
     client.on('error', (error) => { session.disconnectReason = String(error?.message || error); this.emit('log', account.id, { kind: 'error', message: `Bedrock network error: ${session.disconnectReason.slice(0, 240)}`, at: Date.now() }) })
     client.on('close', () => {
       if (this.sessions.get(account.id) !== session) return
-      if (session.connectTimer) this.timers.clearTimeout(session.connectTimer)
-      if (session.resetTimer) this.timers.clearTimeout(session.resetTimer)
+      this.clearSessionTimers(session)
       this.sessions.delete(account.id)
       this.status(account.id, 'offline', 'Bedrock connection closed.')
-      if (!session.closing && account.autoReconnect !== false) this.scheduleReconnect(account, session.disconnectReason)
+      const latest = session.account
+      if (!session.closing && latest.autoReconnect !== false) this.scheduleReconnect(latest, session.disconnectReason)
     })
+  }
+
+  clearSessionTimers(session) {
+    for (const name of ['connectTimer', 'resetTimer', 'joinTimer']) {
+      if (session[name]) this.timers.clearTimeout(session[name])
+      session[name] = null
+    }
+  }
+
+  // Replaces the config used by retry/reconnect for this profile after a settings save.
+  updateAccountConfig(account) {
+    validateProfileId(account.id)
+    const state = this.reconnects.get(account.id)
+    const session = this.sessions.get(account.id)
+    if (!state && !session) return
+    if (session) session.account = { ...account }
+    if (state) {
+      state.account = account
+      if (account.autoReconnect === false && state.timer) {
+        this.timers.clearTimeout(state.timer)
+        state.timer = null
+        if (!session) this.status(account.id, 'offline', 'Auto-reconnect disabled')
+      }
+    }
   }
 
   disconnect(id) {
@@ -97,8 +131,7 @@ class BedrockBotManager {
     const session = this.sessions.get(id)
     if (!session) { this.status(id, 'offline', 'Disconnected'); return }
     session.closing = true
-    if (session.connectTimer) this.timers.clearTimeout(session.connectTimer)
-    if (session.resetTimer) this.timers.clearTimeout(session.resetTimer)
+    this.clearSessionTimers(session)
     this.sessions.delete(id)
     try { session.client.close() } catch {}
     this.status(id, 'offline', 'Disconnected')
@@ -111,7 +144,7 @@ class BedrockBotManager {
     if (account.autoReconnectMaxAttempts > 0 && state.attempts > account.autoReconnectMaxAttempts) return
     const seconds = reconnectDelaySeconds(account, reason || 'bedrock disconnect', state.attempts)
     this.status(account.id, 'reconnecting', `Bedrock disconnected. Retrying in ${seconds}s…`)
-    state.timer = this.timers.setTimeout(() => { state.timer = null; if (!state.manual) this.connect(account, { reconnecting: true }) }, seconds * 1000)
+    state.timer = this.timers.setTimeout(() => { state.timer = null; if (!state.manual) this.connect(state.account || account, { reconnecting: true }) }, seconds * 1000)
     this.reconnects.set(account.id, state)
   }
 
