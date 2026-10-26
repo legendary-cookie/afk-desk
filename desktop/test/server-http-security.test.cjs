@@ -220,7 +220,15 @@ test('bind policy: refuses public/wildcard bind without trustProxy unless iUnder
       clearInterval: () => {}
     }
   })
+  // Exercise the production bind policy without exposing a wildcard listener.
+  let listenOptions
+  warnRemote.httpServer.listen = (port, host) => {
+    listenOptions = { port, host }
+    queueMicrotask(() => warnRemote.httpServer.emit('listening'))
+    return warnRemote.httpServer
+  }
   await warnRemote.start()
+  assert.equal(listenOptions.host, '0.0.0.0')
   await warnRemote.stop()
   assert.ok(warnings.length >= 2)
   assert.match(warnings[0], /SECURITY WARNING/)

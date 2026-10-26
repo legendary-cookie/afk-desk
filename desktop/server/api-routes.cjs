@@ -1,4 +1,6 @@
 'use strict'
+const { auditActor, redactAuditText } = require('../core/audit-identity.cjs')
+const { validateInvoke, commandInvocation, remoteResult, remoteEvent } = require('./remote-policy.cjs')
 const { SCOPES, COMMANDS, scopeAllows } = require('../core/command-contract.cjs')
 const {
   SESSION_COOKIE_NAME,
@@ -36,6 +38,17 @@ function extractArray(arg) {
   if (arg && typeof arg === 'object' && Array.isArray(arg.orderedIds)) return arg.orderedIds
   if (arg && typeof arg === 'object' && Array.isArray(arg.ids)) return arg.ids
   return []
+}
+
+function containsRemoteAccess(value) {
+  const pending = [value]
+  while (pending.length) {
+    const item = pending.pop()
+    if (!item || typeof item !== 'object') continue
+    if (Object.hasOwn(item, 'remoteAccess')) return true
+    pending.push(...Object.values(item))
+  }
+  return false
 }
 
 function extractTargetAccountId(channel, args) {
@@ -314,29 +327,32 @@ const CHANNEL_SPECS = Object.freeze({
     invoke: (core, args, ctx) => {
       const payload = Array.isArray(args) ? args[0] : args
       const saved = core.settings.save(payload)
-      if (ctx.saveRemoteAccessSettings && payload?.remoteAccess) {
-        return { ...sanitizeOutput(saved), remoteAccess: ctx.saveRemoteAccessSettings(payload.remoteAccess) }
-      }
       return sanitizeOutput(saved)
     }
   }
 })
 
-const SECRET_KEY_PATTERN = /^(?:password|passwordEncrypted|secret|secretEncrypted|webhookUrl|botToken|accessToken|refreshToken|clientSecret|privateKey|secretKey)$/i
+const SECRET_KEY_PATTERN = /^(?:username|email|sessionId|csrfToken|token|createdToken|adminPassword|password|passwordEncrypted|secret|secretEncrypted|webhookUrl|botToken|accessToken|refreshToken|clientSecret|privateKey|secretKey)$/i
 const DISCORD_WEBHOOK_VALUE_PATTERN = /https?:\/\/(?:ptb\.|canary\.)?discord(?:app)?\.com\/api\/webhooks\/[^\s"']+/gi
 const TELEGRAM_TOKEN_VALUE_PATTERN = /\b\d{5,15}:[A-Za-z0-9_-]{10,}\b/g
 
 function sanitizeStringValue(str) {
   return str
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[redacted-email]')
+    .replace(/afk_[A-Za-z0-9_-]+|[0-9a-f]{64}|[0-9a-f]{48}/gi, '[redacted-credential]')
     .replace(DISCORD_WEBHOOK_VALUE_PATTERN, '[redacted-webhook]')
     .replace(TELEGRAM_TOKEN_VALUE_PATTERN, '[redacted-token]')
 }
 
-function sanitizeOutput(value, depth = 0) {
-  if (depth > 16 || value === null || value === undefined) return value
-  if (typeof value === 'string') return sanitizeStringValue(value)
+function sanitizeOutput(value, depth = 0, secrets = []) {
+  if (depth > 16) return null
+  if (value === null || value === undefined) return value
+  if (typeof value === 'string') {
+    for (const secret of secrets) if (secret) value = value.split(secret).join('[redacted-secret]')
+    return sanitizeStringValue(value)
+  }
   if (typeof value !== 'object') return value
-  if (Array.isArray(value)) return value.map((item) => sanitizeOutput(item, depth + 1))
+  if (Array.isArray(value)) return value.map((item) => sanitizeOutput(item, depth + 1, secrets))
 
   const out = {}
   let hadPassword = false
@@ -344,7 +360,7 @@ function sanitizeOutput(value, depth = 0) {
   let secretHint = typeof value.secretHint === 'string' ? value.secretHint : ''
 
   for (const [k, v] of Object.entries(value)) {
-    if (k === 'notifyChannels') continue
+    if (['notifyChannels', '__proto__', 'constructor', 'prototype'].includes(k)) continue
     if (SECRET_KEY_PATTERN.test(k)) {
       const nonEmpty = typeof v === 'string' ? v.length > 0 : Boolean(v)
       if (/password/i.test(k)) {
@@ -357,7 +373,7 @@ function sanitizeOutput(value, depth = 0) {
       }
       continue
     }
-    out[k] = sanitizeOutput(v, depth + 1)
+    out[k] = sanitizeOutput(v, depth + 1, secrets)
   }
 
   if (hadPassword && out.hasPassword === undefined) {
@@ -368,6 +384,22 @@ function sanitizeOutput(value, depth = 0) {
     if (secretHint && out.secretHint === undefined) out.secretHint = secretHint
   }
   return out
+}
+
+function sanitizeRemoteOutput(core, value) {
+  // Redact configured secrets even when upstream errors/chat echo them under a
+  // public text field. Never cache plaintext beyond this serialization.
+  const secrets = []
+  for (const account of core.store?.list?.() || []) {
+    const proxy = account.proxy || {}
+    if (proxy.password) secrets.push(proxy.password)
+    if (proxy.passwordEncrypted) secrets.push(core.secretBox.decrypt(proxy.passwordEncrypted))
+  }
+  for (const channel of core.notifySettings?.getDecrypted?.() || []) {
+    if (channel.webhookUrl) secrets.push(channel.webhookUrl)
+    if (channel.botToken) secrets.push(channel.botToken)
+  }
+  return sanitizeOutput(value, 0, secrets)
 }
 
 function recordAudit(core, now, entry) {
@@ -383,18 +415,19 @@ function recordAudit(core, now, entry) {
       ip: entry.ip || entry.actor?.ip || ''
     },
     scope: entry.actor?.scope || 'none',
-    command: String(entry.command || ''),
-    ...(entry.accountId ? { accountId: String(entry.accountId), targetAccount: String(entry.accountId) } : {}),
+    command: redactAuditText(String(entry.command || '').slice(0, 300)),
+    ...(entry.accountId ? { accountId: redactAuditText(String(entry.accountId)), targetAccount: redactAuditText(String(entry.accountId)) } : {}),
     result: String(entry.result || 'unknown'),
     ip: String(entry.ip || entry.actor?.ip || ''),
     ...(entry.code ? { code: String(entry.code) } : {}),
-    ...(entry.detail ? { detail: String(entry.detail).slice(0, 200) } : {})
+    ...(entry.detail ? { detail: redactAuditText(String(entry.detail).slice(0, 200)) } : {})
   }
   try {
     if (typeof core?._appendAudit === 'function') {
       core._appendAudit(record)
       return
     }
+    record.actor = auditActor(record.actor)
     if (typeof core?.eventStore?.append === 'function') {
       core.eventStore.append('audit', record)
       if (record.accountId && record.accountId !== 'audit') {
@@ -432,7 +465,7 @@ function createApiRouter({
   async function authenticateRequest(req, clientIp) {
     const authHeader = req.headers.authorization
     if (authHeader) {
-      const tokenRecord = await auth.verifyBearerToken(authHeader)
+      const tokenRecord = await auth.verifyBearerToken(authHeader, clientIp)
       if (!tokenRecord) return { actor: null, session: null, error: 'Invalid or expired API token.' }
       return {
         actor: {
@@ -454,7 +487,7 @@ function createApiRouter({
         actor: {
           kind: 'session',
           id: session.id,
-          username: session.username,
+          username: sanitizeStringValue(session.username),
           scope: session.scope,
           ip: clientIp
         },
@@ -506,7 +539,7 @@ function createApiRouter({
         })
         return sendJson(res, 200, {
           ok: true,
-          username: session.username,
+          username: sanitizeStringValue(session.username),
           scope: session.scope,
           csrfToken: session.csrfToken,
           capabilities: getCapabilities()
@@ -519,7 +552,7 @@ function createApiRouter({
           detail: error.message,
           ip: clientIp
         })
-        return sendJson(res, 400, { ok: false, error: { code: 'SETUP_FAILED', message: error.message } })
+        return sendJson(res, error.statusCode || 400, { ok: false, error: { code: error.code || 'SETUP_FAILED', message: sanitizeStringValue(error.message) } })
       }
     }
 
@@ -530,8 +563,9 @@ function createApiRouter({
       }
       const username = typeof body?.username === 'string' && body.username.trim() ? body.username.trim() : 'admin'
       const password = typeof body?.password === 'string' ? body.password : ''
+      if (username.length > 64) return sendJson(res, 400, { ok: false, error: { code: 'INVALID', message: 'Username is too long.' } })
 
-      const rateCheck = auth.checkLoginRateLimit(clientIp, username)
+      const rateCheck = auth.reserveLoginAttempt(clientIp, username)
       if (!rateCheck.allowed) {
         recordAudit(core, now, {
           actor: { kind: 'anonymous', id: username, scope: 'none', ip: clientIp },
@@ -551,8 +585,12 @@ function createApiRouter({
         })
       }
 
-      const valid = await auth.verifyAdminPassword(password, username)
-      auth.recordLoginAttempt(clientIp, username, valid)
+      let valid
+      try { valid = await auth.verifyAdminPassword(password, username) } catch (error) {
+        recordAudit(core, now, { command: 'auth.login', result: 'rate_limited', ip: clientIp })
+        return sendJson(res, error.statusCode || 429, { ok: false, error: { code: 'RATE_LIMITED', message: 'Authentication capacity exceeded.' } })
+      }
+      auth.recordLoginAttempt(clientIp, username, valid, true)
       if (!valid) {
         recordAudit(core, now, {
           actor: { kind: 'anonymous', id: username, scope: 'none', ip: clientIp },
@@ -578,7 +616,7 @@ function createApiRouter({
       })
       return sendJson(res, 200, {
         ok: true,
-        username: session.username,
+        username: sanitizeStringValue(session.username),
         scope: session.scope,
         csrfToken: session.csrfToken,
         capabilities: getCapabilities()
@@ -586,7 +624,12 @@ function createApiRouter({
     }
 
     // 4. All other /api/* endpoints require authentication
-    const { actor, session, error: authError } = await authenticateRequest(req, clientIp)
+    let authentication
+    try { authentication = await authenticateRequest(req, clientIp) } catch (error) {
+      return sendJson(res, error.statusCode || 429, { ok: false, error: { code: 'RATE_LIMITED', message: 'Authentication capacity exceeded.' } })
+    }
+    const { actor, session, error: authError } = authentication
+    const adminSession = actor?.kind === 'session' && actor.scope === 'admin'
     if (!actor) {
       recordAudit(core, now, {
         actor: { kind: 'anonymous', id: 'anonymous', scope: 'none', ip: clientIp },
@@ -642,7 +685,7 @@ function createApiRouter({
         ok: true,
         authenticated: true,
         kind: actor.kind,
-        username: actor.username || actor.name || 'admin',
+        username: sanitizeStringValue(actor.username || actor.name || 'admin'),
         scope: actor.scope,
         csrfToken: session ? session.csrfToken : null,
         capabilities: getCapabilities()
@@ -657,6 +700,10 @@ function createApiRouter({
     // 9. POST /api/logout & POST /api/logout-all
     if ((pathname === '/api/logout' || pathname === '/api/logout-all') && method === 'POST') {
       const everywhere = pathname === '/api/logout-all' || body?.everywhere === true || body?.all === true
+      if (everywhere && !adminSession) {
+        recordAudit(core, now, { actor, command: 'auth.logoutAll', result: 'forbidden', ip: clientIp })
+        return sendJson(res, 403, { ok: false, error: { code: 'FORBIDDEN', message: 'An admin session is required.' } })
+      }
       if (everywhere) {
         auth.revokeAllSessions()
         recordAudit(core, now, { actor, command: 'auth.logoutAll', result: 'allowed', ip: clientIp })
@@ -678,7 +725,7 @@ function createApiRouter({
       if (pathname === '/api/tokens' && method === 'GET') {
         const tokens = auth.listTokens()
         recordAudit(core, now, { actor, command: 'tokens.list', result: 'allowed', ip: clientIp })
-        return sendJson(res, 200, { ok: true, tokens })
+        return sendJson(res, 200, { ok: true, tokens: sanitizeRemoteOutput(core, tokens) })
       }
       if (pathname === '/api/tokens' && method === 'POST') {
         try {
@@ -697,11 +744,11 @@ function createApiRouter({
             expiresAt: body?.expiresAt ?? null,
             ttlMs
           })
-          recordAudit(core, now, { actor, command: 'tokens.create', result: 'allowed', detail: `${created.record.id}:${scope}`, ip: clientIp })
-          return sendJson(res, 201, { ok: true, token: created.token, record: created.record })
+          recordAudit(core, now, { actor, command: 'tokens.create', result: 'allowed', detail: scope, ip: clientIp })
+          return sendJson(res, 201, { ok: true, token: created.token, record: sanitizeRemoteOutput(core, created.record) })
         } catch (error) {
           recordAudit(core, now, { actor, command: 'tokens.create', result: 'invalid', detail: error.message, ip: clientIp })
-          return sendJson(res, 400, { ok: false, error: { code: 'INVALID', message: error.message } })
+          return sendJson(res, error.statusCode || 400, { ok: false, error: { code: error.code || 'INVALID', message: sanitizeStringValue(error.message) } })
         }
       }
       const tokenMatch = /^\/api\/tokens\/([a-zA-Z0-9_-]+)(?:\/revoke)?$/.exec(pathname)
@@ -709,10 +756,10 @@ function createApiRouter({
         const tokenId = tokenMatch[1]
         const revoked = auth.revokeToken(tokenId)
         if (!revoked) {
-          recordAudit(core, now, { actor, command: 'tokens.revoke', result: 'not_found', detail: tokenId, ip: clientIp })
+          recordAudit(core, now, { actor, command: 'tokens.revoke', result: 'not_found', detail: 'token', ip: clientIp })
           return sendJson(res, 404, { ok: false, error: { code: 'NOT_FOUND', message: 'Token not found.' } })
         }
-        recordAudit(core, now, { actor, command: 'tokens.revoke', result: 'allowed', detail: tokenId, ip: clientIp })
+        recordAudit(core, now, { actor, command: 'tokens.revoke', result: 'allowed', detail: 'token', ip: clientIp })
         return sendJson(res, 200, { ok: true, id: tokenId })
       }
       return sendJson(res, 405, { ok: false, error: { code: 'METHOD_NOT_ALLOWED', message: 'Method not allowed.' } })
@@ -720,26 +767,31 @@ function createApiRouter({
 
     // 11. Admin password change endpoint (admin only)
     if (pathname === '/api/password' && method === 'POST') {
-      if (!scopeAllows(actor.scope, 'admin')) {
+      if (!adminSession) {
         recordAudit(core, now, { actor, command: 'auth.password', result: 'forbidden', code: 'FORBIDDEN', ip: clientIp })
         return sendJson(res, 403, { ok: false, error: { code: 'FORBIDDEN', message: 'Admin scope is required.' } })
       }
       const currentPassword = typeof body?.currentPassword === 'string' ? body.currentPassword : ''
       const newPassword = typeof body?.newPassword === 'string' ? body.newPassword : ''
-      if (auth.hasAdmin()) {
+      try {
         const valid = await auth.verifyAdminPassword(currentPassword, auth.getAdminUsername())
         if (!valid) {
           recordAudit(core, now, { actor, command: 'auth.password', result: 'denied', code: 'INVALID_CREDENTIALS', ip: clientIp })
           return sendJson(res, 401, { ok: false, error: { code: 'INVALID_CREDENTIALS', message: 'Current password is incorrect.' } })
         }
-      }
-      try {
-        await auth.setAdminPassword(newPassword, auth.getAdminUsername())
+        if (!auth.isActorValid(actor)) return sendJson(res, 401, { ok: false, error: { code: 'UNAUTHORIZED', message: 'Session expired.' } })
+        const admin = auth.state.admin
+        await auth.setAdminPassword(newPassword, auth.getAdminUsername(), {
+          authorize: () => auth.isActorValid(actor) && auth.state.admin === admin
+        })
+        auth.revokeAllSessions()
+        const rotated = auth.createSession({ username: auth.getAdminUsername(), scope: 'admin', ip: clientIp })
+        res.setHeader('Set-Cookie', formatSessionCookie(rotated.id, { secure: isSecureRequest(req) }))
         recordAudit(core, now, { actor, command: 'auth.password', result: 'allowed', ip: clientIp })
-        return sendJson(res, 200, { ok: true })
+        return sendJson(res, 200, { ok: true, csrfToken: rotated.csrfToken })
       } catch (error) {
         recordAudit(core, now, { actor, command: 'auth.password', result: 'invalid', detail: error.message, ip: clientIp })
-        return sendJson(res, 400, { ok: false, error: { code: 'INVALID_PASSWORD', message: error.message } })
+        return sendJson(res, error.statusCode || 400, { ok: false, error: { code: error.code || 'INVALID_PASSWORD', message: sanitizeStringValue(error.message) } })
       }
     }
 
@@ -765,9 +817,10 @@ function createApiRouter({
           cmdArgs = rest
         }
       }
+      if (commandName === 'audit.recent' && !adminSession) return sendJson(res, 403, { ok: false, error: { code: 'FORBIDDEN', message: 'An admin session is required.' } })
       const outcome = await core.commands.execute(actor, commandName, cmdArgs, { confirmed })
       if (outcome.ok) {
-        return sendJson(res, 200, { ok: true, result: sanitizeOutput(outcome.result) })
+        return sendJson(res, 200, { ok: true, result: sanitizeRemoteOutput(core, remoteResult(commandName, outcome.result, core, adminSession)) })
       }
       const errCode = outcome.error?.code
       const status =
@@ -776,7 +829,7 @@ function createApiRouter({
             : errCode === 'NOT_FOUND' ? 404
               : errCode === 'CONFIRM_REQUIRED' ? 409
                 : 400
-      return sendJson(res, status, outcome)
+      return sendJson(res, status, sanitizeRemoteOutput(core, outcome))
     }
 
     // 13. POST /api/invoke { channel, args }
@@ -797,12 +850,12 @@ function createApiRouter({
         })
       }
 
-      const spec = CHANNEL_SPECS[channel]
+      const spec = Object.hasOwn(CHANNEL_SPECS, channel) ? CHANNEL_SPECS[channel] : null
       if (!spec) {
         recordAudit(core, now, { actor, command: `invoke:${channel}`, result: 'denied', code: 'UNKNOWN_CHANNEL', ip: clientIp })
         return sendJson(res, 400, {
           ok: false,
-          error: { code: 'UNKNOWN_CHANNEL', message: `Channel "${channel}" is not allowlisted.` }
+          error: { code: 'UNKNOWN_CHANNEL', message: 'Channel is not allowlisted.' }
         })
       }
 
@@ -822,14 +875,30 @@ function createApiRouter({
         })
       }
 
+      const first = Array.isArray(args) ? args[0] : args
+      const protectedChannel = ['accounts:save', 'accounts:delete', 'accounts:duplicate-profile', 'accounts:reorder', 'settings:save', 'notify:save', 'notify:delete', 'audit:recent'].includes(channel)
+      const kinds = first?.kinds || args?.[1]?.kinds
+      const requestsAudit = channel === 'logs:list' && (extractId(first) === 'audit' || Array.isArray(kinds) && kinds.includes('audit'))
+      if (((protectedChannel || requestsAudit) && !adminSession) || (channel === 'settings:save' && containsRemoteAccess(args))) {
+        recordAudit(core, now, { actor, command: `invoke:${channel}`, result: 'forbidden', ip: clientIp })
+        return sendJson(res, 403, { ok: false, error: { code: 'FORBIDDEN', message: 'Operation requires a local UI or an admin session.' } })
+      }
       try {
-        const rawResult = await spec.invoke(core, args, {
+        const normalized = validateInvoke(channel, args)
+        const command = commandInvocation(channel, normalized)
+        if (command) {
+          if (!core.commands?.execute) return sendJson(res, 501, { ok: false, error: { code: 'UNSUPPORTED', message: 'Command layer unavailable.' } })
+          const outcome = await core.commands.execute(actor, command.name, command.args, { confirmed: body.confirmed === true })
+          const status = outcome.ok ? 200 : ({ FORBIDDEN: 403, RATE_LIMITED: 429, NOT_FOUND: 404, CONFIRM_REQUIRED: 409 }[outcome.error?.code] || 400)
+          return sendJson(res, status, outcome.ok ? { ok: true, result: sanitizeRemoteOutput(core, remoteResult(channel, outcome.result, core, adminSession)) } : sanitizeRemoteOutput(core, outcome))
+        }
+        const rawResult = await spec.invoke(core, normalized, {
           actor,
           getCapabilities,
           getRemoteAccessStatus,
           saveRemoteAccessSettings
         })
-        const result = sanitizeOutput(rawResult)
+        const result = sanitizeRemoteOutput(core, remoteResult(channel, rawResult, core, adminSession))
         recordAudit(core, now, {
           actor,
           command: `invoke:${channel}`,
@@ -839,7 +908,7 @@ function createApiRouter({
         })
         return sendJson(res, 200, { ok: true, result: result === undefined ? null : result })
       } catch (error) {
-        const message = String(error?.message || error).slice(0, 300)
+        const message = error?.code === 'INVALID_ARGS' ? 'Invalid or out-of-bounds arguments.' : 'Operation failed.'
         recordAudit(core, now, {
           actor,
           command: `invoke:${channel}`,
@@ -854,7 +923,7 @@ function createApiRouter({
           error: {
             code: String(error?.code || 'FAILED'),
             message,
-            ...(error?.validation ? { validation: error.validation } : {})
+            ...(error?.validation ? { validation: sanitizeRemoteOutput(core, error.validation) } : {})
           }
         })
       }
@@ -876,6 +945,8 @@ module.exports = {
   CHANNEL_SPECS,
   ELECTRON_ONLY_CHANNELS,
   sanitizeOutput,
+  sanitizeRemoteOutput,
+  remoteEvent,
   recordAudit,
    COMMANDS
 }

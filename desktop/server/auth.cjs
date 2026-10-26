@@ -29,6 +29,26 @@ const MAX_LOCKOUT_MS = 60 * 60_000
 const API_RATE_LIMIT = 120
 const API_WINDOW_MS = 60_000
 
+const MAX_TRACKERS = 10_000
+const TRACKER_TTL_MS = 2 * MAX_LOCKOUT_MS
+const MAX_SESSIONS = 1000
+const MAX_SESSIONS_PER_USER = 10
+const MAX_TOKENS = 100
+let activeHashes = 0
+function busyError() {
+  return Object.assign(new Error('Authentication capacity exceeded.'), { statusCode: 429, code: 'RATE_LIMITED' })
+}
+async function limitedHash(work) {
+  if (activeHashes >= 4) throw busyError()
+  activeHashes++
+  try { return await work() } finally { activeHashes-- }
+}
+function limitedHashSync(work) {
+  if (activeHashes >= 4) throw busyError()
+  activeHashes++
+  try { return work() } finally { activeHashes-- }
+}
+
 const WS_LIMIT_PER_SESSION = 1
 const WS_LIMIT_PER_TOKEN = 5
 
@@ -199,7 +219,9 @@ class AuthManager {
     this.loginAttemptsByIp = new Map()
     this.loginAttemptsByUser = new Map()
     this.apiCallsByActor = new Map()
+    this.bearerAttemptsByIp = new Map()
     this.wsConnections = new Map()
+    this.pendingTokens = 0
     this.setupToken = null
 
     this._dummySalt = crypto.randomBytes(SALT_BYTES).toString('hex')
@@ -216,7 +238,7 @@ class AuthManager {
       }
       return {
         admin: parsed.admin && typeof parsed.admin === 'object' ? parsed.admin : null,
-        tokens: Array.isArray(parsed.tokens) ? parsed.tokens : [],
+        tokens: Array.isArray(parsed.tokens) ? parsed.tokens.filter(t => t.revokedAt === null && (t.expiresAt === null || t.expiresAt > this.now())).slice(0, MAX_TOKENS) : [],
         remoteConfig: parsed.remoteConfig && typeof parsed.remoteConfig === 'object' ? parsed.remoteConfig : null
       }
     } catch (error) {
@@ -252,7 +274,7 @@ class AuthManager {
     const err = validatePassword(password)
     if (err) throw new Error(err)
     const cleanUser = String(username || this.state.admin?.username || 'admin').trim().slice(0, 64) || 'admin'
-    const { salt, hash, params } = hashSecretSync(password)
+    const { salt, hash, params } = limitedHashSync(() => hashSecretSync(password))
     const timestamp = this.now()
     this.state.admin = {
       username: cleanUser,
@@ -267,11 +289,12 @@ class AuthManager {
     return { username: cleanUser, updatedAt: timestamp }
   }
 
-  async setAdminPassword(password, username = 'admin') {
+  async setAdminPassword(password, username = 'admin', { authorize = () => true } = {}) {
     const err = validatePassword(password)
     if (err) throw new Error(err)
     const cleanUser = String(username || this.state.admin?.username || 'admin').trim().slice(0, 64) || 'admin'
-    const { salt, hash, params } = await hashSecret(password)
+    const { salt, hash, params } = await limitedHash(() => hashSecret(password))
+    if (!authorize()) throw Object.assign(new Error('Session expired or credentials changed.'), { statusCode: 401, code: 'UNAUTHORIZED' })
     const timestamp = this.now()
     this.state.admin = {
       username: cleanUser,
@@ -288,13 +311,16 @@ class AuthManager {
 
   async verifyAdminPassword(password, username = 'admin') {
     if (!this.hasAdmin() || typeof password !== 'string') {
-      await verifySecret(String(password || ''), this._dummySalt, this._dummyHash)
+      await limitedHash(() => verifySecret(String(password || '').slice(0, MAX_PASSWORD_LENGTH), this._dummySalt, this._dummyHash))
       return false
     }
     const expectedUser = this.state.admin.username || 'admin'
     const suppliedUser = String(username || 'admin').trim()
     const userMatches = timingSafeEqualStrings(suppliedUser, expectedUser)
-    const passMatches = await verifySecret(password, this.state.admin.salt, this.state.admin.hash)
+    if (password.length > MAX_PASSWORD_LENGTH) return false
+    const admin = this.state.admin
+    const passMatches = await limitedHash(() => verifySecret(password, admin.salt, admin.hash))
+    if (this.state.admin !== admin) return false
     return userMatches && passMatches
   }
 
@@ -334,6 +360,10 @@ class AuthManager {
   // --- Sessions ---
 
   createSession({ username = 'admin', scope = 'admin', ip = '' } = {}) {
+    for (const id of this.sessions.keys()) this.getSession(id, { touch: false })
+    const userSessions = [...this.sessions.values()].filter(s => s.username === username)
+    if (userSessions.length >= MAX_SESSIONS_PER_USER) this.revokeSession(userSessions[0].id)
+    if (this.sessions.size >= MAX_SESSIONS) this.revokeSession(this.sessions.keys().next().value)
     const id = crypto.randomBytes(32).toString('hex')
     const csrfToken = crypto.randomBytes(32).toString('hex')
     const timestamp = this.now()
@@ -356,8 +386,8 @@ class AuthManager {
     if (!session) return null
     const timestamp = this.now()
     if (
-      timestamp - session.lastActiveAt > IDLE_TIMEOUT_MS ||
-      timestamp - session.createdAt > ABSOLUTE_TIMEOUT_MS
+      timestamp - session.lastActiveAt >= IDLE_TIMEOUT_MS ||
+      timestamp - session.createdAt >= ABSOLUTE_TIMEOUT_MS
     ) {
       this.revokeSession(sessionId)
       return null
@@ -374,6 +404,7 @@ class AuthManager {
   revokeSession(sessionId) {
     if (!sessionId) return false
     const existed = this.sessions.delete(sessionId)
+    this.apiCallsByActor.delete(`session:${sessionId}`)
     this.wsConnections.delete(`session:${sessionId}`)
     try { this.onSessionRevoked(sessionId) } catch {}
     return existed
@@ -383,6 +414,7 @@ class AuthManager {
     const ids = [...this.sessions.keys()]
     this.sessions.clear()
     for (const id of ids) {
+      this.apiCallsByActor.delete(`session:${id}`)
       this.wsConnections.delete(`session:${id}`)
       try { this.onSessionRevoked(id) } catch {}
     }
@@ -392,9 +424,16 @@ class AuthManager {
   // --- API Tokens ---
 
   createTokenSync({ name = 'API token', scope = 'read', expiresAt = null, ttlMs = null, expiresInDays = null } = {}) {
+    const prepared = this._prepareToken({ name, scope, expiresAt, ttlMs, expiresInDays })
+    return this._storeToken(prepared, limitedHashSync(() => hashSecretSync(prepared.secret)))
+  }
+
+  _prepareToken({ name = 'API token', scope = 'read', expiresAt = null, ttlMs = null, expiresInDays = null } = {}) {
     if (!SCOPES.includes(scope)) {
       throw new Error(`Invalid token scope. Must be one of: ${SCOPES.join(', ')}.`)
     }
+    this.state.tokens = this.state.tokens.filter(t => t.revokedAt === null && (t.expiresAt === null || t.expiresAt > this.now()))
+    if (this.state.tokens.length + this.pendingTokens >= MAX_TOKENS) throw busyError()
     const cleanName = String(name || 'API token').trim().slice(0, 80) || 'API token'
     const timestamp = this.now()
     let resolvedExpiry = null
@@ -412,8 +451,11 @@ class AuthManager {
 
     const id = crypto.randomBytes(8).toString('hex')
     const secret = crypto.randomBytes(24).toString('hex')
+    return { id, secret, cleanName, scope, timestamp, resolvedExpiry }
+  }
+
+  _storeToken({ id, secret, cleanName, scope, timestamp, resolvedExpiry }, { salt, hash, params }) {
     const rawToken = `afk_${id}_${secret}`
-    const { salt, hash, params } = hashSecretSync(secret)
 
     const entry = {
       id,
@@ -437,7 +479,10 @@ class AuthManager {
   }
 
   async createToken(options = {}) {
-    return this.createTokenSync(options)
+    const prepared = this._prepareToken(options)
+    this.pendingTokens++
+    try { return this._storeToken(prepared, await limitedHash(() => hashSecret(prepared.secret))) }
+    finally { this.pendingTokens-- }
   }
 
   listTokens() {
@@ -456,21 +501,22 @@ class AuthManager {
     return true
   }
 
-  async verifyBearerToken(authHeader) {
+  async verifyBearerToken(authHeader, ip = 'unknown') {
     if (!authHeader || typeof authHeader !== 'string') return null
     const match = /^Bearer\s+afk_([0-9a-fA-F]{8,32})_([A-Za-z0-9_-]{16,128})$/.exec(authHeader.trim())
     if (!match) return null
     const [, id, secret] = match
+    if (!this.checkWindow(this.bearerAttemptsByIp, String(ip), 120).allowed) throw busyError()
     const entry = this.state.tokens.find((t) => t.id === id)
     if (!entry) {
-      await verifySecret(secret, this._dummySalt, this._dummyHash)
+      await limitedHash(() => verifySecret(secret, this._dummySalt, this._dummyHash))
       return null
     }
     const timestamp = this.now()
     if (entry.revokedAt !== null) return null
     if (entry.expiresAt !== null && timestamp >= entry.expiresAt) return null
-    const valid = await verifySecret(secret, entry.salt, entry.hash)
-    if (!valid) return null
+    const valid = await limitedHash(() => verifySecret(secret, entry.salt, entry.hash))
+    if (!valid || !this.isActorValid({ kind: 'token', id })) return null
     entry.lastUsedAt = timestamp
     return this._publicToken(entry)
   }
@@ -548,13 +594,52 @@ class AuthManager {
 
   // --- Rate Limits ---
 
+  pruneTrackers(map, ttl = TRACKER_TTL_MS) {
+    const time = this.now()
+    for (const [key, value] of map) {
+      const last = Array.isArray(value) ? value.at(-1) : value.updatedAt
+      if (time - last >= ttl) map.delete(key)
+    }
+  }
+
+  checkWindow(map, key, limit) {
+    this.pruneTrackers(map, API_WINDOW_MS)
+    if (!map.has(key) && map.size >= MAX_TRACKERS) return { allowed: false, retryAfterMs: API_WINDOW_MS }
+    const timestamp = this.now()
+    const recent = (map.get(key) || []).filter(t => timestamp - t < API_WINDOW_MS)
+    if (recent.length >= limit) return { allowed: false, retryAfterMs: API_WINDOW_MS - (timestamp - recent[0]) }
+    recent.push(timestamp)
+    map.set(key, recent)
+    return { allowed: true }
+  }
+
+  isActorValid(actor) {
+    if (actor?.kind === 'session') return Boolean(this.getSession(actor.id, { touch: false }))
+    if (actor?.kind !== 'token') return false
+    const entry = this.state.tokens.find(t => t.id === actor.id)
+    return Boolean(entry && entry.revokedAt === null && (entry.expiresAt === null || this.now() < entry.expiresAt))
+  }
+
+  reserveLoginAttempt(ip, username) {
+    const rate = this.checkLoginRateLimit(ip, username)
+    if (!rate.allowed) return rate
+    for (const [map, key] of [[this.loginAttemptsByIp, String(ip || 'unknown')], [this.loginAttemptsByUser, String(username || 'admin').trim().toLowerCase()]]) {
+      this._getLoginTracker(map, key).attempts.push(this.now())
+    }
+    return rate
+  }
+
   _getLoginTracker(map, key) {
+    this.pruneTrackers(map)
+    if (!map.has(key) && map.size >= MAX_TRACKERS) return { attempts: [], failures: 0, lockedUntil: this.now() + LOGIN_WINDOW_MS }
+
     let state = map.get(key)
     if (!state) {
       state = { attempts: [], failures: 0, lockedUntil: 0 }
       map.set(key, state)
     }
     const timestamp = this.now()
+    state.updatedAt = timestamp
     state.attempts = state.attempts.filter((t) => timestamp - t < LOGIN_WINDOW_MS)
     return state
   }
@@ -562,6 +647,7 @@ class AuthManager {
   checkLoginRateLimit(ip, username = 'admin') {
     const timestamp = this.now()
     const ipState = this._getLoginTracker(this.loginAttemptsByIp, String(ip || 'unknown'))
+    if (ipState.lockedUntil > timestamp || ipState.attempts.length >= LOGIN_RATE_LIMIT) return { allowed: false, retryAfterMs: Math.max(LOGIN_WINDOW_MS, ipState.lockedUntil - timestamp) }
     const userState = this._getLoginTracker(this.loginAttemptsByUser, String(username || 'admin').trim().toLowerCase())
 
     for (const state of [ipState, userState]) {
@@ -578,20 +664,18 @@ class AuthManager {
     return { allowed: true, retryAfterMs: 0 }
   }
 
-  recordLoginAttempt(ip, username = 'admin', success = false) {
+  recordLoginAttempt(ip, username = 'admin', success = false, reserved = false) {
     const timestamp = this.now()
     const ipKey = String(ip || 'unknown')
     const userKey = String(username || 'admin').trim().toLowerCase()
     const ipState = this._getLoginTracker(this.loginAttemptsByIp, ipKey)
     const userState = this._getLoginTracker(this.loginAttemptsByUser, userKey)
 
-    ipState.attempts.push(timestamp)
-    userState.attempts.push(timestamp)
+    if (!reserved) { ipState.attempts.push(timestamp); userState.attempts.push(timestamp) }
 
     if (success) {
       userState.failures = 0
       userState.lockedUntil = 0
-      userState.attempts = []
       return
     }
 
@@ -606,24 +690,23 @@ class AuthManager {
   }
 
   checkApiRateLimit(actorKey) {
-    const timestamp = this.now()
-    const key = String(actorKey || 'anonymous')
-    const recent = (this.apiCallsByActor.get(key) || []).filter((t) => timestamp - t < API_WINDOW_MS)
-    if (recent.length >= API_RATE_LIMIT) {
-      this.apiCallsByActor.set(key, recent)
-      const retryAfterMs = Math.max(1, API_WINDOW_MS - (timestamp - recent[0]))
-      return { allowed: false, retryAfterMs }
-    }
-    recent.push(timestamp)
-    this.apiCallsByActor.set(key, recent)
-    return { allowed: true, remaining: API_RATE_LIMIT - recent.length }
+    return this.checkWindow(this.apiCallsByActor, String(actorKey || 'anonymous'), API_RATE_LIMIT)
   }
 
   // --- WebSocket Connection Tracking ---
 
   canAttachWebSocket(actor) {
     if (!actor || !actor.kind || !actor.id) return false
+    // Lazy TTL cleanup bounds sockets retained for credentials that expired
+    // while the server was otherwise quiet (no event deliveries).
+    for (const [key, sockets] of this.wsConnections) {
+      const [kind, id] = key.split(':')
+      if (this.isActorValid({ kind, id })) continue
+      this.wsConnections.delete(key)
+      for (const ws of sockets) { try { ws.close(4401, 'Credential expired or revoked.') } catch {} }
+    }
     const key = `${actor.kind}:${actor.id}`
+    if (!this.wsConnections.has(key) && this.wsConnections.size >= MAX_TRACKERS) return false
     const limit = actor.kind === 'session' ? WS_LIMIT_PER_SESSION : WS_LIMIT_PER_TOKEN
     const active = this.wsConnections.get(key)
     return !active || active.size < limit
@@ -646,6 +729,7 @@ class AuthManager {
 
 module.exports = {
   AuthManager,
+  MAX_TRACKERS, TRACKER_TTL_MS, MAX_SESSIONS, MAX_SESSIONS_PER_USER, MAX_TOKENS,
   SCRYPT_PARAMS,
   SALT_BYTES,
   KEY_BYTES,

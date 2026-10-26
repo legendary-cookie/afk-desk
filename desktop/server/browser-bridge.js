@@ -4,7 +4,8 @@
     fetchImpl = typeof fetch === 'function' ? fetch.bind(globalScope) : null,
     WebSocketImpl = typeof WebSocket === 'function' ? WebSocket : null,
     locationObj = typeof location === 'object' ? location : { protocol: 'http:', host: '127.0.0.1:8787', origin: 'http://127.0.0.1:8787' },
-    documentObj = typeof document === 'object' ? document : null
+    documentObj = typeof document === 'object' ? document : null,
+    confirmImpl = typeof globalScope.confirm === 'function' ? globalScope.confirm.bind(globalScope) : null
   } = {}) {
     let csrfToken = null
     let currentScope = null
@@ -64,7 +65,7 @@
       try {
         const wsProto = locationObj?.protocol === 'https:' ? 'wss:' : 'ws:'
         const wsUrl = `${wsProto}//${locationObj?.host || '127.0.0.1:8787'}/ws`
-        const socket = new WebSocketImpl(wsUrl)
+        const socket = new WebSocketImpl(wsUrl, [`afk-csrf.${csrfToken}`])
         ws = socket
 
         socket.addEventListener('message', (event) => {
@@ -291,10 +292,13 @@
     }
 
     async function invoke(channel, args) {
-      const data = await apiRequest('/api/invoke', {
-        method: 'POST',
-        body: args === undefined ? { channel } : { channel, args }
-      })
+      const body = args === undefined ? { channel } : { channel, args }
+      let data
+      try { data = await apiRequest('/api/invoke', { method: 'POST', body }) }
+      catch (error) {
+        if (error.code !== 'CONFIRM_REQUIRED' || !confirmImpl || !await confirmImpl('Confirm this action? It may disconnect an account or discard inventory items.')) throw error
+        data = await apiRequest('/api/invoke', { method: 'POST', body: { ...body, confirmed: true } })
+      }
       return data.result
     }
 

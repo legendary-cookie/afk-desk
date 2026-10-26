@@ -5,7 +5,7 @@ const os = require('node:os')
 const path = require('node:path')
 const { WebSocketServer, WebSocket } = require('ws')
 const { AuthManager, scopeAllows } = require('./auth.cjs')
-const { createApiRouter, sanitizeOutput, recordAudit } = require('./api-routes.cjs')
+const { createApiRouter, sanitizeRemoteOutput, remoteEvent, recordAudit } = require('./api-routes.cjs')
 
 const MAX_BODY_BYTES = 256 * 1024 // 256 KB
 const HOURLY_WARNING_MS = 60 * 60 * 1000 // 1 hour
@@ -144,7 +144,7 @@ function buildAllowedHostsSet(bind, allowedHostsInput = []) {
   for (const item of extra) {
     const raw = String(item || '').trim().toLowerCase()
     if (!raw) continue
-    const parsed = parseHostHeader(raw)
+    const parsed = parseHostHeader(raw.includes('://') ? (() => { try { return new URL(raw).host } catch { return '' } })() : raw)
     if (parsed) {
       set.add(parsed.hostname)
       set.add(parsed.bracketed)
@@ -161,17 +161,38 @@ function isHostHeaderAllowed(rawHost, allowedHostsSet) {
   return allowedHostsSet.has(parsed.hostname) || allowedHostsSet.has(parsed.bracketed)
 }
 
-function isOriginHeaderAllowed(originHeader, allowedHostsSet) {
-  if (!originHeader || typeof originHeader !== 'string' || originHeader === 'null') return false
-  let parsedUrl
-  try {
-    parsedUrl = new URL(originHeader)
-  } catch {
-    return false
+function buildAllowedOrigins(bind, hosts, port, trustProxy) {
+  const origins = new Set()
+  for (const host of buildAllowedHostsSet(bind, [])) {
+    const authority = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host
+    try { origins.add(new URL(`http://${authority}:${port}`).origin) } catch {}
+    if (trustProxy) { try { origins.add(new URL(`https://${authority}:${port}`).origin) } catch {} }
   }
-  if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') return false
-  const hostname = parsedUrl.hostname.replace(/^\[|\]$/g, '').toLowerCase()
-  return allowedHostsSet.has(hostname) || allowedHostsSet.has(parsedUrl.hostname.toLowerCase())
+  for (const item of Array.isArray(hosts) ? hosts : String(hosts || '').split(',')) {
+    try {
+      const raw = String(item).trim()
+      if (raw.includes('://')) {
+        const url = new URL(raw)
+        if (['http:', 'https:'].includes(url.protocol) && url.href === `${url.origin}/`) origins.add(url.origin)
+      } else if (raw) {
+        const host = parseHostHeader(raw)
+        if (!host) continue
+        const authority = host.hostname.includes(':') ? `[${host.hostname}]` : host.hostname
+        origins.add(new URL(`http://${authority}:${host.port || port}`).origin)
+        if (trustProxy) origins.add(new URL(`https://${authority}:${host.port || 443}`).origin)
+      }
+    } catch {}
+  }
+  return origins
+}
+
+function isOriginHeaderAllowed(originHeader, allowedOrigins) {
+  if (!originHeader || typeof originHeader !== 'string') return false
+  try {
+    const url = new URL(originHeader)
+    return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password &&
+      url.href === `${url.origin}/` && allowedOrigins.has(url.origin)
+  } catch { return false }
 }
 
 function applySecurityHeaders(res) {
@@ -361,7 +382,7 @@ function createRemoteServer({
     map.delete(id)
     for (const ws of set) {
       allWsClients.delete(ws)
-      try { ws.close(1008, reason) } catch {}
+      try { ws.close(4401, reason) } catch {}
     }
   }
 
@@ -386,6 +407,7 @@ function createRemoteServer({
   }
 
   let allowedHostsSet = buildAllowedHostsSet(bind, allowedHostsInput)
+  let allowedOrigins = buildAllowedOrigins(bind, allowedHostsInput, port, trustProxy)
   let pkgVersion = '0.10.0-beta.9'
   try {
     pkgVersion = require('../package.json').version || pkgVersion
@@ -454,7 +476,7 @@ function createRemoteServer({
 
     // Rule 4: Origin header check on every non-GET/HEAD request -> 403 Forbidden
     if (method !== 'GET' && method !== 'HEAD') {
-      if (!isOriginHeaderAllowed(req.headers.origin, allowedHostsSet)) {
+      if (!isOriginHeaderAllowed(req.headers.origin, allowedOrigins)) {
         recordAudit(core, now, {
           actor: { kind: 'anonymous', id: 'origin-check', scope: 'none', ip: clientIp },
           command: `${method} ${rawUrl.split('?')[0]}`,
@@ -583,7 +605,7 @@ function createRemoteServer({
     }
 
     // 2. Origin header check on WS upgrade
-    if (!isOriginHeaderAllowed(req.headers.origin, allowedHostsSet)) {
+    if (!isOriginHeaderAllowed(req.headers.origin, allowedOrigins)) {
       recordAudit(core, now, {
         actor: { kind: 'anonymous', id: 'ws-origin', scope: 'none', ip: clientIp },
         command: 'ws.connect',
@@ -600,7 +622,9 @@ function createRemoteServer({
     }
 
     // 4. Authenticate session or Bearer token
-    const { actor, error: authErr } = await apiRouter.authenticateRequest(req, clientIp)
+    let authentication
+    try { authentication = await apiRouter.authenticateRequest(req, clientIp) } catch { return rejectUpgrade(socket, 429, 'Too Many Requests', 'Authentication capacity exceeded.') }
+    const { actor, session, error: authErr } = authentication
     if (!actor) {
       recordAudit(core, now, {
         actor: { kind: 'anonymous', id: 'ws-anon', scope: 'none', ip: clientIp },
@@ -612,6 +636,11 @@ function createRemoteServer({
       return rejectUpgrade(socket, 401, 'Unauthorized', authErr || 'Authentication required.')
     }
 
+    if (session) {
+      const protocols = String(req.headers['sec-websocket-protocol'] || '').split(',').map(p => p.trim())
+      const proof = protocols.find(p => p.startsWith('afk-csrf.'))?.slice(9) || new URL(rawUrl, 'http://localhost').searchParams.get('csrf')
+      if (!auth.verifyCsrf(session, proof)) return rejectUpgrade(socket, 403, 'Forbidden', 'Invalid WebSocket CSRF token.')
+    }
     // 5. Connection limit check: 1 per session, 5 per token
     if (!auth.canAttachWebSocket(actor)) {
       recordAudit(core, now, {
@@ -624,7 +653,9 @@ function createRemoteServer({
       return rejectUpgrade(socket, 429, 'Too Many Requests', 'WebSocket connection limit exceeded.')
     }
 
+    if (!auth.isActorValid(actor)) return rejectUpgrade(socket, 401, 'Unauthorized', 'Credential expired or revoked.')
     wss.handleUpgrade(req, socket, head, (ws) => {
+      if (!auth.isActorValid(actor)) { ws.close(4401, 'Credential expired or revoked.'); return }
       const detach = auth.attachWebSocket(actor, ws)
       ws.actor = actor
       allWsClients.add(ws)
@@ -643,6 +674,14 @@ function createRemoteServer({
         ip: clientIp
       })
 
+      let messageTimes = []
+      ws.on('message', () => {
+        if (ws.readyState !== WebSocket.OPEN) return
+        const time = now()
+        messageTimes = messageTimes.filter(t => time - t < 10_000)
+        messageTimes.push(time)
+        if (messageTimes.length > 10) ws.close(1008, 'Message rate exceeded')
+      })
       ws.on('close', () => {
         detach()
         allWsClients.delete(ws)
@@ -654,6 +693,7 @@ function createRemoteServer({
         detach()
         allWsClients.delete(ws)
         actorSet.delete(ws)
+        if (actorSet.size === 0) trackerMap.delete(actor.id)
       })
 
       // Push initial runtime states for accounts if available
@@ -679,14 +719,14 @@ function createRemoteServer({
     const actor = ws.actor
     if (!actor || !scopeAllows(actor.scope, 'read')) return
 
-    // Filter sensitive events by scope: login-code requires at least control scope
-    if (channel === 'bot:event' && payload?.type === 'login-code' && !scopeAllows(actor.scope, 'control')) {
-      return
-    }
-
-    const safePayload = sanitizeOutput(payload)
+    if (!auth.isActorValid(actor)) { ws.close(4401, 'Credential expired or revoked.'); return }
+    if (ws.bufferedAmount > 1024 * 1024) { ws.terminate(); return }
+    const projected = remoteEvent(channel, payload, actor)
+    if (projected === null) return
     try {
+      const safePayload = sanitizeRemoteOutput(core, projected)
       ws.send(JSON.stringify({ channel, payload: safePayload }))
+      if (ws.bufferedAmount > 1024 * 1024) ws.terminate()
     } catch {}
   }
 
@@ -757,6 +797,7 @@ function createRemoteServer({
         const actualAddr = httpServer.address()
         if (actualAddr && typeof actualAddr === 'object' && actualAddr.address) {
           allowedHostsSet = buildAllowedHostsSet(bind, allowedHostsInput)
+          allowedOrigins = buildAllowedOrigins(bind, allowedHostsInput, actualAddr.port, trustProxy)
         }
         resolve()
       }
@@ -805,6 +846,7 @@ function createRemoteServer({
 
   function updateAllowedHosts(nextAllowedHosts) {
     allowedHostsSet = buildAllowedHostsSet(bind, nextAllowedHosts)
+    allowedOrigins = buildAllowedOrigins(bind, nextAllowedHosts, getPort(), trustProxy)
   }
 
   return {
@@ -839,5 +881,6 @@ module.exports = {
   parseHostHeader,
   buildAllowedHostsSet,
   isHostHeaderAllowed,
-  isOriginHeaderAllowed
+  isOriginHeaderAllowed,
+  buildAllowedOrigins
 }
