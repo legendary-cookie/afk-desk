@@ -1,0 +1,47 @@
+# Standalone variant: do not layer over the plain file (which publishes a port).
+name: afkdesk
+services:
+  tailscale:
+    image: tailscale/tailscale:stable
+    hostname: afkdesk
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY:?Set a scoped Tailscale auth key}
+      TS_HOSTNAME: ${TS_HOSTNAME:-afkdesk}
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_AUTH_ONCE: "true"
+      TS_USERSPACE: "false"
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+    restart: unless-stopped
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN]
+    security_opt: [no-new-privileges:true]
+  afkdesk:
+    image: ${AFKDESK_IMAGE:-afkdesk:local}
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    network_mode: service:tailscale
+    depends_on: [tailscale]
+    command: ["start", "--i-understand-plain-http"]
+    environment:
+      AFKDESK_BIND: 0.0.0.0
+      AFKDESK_PORT: "8787"
+      # Example: afkdesk.example-tailnet.ts.net (no scheme or port).
+      AFKDESK_ALLOWED_HOSTS: ${AFKDESK_TAILNET_HOST:?Set machine.tailnet.ts.net}
+      AFKDESK_SECRET_KEY: ${AFKDESK_SECRET_KEY:-}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - afkdesk-data:/data
+    restart: unless-stopped
+    stop_grace_period: 30s
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+volumes:
+  afkdesk-data:
+  tailscale-state:
