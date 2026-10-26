@@ -88,3 +88,9 @@ Ordered by user value against implementation cost. AFKCC is cloud-hosted; AFK De
   - The owner's global config is left unchanged.
   - Every Codex job now passes `-m gpt-6.1-sol -c model_reasoning_effort="high"` for implementation.
   - `gpt-6-astra` is used for security-sensitive or hard work.
+- **2026-10-27 — Antigravity Gemini quota exhausted.** The error was "Individual quota reached … Resets in 166h", so roughly 7 days.
+  - The Bedrock forms UI job stopped mid-way; its partial changes are kept in the worktree.
+  - Routing until the reset:
+    - Antigravity work goes to its Claude pool (`claude-sonnet-5-5-*`) if that pool is separate.
+    - Codex `gpt-6.1-sol` takes the rest, with Claude (lead) running tests and commits.
+  - R2 security review (Codex `gpt-6-astra`) found 2 P1 issues and 8 P2 issues. Notably, a read token could become admin via session ids in the audit log, and remote admins could change remote-access settings and passwords. Fixes are in progress; nothing from R2 is merged until a re-review passes.
