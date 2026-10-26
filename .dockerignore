@@ -1,0 +1,26 @@
+# Build context is the repository root. Send only the server's source inputs.
+**
+!desktop/
+!desktop/package.json
+!desktop/package-lock.json
+!desktop/core/
+!desktop/core/**
+!desktop/electron/
+!desktop/electron/**
+!desktop/server/
+!desktop/server/**
+!desktop/src/
+!desktop/src/**
+!desktop/assets/
+!desktop/assets/**
+!desktop/patches/
+!desktop/patches/**
+**/node_modules
+**/.env*
+**/*.log
+**/*.token
+**/*.tokens
+**/profiles
+**/minecraft-profiles
+**/data
+**/secret.key

@@ -3,6 +3,9 @@
   "version": "0.10.0-beta.9",
   "description": "A simple, local-first Minecraft AFK desktop client",
   "main": "electron/main.cjs",
+  "bin": {
+    "afk-desk-server": "./server/cli.cjs"
+  },
   "author": "AFK Desk contributors",
   "license": "MIT",
   "engines": {
@@ -10,6 +13,7 @@
   },
   "scripts": {
     "start": "electron .",
+    "server": "node server/cli.cjs",
     "test": "node --test",
     "dist": "electron-builder --win nsis",
     "postinstall": "patch-package"
@@ -21,7 +25,8 @@
     "minecraft-protocol-forge": "github:PrismarineJS/node-minecraft-protocol-forge#54fc6a2f",
     "mineflayer": "4.37.1",
     "mineflayer-pathfinder": "^2.4.5",
-    "socks": "^2.8.9"
+    "socks": "^2.8.9",
+    "ws": "8.22.0"
   },
   "overrides": {
     "tar": "7.5.22",
@@ -51,6 +56,8 @@
       "output": "dist"
     },
     "files": [
+      "core/**/*",
+      "server/**/*",
       "electron/**/*",
       "src/**/*",
       "assets/**/*",

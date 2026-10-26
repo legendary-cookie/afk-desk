@@ -24,6 +24,7 @@ const { AlertManager, PersistentEventStore, SmartProxyManager, identityIdFor, no
 const { validateProfileId } = require('../electron/profile-path.cjs')
 const { isMicrosoftLoginUrl } = require('../electron/ipc-security.cjs')
 const { createCommandLayer } = require('./commands.cjs')
+const { auditActor, redactAuditText } = require('./audit-identity.cjs')
 
 const movementDiagnosticsEnabled = process.env.AFK_DESK_MOVEMENT_DIAGNOSTICS === '1'
 
@@ -241,20 +242,30 @@ class AppCore {
       health: () => this.smartProxies.snapshot()
     }
 
+    // Additive platform hooks (getRemoteAccess / saveRemoteAccess) for opt-in embedded server mode.
     this.settings = {
       get: () => {
         const settings = this.settingsStore.get()
         const startWithWindows = this.platform.getAutoLaunch ? Boolean(this.platform.getAutoLaunch()) : false
-        return { startWithWindows, ...settings }
+        const remoteAccess = this.platform.getRemoteAccess ? this.platform.getRemoteAccess() : undefined
+        return {
+          startWithWindows,
+          ...settings,
+          ...(remoteAccess !== undefined ? { remoteAccess } : {})
+        }
       },
       save: (input) => {
         const startWithWindows = input?.startWithWindows === true
         const settings = this.settingsStore.save(input)
         this.platform.setAutoLaunch?.(startWithWindows)
+        const remoteAccess = this.platform.saveRemoteAccess
+          ? this.platform.saveRemoteAccess(input?.remoteAccess)
+          : (this.platform.getRemoteAccess ? this.platform.getRemoteAccess() : undefined)
         const { notifyChannels: _hidden, ...safe } = settings
         return {
           startWithWindows: this.platform.getAutoLaunch ? Boolean(this.platform.getAutoLaunch()) : startWithWindows,
-          ...safe
+          ...safe,
+          ...(remoteAccess !== undefined ? { remoteAccess } : {})
         }
       }
     }
@@ -695,7 +706,7 @@ class AppCore {
   }
 
   _appendAudit(entry) {
-    const record = { type: 'audit', ...redactAudit(entry) }
+    const record = { type: 'audit', ...redactAudit(entry), actor: auditActor(entry?.actor) }
     this.eventStore.append('audit', record)
     if (entry?.accountId && entry.accountId !== 'audit') {
       this.eventStore.append(entry.accountId, record)
@@ -764,7 +775,7 @@ function relocateLocks(a, s, t) {
 
 function redactAudit(v) {
   if (Array.isArray(v)) return v.map(redactAudit)
-  if (!v || typeof v !== 'object') return typeof v === 'string' ? v.replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[redacted]') : v
+  if (!v || typeof v !== 'object') return typeof v === 'string' ? redactAuditText(v) : v
   return Object.fromEntries(Object.entries(v).filter(([k]) => !/email|token|secret|password|credential|username/i.test(k)).map(([k, x]) => [k, redactAudit(x)]))
 }
 

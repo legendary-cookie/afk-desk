@@ -7,6 +7,8 @@ if (smokeTest) app.setPath('userData', fs.mkdtempSync(path.join(os.tmpdir(), 'af
 const { pathToFileURL } = require('node:url')
 const { AppCore } = require('../core/app-core.cjs')
 const { createElectronSecretBox } = require('../core/secrets.cjs')
+const { AuthManager } = require('../server/auth.cjs')
+const { createRemoteServer, detectNetworkInterfaces } = require('../server/http-server.cjs')
 const { registerTrustedHandler, restrictWindow, isMicrosoftLoginUrl } = require('./ipc-security.cjs')
 const { sendToWindow } = require('./window-events.cjs')
 const { IPC: MACRO_IPC } = require('./macro/contract.cjs')
@@ -18,6 +20,7 @@ const documentUrl = pathToFileURL(documentPath).href
 
 let mainWindow
 let core
+let embeddedServer = null
 let storageErrorShown = false
 
 function createWindow() {
@@ -64,9 +67,99 @@ function createWindow() {
 }
 
 app.whenReady().then(async () => {
+  const userDataPath = app.getPath('userData')
+  const secretBox = createElectronSecretBox(safeStorage)
+  const auth = new AuthManager({ dataDir: userDataPath })
+  let embeddedError = ''
+  let lastCreatedToken = null
+
+  async function syncEmbeddedServer(cfg) {
+    if (embeddedServer) {
+      try { await embeddedServer.stop() } catch {}
+      embeddedServer = null
+    }
+    embeddedError = ''
+    if (smokeTest || !cfg?.enabled || !auth.hasAdmin()) return
+    try {
+      embeddedServer = createRemoteServer({
+        core,
+        auth,
+        dataDir: userDataPath,
+        bind: cfg.bind || '127.0.0.1',
+        port: cfg.port || 8787,
+        allowedHosts: cfg.allowedHosts || [],
+        trustProxy: Boolean(cfg.trustProxy),
+        iUnderstandPlainHttp: Boolean(cfg.iUnderstandPlainHttp),
+        desktopEmbedded: true,
+        getRemoteAccessStatus,
+        saveRemoteAccessSettings
+      })
+      await embeddedServer.start()
+    } catch (err) {
+      embeddedError = String(err?.message || err)
+      embeddedServer = null
+    }
+  }
+
+  function getRemoteAccessStatus() {
+    const cfg = auth.getRemoteConfig()
+    const createdToken = lastCreatedToken
+    lastCreatedToken = null
+    return {
+      enabled: Boolean(cfg.enabled),
+      running: Boolean(embeddedServer?.isRunning()),
+      bind: cfg.bind || '127.0.0.1',
+      port: embeddedServer?.getPort() || cfg.port || 8787,
+      allowedHosts: Array.isArray(cfg.allowedHosts) ? cfg.allowedHosts : [],
+      trustProxy: Boolean(cfg.trustProxy),
+      hasAdmin: auth.hasAdmin(),
+      interfaces: detectNetworkInterfaces(),
+      tokens: auth.listTokens(),
+      error: embeddedError || '',
+      ...(createdToken ? { createdToken } : {})
+    }
+  }
+
+  function saveRemoteAccessSettings(input) {
+    if (!input || typeof input !== 'object') return getRemoteAccessStatus()
+    if (!input._update && !input.adminPassword && !input.action && Array.isArray(input.interfaces)) {
+      return getRemoteAccessStatus()
+    }
+    if (input.action === 'create-token') {
+      lastCreatedToken = auth.createTokenSync({
+        name: input.tokenName || 'API token',
+        scope: input.tokenScope || 'read',
+        expiresInDays: input.tokenExpiresInDays
+      })
+      return getRemoteAccessStatus()
+    }
+    if (input.action === 'revoke-token') {
+      if (input.tokenId) auth.revokeToken(String(input.tokenId))
+      return getRemoteAccessStatus()
+    }
+    if (typeof input.adminPassword === 'string' && input.adminPassword.length > 0) {
+      auth.setAdminPasswordSync(input.adminPassword)
+    }
+    const current = auth.getRemoteConfig()
+    const nextEnabled = input.enabled !== undefined ? Boolean(input.enabled) : Boolean(current.enabled)
+    if (nextEnabled && !auth.hasAdmin()) {
+      throw new Error('Set an admin password before enabling remote access.')
+    }
+    const saved = auth.saveRemoteConfig({
+      enabled: nextEnabled,
+      bind: input.bind !== undefined ? input.bind : current.bind,
+      port: input.port !== undefined ? input.port : current.port,
+      allowedHosts: input.allowedHosts !== undefined ? input.allowedHosts : current.allowedHosts,
+      trustProxy: input.trustProxy !== undefined ? input.trustProxy : current.trustProxy,
+      iUnderstandPlainHttp: input.iUnderstandPlainHttp !== undefined ? input.iUnderstandPlainHttp : current.iUnderstandPlainHttp
+    })
+    void syncEmbeddedServer(saved)
+    return getRemoteAccessStatus()
+  }
+
   core = new AppCore({
-    userDataPath: app.getPath('userData'),
-    secretBox: createElectronSecretBox(safeStorage),
+    userDataPath,
+    secretBox,
     BotManager,
     normalizeSkinUrl,
     BedrockBotManager,
@@ -89,12 +182,18 @@ app.whenReady().then(async () => {
       clearStorageError: () => { storageErrorShown = false },
       getAutoLaunch: () => app.getLoginItemSettings().openAtLogin,
       setAutoLaunch: (openAtLogin) => app.setLoginItemSettings({ openAtLogin }),
+      getRemoteAccess: () => getRemoteAccessStatus(),
+      saveRemoteAccess: (remoteInput) => saveRemoteAccessSettings(remoteInput),
       getVersion: () => app.getVersion(),
       openExternal: (url) => shell.openExternal(url),
       openIsolatedLogin: ({ id, url }) => openIsolatedLoginWindow(id, url)
     }
   })
   await core.start()
+  const initialRemote = auth.getRemoteConfig()
+  if (!smokeTest && initialRemote.enabled && auth.hasAdmin()) {
+    await syncEmbeddedServer(initialRemote)
+  }
   registerIpc()
   createWindow()
   // AppCore handles startupConnectionDelay(settings, index) and profile defaults:
@@ -112,6 +211,7 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  void embeddedServer?.stop()
   void core?.shutdown()
 })
 

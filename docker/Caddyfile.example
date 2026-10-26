@@ -1,0 +1,4 @@
+# Set AFKDESK_DOMAIN to a DNS name pointing at this machine.
+{$AFKDESK_DOMAIN} {
+    reverse_proxy afkdesk:8787
+}

@@ -1,0 +1,27 @@
+name: afkdesk
+services:
+  afkdesk:
+    image: ${AFKDESK_IMAGE:-afkdesk:local}
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: ["start", "--i-understand-plain-http"]
+    environment:
+      AFKDESK_BIND: 0.0.0.0
+      AFKDESK_PORT: "8787"
+      AFKDESK_ALLOWED_HOSTS: localhost,127.0.0.1
+      AFKDESK_SECRET_KEY: ${AFKDESK_SECRET_KEY:-}
+      TZ: ${TZ:-UTC}
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - afkdesk-data:/data
+    restart: unless-stopped
+    stop_grace_period: 30s
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+volumes:
+  afkdesk-data:

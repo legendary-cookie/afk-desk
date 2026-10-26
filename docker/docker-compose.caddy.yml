@@ -1,0 +1,46 @@
+# Standalone variant: only Caddy publishes host ports.
+name: afkdesk
+services:
+  afkdesk:
+    image: ${AFKDESK_IMAGE:-afkdesk:local}
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    environment:
+      AFKDESK_BIND: 0.0.0.0
+      AFKDESK_PORT: "8787"
+      AFKDESK_ALLOWED_HOSTS: ${AFKDESK_DOMAIN:?Set your HTTPS domain}
+      AFKDESK_TRUST_PROXY: "1"
+      AFKDESK_SECRET_KEY: ${AFKDESK_SECRET_KEY:-}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - afkdesk-data:/data
+    restart: unless-stopped
+    stop_grace_period: 30s
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+  caddy:
+    image: caddy:2
+    depends_on:
+      afkdesk:
+        condition: service_healthy
+    environment:
+      AFKDESK_DOMAIN: ${AFKDESK_DOMAIN:?Set your HTTPS domain}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile.example:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+volumes:
+  afkdesk-data:
+  caddy-data:
+  caddy-config:
