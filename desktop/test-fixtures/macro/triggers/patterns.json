@@ -1,0 +1,38 @@
+{
+  "description": "Chat pattern table. match: null means no match, an object means the expected captures.",
+  "cases": [
+    { "pattern": "hello", "mode": "contains", "text": "Oh HELLO there", "match": {} },
+    { "pattern": "hello", "mode": "contains", "text": "hullo", "match": null },
+    { "pattern": "hello*", "mode": "glob", "text": "Hello world", "match": {} },
+    { "pattern": "hello*", "mode": "glob", "text": "say hello", "match": null },
+    { "pattern": "*hello", "mode": "glob", "text": "say hello", "match": {} },
+    { "pattern": "*hello*", "mode": "glob", "text": "say hello now", "match": {} },
+    { "pattern": "hello", "mode": "glob", "text": "hello", "match": {} },
+    { "pattern": "hello", "mode": "glob", "text": "hello!", "match": null },
+    { "pattern": "{who} joined the game", "mode": "glob", "text": "Alex joined the game", "match": { "who": "Alex" } },
+    { "pattern": "{who} joined the game", "mode": "glob", "text": " joined the game", "match": null },
+    { "pattern": "<{p}> !{cmd} {arg}", "mode": "glob", "text": "<Bob> !tp home now", "match": { "p": "Bob", "cmd": "tp", "arg": "home now" } },
+    { "pattern": "a{x}a", "mode": "glob", "text": "abaca", "match": { "x": "bac" } },
+    { "pattern": "a{x}a", "mode": "glob", "text": "aBa", "match": { "x": "B" } },
+    { "pattern": "a{x}a", "mode": "glob", "text": "aa", "match": null },
+    { "pattern": "*b*c*", "mode": "glob", "text": "abc", "match": {} },
+    { "pattern": "*", "mode": "glob", "text": "", "match": {} },
+    { "pattern": "{all}", "mode": "glob", "text": "", "match": null },
+    { "pattern": "{all}", "mode": "glob", "text": "x", "match": { "all": "x" } },
+    { "pattern": "ab*ab", "mode": "glob", "text": "ab", "match": null },
+    { "pattern": "ab*ab", "mode": "glob", "text": "abab", "match": {} },
+    { "pattern": "ab{m}ab", "mode": "glob", "text": "abab", "match": null },
+    { "pattern": "ab{m}ab", "mode": "glob", "text": "abXab", "match": { "m": "X" } }
+  ],
+  "invalid": [
+    { "pattern": "", "mode": "glob" },
+    { "pattern": "**", "mode": "glob" },
+    { "pattern": "a*{b}c", "mode": "glob" },
+    { "pattern": "{a}{b}", "mode": "glob" },
+    { "pattern": "{a}x{a}", "mode": "glob" },
+    { "pattern": "{1bad}", "mode": "glob" },
+    { "pattern": "{unclosed", "mode": "glob" },
+    { "pattern": "{}", "mode": "glob" },
+    { "pattern": "x", "mode": "regex" }
+  ]
+}

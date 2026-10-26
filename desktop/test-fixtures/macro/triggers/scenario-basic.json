@@ -1,0 +1,24 @@
+{
+  "description": "Data-driven scenario: macros plus a timeline of events and clock advances with the expected matches.",
+  "accounts": { "m-join": ["a1"], "m-chat": ["a1", "a2"], "m-health": ["a1"], "m-world": ["a1"], "m-off": ["a1"] },
+  "macros": [
+    { "id": "m-join", "enabled": true, "trigger": { "type": "join" } },
+    { "id": "m-chat", "enabled": true, "trigger": { "type": "chat", "pattern": "{player} whispers: *", "match": "glob", "sources": ["chat", "system"] } },
+    { "id": "m-health", "enabled": true, "trigger": { "type": "healthBelow", "below": 6 } },
+    { "id": "m-world", "enabled": true, "trigger": { "type": "worldChange" } },
+    { "id": "m-off", "enabled": false, "trigger": { "type": "death" } }
+  ],
+  "steps": [
+    { "event": { "type": "spawn", "accountId": "a1", "sessionId": "s1" }, "expect": [{ "macroId": "m-join", "triggerType": "join", "variables": {} }] },
+    { "event": { "type": "spawn", "accountId": "a1", "sessionId": "s1" }, "expect": [] },
+    { "event": { "type": "login", "accountId": "a1", "sessionId": "s1", "payload": { "dimension": "overworld", "world": "lobby" } }, "expect": [] },
+    { "event": { "type": "chat", "accountId": "a2", "sessionId": "t1", "payload": { "text": "Steve whispers: hello", "source": "chat" } }, "expect": [{ "macroId": "m-chat", "triggerType": "chat", "variables": { "player": "Steve" } }] },
+    { "event": { "type": "chat", "accountId": "a2", "sessionId": "t1", "payload": { "text": "Steve whispers: hello", "source": "actionBar" } }, "expect": [] },
+    { "event": { "type": "telemetry", "accountId": "a1", "sessionId": "s1", "payload": { "health": 20, "food": 20 } }, "expect": [] },
+    { "event": { "type": "telemetry", "accountId": "a1", "sessionId": "s1", "payload": { "health": 5, "food": 20 } }, "expect": [{ "macroId": "m-health", "triggerType": "healthBelow", "variables": { "health": "5" } }] },
+    { "event": { "type": "telemetry", "accountId": "a1", "sessionId": "s1", "payload": { "health": 4, "food": 20 } }, "expect": [] },
+    { "advance": 5000 },
+    { "event": { "type": "respawn", "accountId": "a1", "sessionId": "s1", "payload": { "dimension": "nether", "world": "lobby" } }, "expect": [{ "macroId": "m-world", "triggerType": "worldChange", "variables": { "reason": "dimension", "dimension": "nether", "world": "lobby" } }] },
+    { "event": { "type": "death", "accountId": "a1", "sessionId": "s1" }, "expect": [] }
+  ]
+}
