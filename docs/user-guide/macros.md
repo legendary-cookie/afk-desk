@@ -40,24 +40,25 @@ Macro Engine v2 upgrades AFK Desk's beta automations into a shared **macro libra
 - **Inventory & Menus (Java)**: `selectHotbar`, `holdItem` (by item name), `useInventory` / `useGui` (click slot by index, item name, or lore), `waitForWindow`, `closeGui`, `drop` / `dropAll` (respecting item locks), `deposit`.
 - **Session**: `disconnect`, `reconnect`.
 
-## 3 Example Macros
+## Example macros
 
-### Example 1: Join → `/afk`
+The macro library includes 10 built-in starter templates covering common automated workflows. Each template can be inserted directly from the **Templates…** picker in a disabled state so you can review and configure targets before enabling.
+
+### 1. Join → `/afk`
 
 Automatically enters AFK mode after connecting to a server, with a slight randomized delay so it looks natural.
 
-- **Target**: All accounts (or tagged `AFK` profiles)
-- **Trigger**: `join`
+- **Trigger**: `join` (cooldown `0ms`)
 - **Steps**:
   1. `wait` — `1500 ms` with `500 ms` jitter
   2. `chat` — `/afk`
 
 ```json
 {
-  "name": "Join /afk",
-  "enabled": true,
+  "name": "Join → /afk",
+  "enabled": false,
   "targets": { "mode": "all" },
-  "trigger": { "type": "join" },
+  "trigger": { "type": "join", "cooldownMs": 0 },
   "steps": [
     { "type": "wait", "ms": 1500, "jitterMs": 500 },
     { "type": "chat", "message": "/afk" }
@@ -65,54 +66,202 @@ Automatically enters AFK mode after connecting to a server, with a slight random
 }
 ```
 
-### Example 2: Timer Anti-AFK Look
+### 2. Anti-AFK look-around every 60 s
 
-Periodically turns the camera left and right while online, pausing automatically if another player comes within 16 blocks.
+Periodically turns the player view slightly every 60 seconds to avoid idle disconnects.
 
-- **Target**: Selected accounts
-- **Trigger**: `timer` every `60s` (`±10s` jitter, runs only while online)
-- **Stop condition (`stopWhen`)**: `playerAppears` within `16` blocks (ignoring your own accounts)
+- **Trigger**: `timer` every `60s` (`±5s` jitter, runs only while online)
 - **Steps**:
-  1. `look` — relative yaw `+15°`, pitch `0°`
-  2. `wait` — `800 ms` with `200 ms` jitter
-  3. `look` — relative yaw `-15°`, pitch `0°`
+  1. `look` — relative yaw `+0.35` radians, pitch `0`
+  2. `wait` — `400 ms`
+  3. `look` — relative yaw `-0.35` radians, pitch `0`
 
 ```json
 {
-  "name": "Timer anti-AFK look",
-  "enabled": true,
-  "targets": { "mode": "accounts", "accountIds": ["one"] },
-  "trigger": { "type": "timer", "intervalMs": 60000, "jitterMs": 10000 },
-  "stopWhen": [{ "type": "playerAppears", "radius": 16, "ignoreOwnAccounts": true }],
+  "name": "Anti-AFK look-around every 60 s",
+  "enabled": false,
+  "targets": { "mode": "all" },
+  "trigger": { "type": "timer", "intervalMs": 60000, "jitterMs": 5000 },
   "steps": [
-    { "type": "look", "mode": "delta", "yawDegrees": 15, "pitchDegrees": 0 },
-    { "type": "wait", "ms": 800, "jitterMs": 200 },
-    { "type": "look", "mode": "delta", "yawDegrees": -15, "pitchDegrees": 0 }
+    { "type": "look", "mode": "relative", "yaw": 0.35, "pitch": 0 },
+    { "type": "wait", "ms": 400 },
+    { "type": "look", "mode": "relative", "yaw": -0.35, "pitch": 0 }
   ]
 }
 ```
 
-### Example 3: Inventory Full → Deposit
+### 3. Auto-eat when hunger < 14
 
-When an account's inventory fills up at a farm, deposits all unlocked items into the nearest visible chest or barrel and sends a notification. Locked gear and keys remain untouched.
+Selects food by name, holds right-click to eat when hunger drops below 14, then releases.
 
-- **Target**: Farm accounts
-- **Trigger**: `inventoryFull` (edge-triggered once when inventory reaches full capacity)
+- **Trigger**: `hungerBelow` (threshold `14`)
 - **Steps**:
-  1. `deposit` — deposit unlocked inventory items into the nearest visible container
-  2. `wait` — `1000 ms`
-  3. `notify` — `"Deposited full inventory into nearby container."`
+  1. `holdItem` — name `cooked_beef`
+  2. `rightClick` — action `hold`
+  3. `wait` — `1800 ms` (safe eating duration)
+  4. `rightClick` — action `release`
 
 ```json
 {
-  "name": "Inventory full -> deposit",
-  "enabled": true,
-  "targets": { "mode": "accounts", "accountIds": ["one"] },
+  "name": "Auto-eat when hunger < 14",
+  "enabled": false,
+  "targets": { "mode": "all" },
+  "trigger": { "type": "hungerBelow", "below": 14 },
+  "steps": [
+    { "type": "holdItem", "name": "cooked_beef" },
+    { "type": "rightClick", "action": "hold" },
+    { "type": "wait", "ms": 1800 },
+    { "type": "rightClick", "action": "release" }
+  ]
+}
+```
+
+### 4. Inventory full → deposit to chest
+
+When all inventory slots fill up, deposits items into the open chest container and sends a notification.
+
+- **Trigger**: `inventoryFull`
+- **Steps**:
+  1. `deposit` — slot `9`, count `64`
+  2. `notify` — desktop alert `"Inventory full: deposited items to chest."`
+
+```json
+{
+  "name": "Inventory full → deposit to chest",
+  "enabled": false,
+  "targets": { "mode": "all" },
   "trigger": { "type": "inventoryFull" },
   "steps": [
-    { "type": "deposit" },
+    { "type": "deposit", "select": { "slot": 9 }, "count": 64 },
+    { "type": "notify", "message": "Inventory full: deposited items to chest.", "desktop": true, "webhook": false }
+  ]
+}
+```
+
+### 5. Kick/disconnect → notify
+
+Sends a desktop notification alert whenever the account is disconnected or kicked.
+
+- **Trigger**: `disconnected`
+- **Steps**:
+  1. `notify` — desktop alert `"Account was disconnected or kicked from the server."`
+
+```json
+{
+  "name": "Kick/disconnect → notify",
+  "enabled": false,
+  "targets": { "mode": "all" },
+  "trigger": { "type": "disconnected" },
+  "steps": [
+    { "type": "notify", "message": "Account was disconnected or kicked from the server.", "desktop": true, "webhook": false }
+  ]
+}
+```
+
+### 6. Death → wait then /home
+
+On respawn after death, waits 2 seconds and runs `/home` to return to base.
+
+- **Trigger**: `death`
+- **Steps**:
+  1. `wait` — `2000 ms`
+  2. `chat` — `/home`
+
+```json
+{
+  "name": "Death → wait then /home",
+  "enabled": false,
+  "targets": { "mode": "all" },
+  "trigger": { "type": "death" },
+  "steps": [
+    { "type": "wait", "ms": 2000 },
+    { "type": "chat", "message": "/home" }
+  ]
+}
+```
+
+### 7. Chat trigger "{player} has invited you" → /tpaccept
+
+Detects an incoming teleport invite in chat and automatically responds with `/tpaccept`.
+
+- **Trigger**: `chat` (glob pattern `*{player} has invited you*`)
+- **Steps**:
+  1. `wait` — `1000 ms`
+  2. `chat` — `/tpaccept`
+
+```json
+{
+  "name": "Chat trigger \"{player} has invited you\" → /tpaccept",
+  "enabled": false,
+  "targets": { "mode": "all" },
+  "trigger": { "type": "chat", "match": "glob", "pattern": "*{player} has invited you*" },
+  "steps": [
     { "type": "wait", "ms": 1000 },
-    { "type": "notify", "message": "Deposited full inventory into nearby container." }
+    { "type": "chat", "message": "/tpaccept" }
+  ]
+}
+```
+
+### 8. Scheduled daily message
+
+Sends a scheduled message or command every day at a specific wall-clock time (12:00).
+
+- **Trigger**: `schedule` (time `12:00` in local timezone)
+- **Steps**:
+  1. `chat` — `"Daily check-in from AFK Desk"`
+
+```json
+{
+  "name": "Scheduled daily message",
+  "enabled": false,
+  "targets": { "mode": "all" },
+  "trigger": { "type": "schedule", "at": "12:00" },
+  "steps": [
+    { "type": "chat", "message": "Daily check-in from AFK Desk" }
+  ]
+}
+```
+
+### 9. Window opens "Shop" → click item by name then close
+
+When a server menu titled "Shop" opens, clicks the item named "diamond" and closes the menu.
+
+- **Trigger**: `windowOpen` (title `"Shop"`)
+- **Steps**:
+  1. `useGui` — item name `"diamond"`, left click
+  2. `wait` — `500 ms`
+  3. `closeGui`
+
+```json
+{
+  "name": "Window opens \"Shop\" → click item by name then close",
+  "enabled": false,
+  "targets": { "mode": "all" },
+  "trigger": { "type": "windowOpen", "title": "Shop" },
+  "steps": [
+    { "type": "useGui", "select": { "name": "diamond" }, "click": "left" },
+    { "type": "wait", "ms": 500 },
+    { "type": "closeGui" }
+  ]
+}
+```
+
+### 10. Repeat sell loop with /sell all every 5 min
+
+Sends the `/sell all` command every 5 minutes (300 seconds) on a timer loop.
+
+- **Trigger**: `timer` every `300s` (`±5s` jitter)
+- **Steps**:
+  1. `chat` — `/sell all`
+
+```json
+{
+  "name": "Repeat sell loop with /sell all every 5 min",
+  "enabled": false,
+  "targets": { "mode": "all" },
+  "trigger": { "type": "timer", "intervalMs": 300000, "jitterMs": 5000 },
+  "steps": [
+    { "type": "chat", "message": "/sell all" }
   ]
 }
 ```

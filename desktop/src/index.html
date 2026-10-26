@@ -25,10 +25,12 @@
         </div>
         <nav id="account-list" class="account-list" aria-label="Minecraft accounts"></nav>
 
-        <button id="add-account" class="button primary sidebar-action" type="button">
-          <span aria-hidden="true">＋</span> Add account
+        <button id="add-account" class="button primary sidebar-action" type="button" title="Add account" aria-label="Add account">
+          <span class="action-icon" aria-hidden="true">＋</span> <span class="action-text">Add account</span>
         </button>
-        <button id="open-settings" class="button secondary sidebar-action browser-action" type="button">Settings</button>
+        <button id="open-settings" class="button secondary sidebar-action browser-action" type="button" title="Settings" aria-label="Settings">
+          <span class="action-icon" aria-hidden="true">⚙</span> <span class="action-text">Settings</span>
+        </button>
         <p class="privacy-note">Credentials stay in Microsoft’s sign-in flow. AFK Desk never stores your password.</p>
         <div class="sidebar-version">AFK Desk <span id="app-version">v…</span> <span class="beta-badge">BETA</span></div>
       </aside>
@@ -528,7 +530,8 @@
               <input id="macro-library-search" type="search" placeholder="Search macros…" aria-label="Search macros" />
               <div class="macro-library-buttons">
                 <button id="macro-new-btn" class="button primary compact-btn" type="button">＋ New</button>
-                <select id="macro-template-picker" class="compact-select" aria-label="Create from starter template">
+                <button id="macro-templates-btn" class="button secondary compact-btn" type="button" title="Browse starter templates">Templates…</button>
+                <select id="macro-template-picker" class="compact-select sr-only" aria-label="Create from starter template">
                   <option value="">Templates…</option>
                 </select>
                 <button id="macro-duplicate-btn" class="button secondary compact-btn" type="button" title="Duplicate selected macro (Ctrl+D)">Duplicate</button>
@@ -693,6 +696,20 @@
             </div>
           </main>
         </div>
+      </div>
+    </dialog>
+
+    <dialog id="macro-templates-dialog" class="wide-dialog macro-templates-dialog" aria-labelledby="macro-templates-dialog-title">
+      <div class="beta-dialog-content">
+        <header class="dialog-header">
+          <div>
+            <div class="eyebrow">Starter library</div>
+            <h2 id="macro-templates-dialog-title">Macro templates</h2>
+          </div>
+          <button id="close-macro-templates" class="icon-button" type="button" aria-label="Close templates">×</button>
+        </header>
+        <p class="dialog-copy">Pick a pre-configured workflow template. Templates are inserted in a <strong>disabled</strong> state so you can review and customize settings before enabling.</p>
+        <div id="macro-templates-grid" class="macro-templates-grid"></div>
       </div>
     </dialog>
 

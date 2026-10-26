@@ -331,3 +331,190 @@ test('every IPC channel the preload invokes is registered by main.cjs, and notif
     assert.ok(literal || viaConstant.has(channel), `main.cjs registers ${channel}`)
   }
 })
+
+test('remote access settings section is fully configurable in desktop mode and read-only in browser mode', async () => {
+  const { mountRemoteAccessSettingsUi } = require('../server/browser-bridge.js')
+
+  function makeMockDoc() {
+    function makeElement(tag) {
+      return {
+        tag, id: '', className: '', textContent: '', value: '', type: '', checked: false,
+        readOnly: false, disabled: false, children: [], attributes: {}, listeners: {},
+        append(...nodes) { this.children.push(...nodes) },
+        insertBefore(node) { this.children.unshift(node) },
+        replaceChildren(...nodes) { this.children = [...nodes] },
+        setAttribute(k, v) { this.attributes[k] = v },
+        getAttribute(k) { return this.attributes[k] },
+        addEventListener(ev, fn) { this.listeners[ev] = fn },
+        querySelector(sel) {
+          if (sel === '.settings-body') return dialog.body
+          if (sel === '.settings-about') return dialog.about
+          return null
+        }
+      }
+    }
+    const openBtn = makeElement('button')
+    openBtn.id = 'open-settings'
+    const dialog = makeElement('dialog')
+    dialog.id = 'settings-dialog'
+    const body = makeElement('div')
+    body.className = 'settings-body'
+    const about = makeElement('div')
+    about.className = 'settings-about'
+    body.append(about)
+    dialog.body = body
+    dialog.about = about
+    const elementsById = { 'open-settings': openBtn, 'settings-dialog': dialog }
+    return {
+      doc: { getElementById: (id) => elementsById[id] || null, createElement: makeElement },
+      openBtn,
+      body
+    }
+  }
+
+  function findById(node, id) {
+    if (node.id === id) return node
+    for (const child of node.children || []) {
+      const found = findById(child, id)
+      if (found) return found
+    }
+    return null
+  }
+
+  // 1. Desktop mode: interactive and configurable
+  {
+    const { doc, openBtn, body } = makeMockDoc()
+    const savedCalls = []
+    globalThis.afkDesk = {
+      isBrowser: false,
+      getSettings: async () => ({
+        uiScale: 100,
+        remoteAccess: {
+          enabled: true,
+          bind: '100.85.14.94',
+          port: 8787,
+          allowedHosts: ['myhost.tailscale.ts.net'],
+          running: true,
+          interfaces: [
+            { name: 'all', address: '0.0.0.0', label: 'All interfaces (0.0.0.0)' },
+            { name: 'tailscale0', address: '100.85.14.94', label: '100.85.14.94 (tailscale0)' }
+          ],
+          tokens: [{ id: 't1', name: 'Dashboard', scope: 'admin', tokenHint: '••••abcd' }]
+        }
+      }),
+      saveSettings: async (payload) => {
+        savedCalls.push(payload)
+        return payload
+      }
+    }
+
+    mountRemoteAccessSettingsUi(doc, { isDesktop: true })
+    await openBtn.listeners['click']?.()
+
+    const section = body.children.find((c) => c.id === 'remote-access-settings-section')
+    assert.ok(section, 'Desktop: remote-access-settings-section must exist')
+    const note = section.children.find((c) => c.id === 'remote-access-desktop-only-note')
+    assert.equal(note, undefined, 'Desktop: desktop-only note must not be rendered')
+
+    const enabled = findById(section, 'remote-access-enabled')
+    assert.ok(enabled, 'Desktop: #remote-access-enabled checkbox must exist')
+    assert.equal(enabled.disabled, false)
+
+    const bind = findById(section, 'remote-access-bind')
+    assert.ok(bind, 'Desktop: #remote-access-bind select must exist')
+    assert.equal(bind.disabled, false)
+    const bindOptions = bind.children.map(o => o.value)
+    assert.ok(bindOptions.includes('100.85.14.94'), 'Desktop: detected Tailscale interface must be available in bind dropdown')
+
+    const applyBtn = findById(section, 'remote-access-apply')
+    assert.ok(applyBtn, 'Desktop: apply button must exist')
+
+    const tokenCreateBtn = findById(section, 'remote-access-token-create')
+    assert.ok(tokenCreateBtn, 'Desktop: token create button must exist')
+  }
+
+  // 2. Browser mode: read-only
+  {
+    const { doc, openBtn, body } = makeMockDoc()
+    globalThis.afkDesk = {
+      isBrowser: true,
+      getSettings: async () => ({
+        uiScale: 100,
+        remoteAccess: {
+          bind: '127.0.0.1',
+          port: 8787,
+          running: true,
+          tokens: []
+        }
+      })
+    }
+
+    mountRemoteAccessSettingsUi(doc, { isDesktop: false })
+    await openBtn.listeners['click']?.()
+
+    const section = body.children.find((c) => c.id === 'remote-access-settings-section')
+    assert.ok(section, 'Browser: remote-access-settings-section must exist')
+    const note = section.children.find((c) => c.id === 'remote-access-desktop-only-note')
+    assert.ok(note, 'Browser: desktop-only note must exist')
+    assert.match(note.textContent, /desktop app/i)
+
+    const applyBtn = findById(section, 'remote-access-apply')
+    assert.equal(applyBtn, null, 'Browser: apply button must not exist')
+  }
+})
+
+test('collapsed sidebar has narrow 56px icon rail styles and server window titles strip PUA glyphs', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', 'src', 'styles.css'), 'utf8')
+  const renderer = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer.js'), 'utf8')
+
+  // Sidebar collapse narrow rail 56px
+  assert.match(css, /\.app-shell\.sidebar-collapsed[^{]*\{[^}]*grid-template-columns:\s*56px minmax\(0,\s*1fr\)/)
+  assert.match(css, /\.sidebar-collapsed (?:[^{]* )?\.account-avatar/)
+
+  // Server menu title PUA glyph filter
+  assert.match(renderer, /formatServerWindowTitle/)
+  assert.match(renderer, /\\uE000-\\uF8FF/)
+  assert.match(renderer, /'Server menu'/)
+
+  // Server window container art z-index
+  assert.match(css, /\.server-window-stage\.has-container-art \.server-window-art\s*\{[^}]*z-index:\s*2/s)
+  assert.match(css, /\.server-window-stage\.has-container-art \.server-window-art\s*\{[^}]*pointer-events:\s*none/s)
+})
+
+test('macro library starter templates include at least 10 valid, safe, disabled examples and a template picker dialog', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'src', 'index.html'), 'utf8')
+  const { TEMPLATES } = require('../src/macro-editor.js')
+  const { validateMacro } = require('../electron/macro/model.cjs')
+
+  assert.match(html, /id="macro-templates-btn"/)
+  assert.match(html, /id="macro-templates-dialog"/)
+  assert.match(html, /id="macro-templates-grid"/)
+
+  const templateKeys = Object.keys(TEMPLATES)
+  assert.ok(templateKeys.length >= 10, 'Expected at least 10 starter templates, got ' + templateKeys.length)
+  const templates = templateKeys.map(k => TEMPLATES[k]())
+
+  const requiredTitles = [
+    'Join → /afk',
+    'Anti-AFK look-around every 60 s',
+    'Auto-eat when hunger < 14',
+    'Inventory full → deposit to chest',
+    'Kick/disconnect → notify',
+    'Death → wait then /home',
+    'Chat trigger "{player} has invited you" → /tpaccept',
+    'Scheduled daily message',
+    'Window opens "Shop" → click item by name then close',
+    'Repeat sell loop with /sell all every 5 min'
+  ]
+  for (const title of requiredTitles) {
+    const found = templates.some(t => t.name.toLowerCase().includes(title.toLowerCase().slice(0, 8)))
+    assert.ok(found, 'Expected template matching ' + title)
+  }
+
+  for (const t of templates) {
+    assert.equal(t.enabled, false, 'Template ' + t.name + ' must be disabled by default')
+    const errors = validateMacro(t)
+    assert.deepEqual(errors, [], 'Template ' + t.name + ' validation failed: ' + JSON.stringify(errors))
+  }
+})
+
