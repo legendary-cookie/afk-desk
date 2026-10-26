@@ -2,6 +2,7 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const { EventEmitter } = require('node:events')
 const { BotManager } = require('../bot-manager.cjs')
+const { enableTimers, mockTickSkip } = require('./compat.cjs')
 
 function fixture(t) {
   const bots = []
@@ -46,8 +47,8 @@ test('unsafe profile identifiers are rejected before bot creation', (t) => {
   assert.equal(bots.length, 0)
 })
 
-test('short-lived spawns retain backoff until a session stays online for 60 seconds', (t) => {
-  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] })
+test('short-lived spawns retain backoff until a session stays online for 60 seconds', { skip: mockTickSkip }, (t) => {
+  enableTimers(t, ['setTimeout', 'setInterval'])
   const { manager, bots, account, events } = fixture(t)
   account.autoReconnect = true
   account.autoReconnectMaxAttempts = 2
@@ -64,8 +65,8 @@ test('short-lived spawns retain backoff until a session stays online for 60 seco
   assert.match(events.at(-1)[2].detail, /Retrying in 5s/)
 })
 
-test('a stalled connection times out and retries even when quit does not emit end', (t) => {
-  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] })
+test('a stalled connection times out and retries even when quit does not emit end', { skip: mockTickSkip }, (t) => {
+  enableTimers(t, ['setTimeout', 'setInterval'])
   const { manager, bots, account, events } = fixture(t)
   account.autoReconnect = true
   manager.connect(account)
@@ -75,8 +76,8 @@ test('a stalled connection times out and retries even when quit does not emit en
   assert.equal(bots.length, 2)
 })
 
-test('repeated brief spawns respect the reconnect attempt limit', (t) => {
-  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] })
+test('repeated brief spawns respect the reconnect attempt limit', { skip: mockTickSkip }, (t) => {
+  enableTimers(t, ['setTimeout', 'setInterval'])
   const { manager, bots, account, events } = fixture(t)
   account.autoReconnect = true
   account.autoReconnectMaxAttempts = 1
@@ -90,8 +91,8 @@ test('repeated brief spawns respect the reconnect attempt limit', (t) => {
   assert.equal(bots.length, 2)
 })
 
-test('device login gets a bounded grace period and spawn cancels the watchdog', (t) => {
-  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] })
+test('device login gets a bounded grace period and spawn cancels the watchdog', { skip: mockTickSkip }, (t) => {
+  enableTimers(t, ['setTimeout', 'setInterval'])
   const { manager, bots, account, events, options } = fixture(t)
   manager.connect(account)
   options[0].onMsaCode({ user_code: 'TEST' })

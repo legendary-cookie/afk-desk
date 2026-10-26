@@ -2,6 +2,7 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const { EventEmitter } = require('node:events')
 const { BotManager, findNearestChest, parseInteractiveChat, extractText, installConfigurationPacketGuard } = require('../bot-manager.cjs')
+const { withResolvers } = require('./compat.cjs')
 
 class FakeBot extends EventEmitter {
   constructor() {
@@ -179,9 +180,9 @@ test('mobile loads resource-pack art and exposes clickable server menus', async 
 
 test('mobile auto-deposit stops queued stacks immediately when toggled off', async (t) => {
   const bot = new FakeBot()
-  const firstStarted = Promise.withResolvers()
-  const releaseFirst = Promise.withResolvers()
-  const closed = Promise.withResolvers()
+  const firstStarted = withResolvers()
+  const releaseFirst = withResolvers()
+  const closed = withResolvers()
   const deposits = []
   bot.inventory.items = () => [
     { slot: 36, type: 4, metadata: 0, nbt: null, count: 64 },
