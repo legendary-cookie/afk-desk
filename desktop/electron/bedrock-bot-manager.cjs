@@ -47,6 +47,7 @@ class BedrockBotManager {
       session.connectTimer = null
       session.resetTimer = this.timers.setTimeout(() => { state.attempts = 0 }, bound(account.reconnectResetDelay, 5, 3600, 60) * 1000)
       this.status(account.id, 'online', `Bedrock online as ${client.profile?.name || client.username || account.label}`)
+      this.emit('spawn', account.id, { dimension: 'bedrock', at: Date.now() })
       this.emit('identity', account.id, { username: client.profile?.name || client.username || account.label, uuid: client.profile?.id || '', edition: 'bedrock', at: Date.now() })
       this.emit('version', account.id, { version: client.version || account.version || 'auto', stable: true, edition: 'bedrock', at: Date.now() })
       this.emitTelemetry(account.id)
