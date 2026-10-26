@@ -150,6 +150,10 @@ function registerIpc() {
     }
     if (existing && existing.environmentalMovement !== saved.environmentalMovement) bots.setEnvironmentalMovement(saved.id, saved.environmentalMovement)
     if (existing && antiAfkChanged(existing, saved)) bots.setAntiAfk(saved.id, saved)
+    if (existing) {
+      // Refresh the config retry/reconnect callbacks use; never fail a completed save over it.
+      try { bots.updateAccountConfig(retryConfig(saved)) } catch (error) { diagnosticLog?.write({ event: 'error', at: Date.now(), accountId: saved.id, message: `Could not refresh live config: ${String(error?.message || error).slice(0, 200)}` }) }
+    }
     return publicAccount(saved)
   })
   handle('accounts:delete', (_event, id) => {
@@ -203,20 +207,14 @@ function registerIpc() {
     return publicAccount(updated)
   })
   handle('bot:inventory-move', async (_event, { id, sourceSlot, destinationSlot }) => {
-    const account = store.list().find((item) => item.id === id)
-    if (!account) throw new Error('Account not found.')
+    if (!store.list().some((item) => item.id === id)) throw new Error('Account not found.')
     const result = await bots.moveInventorySlot(id, sourceSlot, destinationSlot)
-    const updated = store.save(relocateLockedSlots(account, result.sourceSlot, result.targetSlot))
-    bots.setItemLocks(id, updated.lockedInventorySlots)
-    return { account: publicAccount(updated), ...result }
+    return { account: applyLockRelocation(id, result), ...result }
   })
   handle('bot:equip-item', async (_event, { id, slot, destination }) => {
-    const account = store.list().find((item) => item.id === id)
-    if (!account) throw new Error('Account not found.')
+    if (!store.list().some((item) => item.id === id)) throw new Error('Account not found.')
     const result = await bots.equipInventoryItem(id, slot, destination)
-    const updated = store.save(relocateLockedSlots(account, result.sourceSlot, result.targetSlot))
-    bots.setItemLocks(id, updated.lockedInventorySlots)
-    return { account: publicAccount(updated), ...result }
+    return { account: applyLockRelocation(id, result), ...result }
   })
   handle('bot:window-click', (_event, { id, slot }) => bots.clickWindowSlot(id, slot))
   handle('bot:window-close', (_event, id) => bots.closeWindow(id))
@@ -342,7 +340,6 @@ function emitBotEvent(type, id, payload) {
     accountForEvent = store?.list().find((item) => item.id === id)
     storageErrorShown = false
   } catch (error) { reportRuntimeStorageError(error) }
-  if (eventStore && (type !== 'telemetry' || telemetryChanged(getRuntime(id).telemetry, payload))) eventStore.append(id, { type, ...payload })
   if (accountForEvent) alerts?.handle(accountForEvent, type, payload)
   if (type === 'status' && payload.status === 'online') smartProxies?.report(assignedProxies.get(id), true)
   if (type === 'status' && payload.status === 'offline') {
@@ -363,6 +360,7 @@ function emitBotEvent(type, id, payload) {
     console.log(`[movement-error] ${JSON.stringify({ accountId: id, message: String(payload.message || '').slice(0, 240) })}`)
   }
   const current = getRuntime(id)
+  const persistEvent = eventStore && (type !== 'telemetry' || telemetryChanged(current.telemetry, payload))
   if (type === 'status') runtime.set(id, { ...current, status: payload.status, detail: payload.detail })
   if (type === 'log') runtime.set(id, { ...current, logs: [...current.logs.slice(-499), payload] })
   if (type === 'telemetry') runtime.set(id, { ...current, telemetry: payload })
@@ -387,9 +385,27 @@ function emitBotEvent(type, id, payload) {
     }
   }
   sendToWindow(mainWindow, 'bot:event', { type, id, payload })
+  if (persistEvent) persistEventSafely(id, type, payload)
   macroEngine?.handleEvent(id, type, payload).catch((error) => {
     if (type !== 'macro') emitBotEvent('macro', id, { status: 'failed', error: String(error?.message || error).slice(0, 200), at: Date.now() })
   })
+}
+
+// History persistence is best effort: a failing disk must not block live delivery or throw into bot callbacks.
+const eventStorageWarnings = new Map()
+function persistEventSafely(id, type, payload) {
+  try { eventStore.append(id, { type, ...payload }) }
+  catch (error) {
+    try {
+      const code = String(error?.code || 'UNKNOWN').slice(0, 32)
+      const now = Date.now()
+      const last = eventStorageWarnings.get(code)
+      if (last !== undefined && now - last < 60_000) return
+      eventStorageWarnings.set(code, now)
+      // Straight to the renderer: routing this through emitBotEvent would re-enter the failing store.
+      sendToWindow(mainWindow, 'bot:event', { type: 'storage-warning', id, payload: { code, message: 'Event history could not be saved.', at: now } })
+    } catch {}
+  }
 }
 
 function reportRuntimeStorageError(error) {
@@ -509,6 +525,21 @@ function validateAccount(input, existing) {
 
 function normalizeLockedSlots(slots) {
   return [...new Set((Array.isArray(slots) ? slots : []).map(Number).filter((slot) => Number.isInteger(slot) && slot >= 0 && slot <= 255))].sort((a, b) => a - b).slice(0, 46)
+}
+
+// Re-reads the current record after the server operation so concurrent edits survive and deleted profiles stay deleted.
+function applyLockRelocation(id, result) {
+  const updated = store.updateAccount(id, (current) => relocateLockedSlots(current, result.sourceSlot, result.targetSlot))
+  if (!updated) throw new Error('Account not found.')
+  bots.setItemLocks(id, updated.lockedInventorySlots)
+  return publicAccount(updated)
+}
+
+function retryConfig(saved) {
+  const resolved = withProxyPassword(saved)
+  // Smart-proxy profiles keep the proxy already assigned to the running session.
+  if (saved.proxyMode === 'smart' && assignedProxies.get(saved.id)) return { ...resolved, proxy: assignedProxies.get(saved.id) }
+  return resolved
 }
 
 function relocateLockedSlots(account, sourceSlot, targetSlot) {

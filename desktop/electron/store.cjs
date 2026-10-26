@@ -56,6 +56,18 @@ class AccountStore {
     return account
   }
 
+  // Applies mutator to the record as it exists now; returns null (and writes nothing) if it was deleted.
+  updateAccount(id, mutator) {
+    const accounts = this.list()
+    const index = accounts.findIndex((item) => item.id === id)
+    if (index === -1) return null
+    const updated = mutator(accounts[index])
+    if (!isObject(updated) || updated.id !== id) throw new TypeError('Account updates must keep the same ID')
+    accounts[index] = updated
+    this.write(accounts)
+    return updated
+  }
+
   delete(id) {
     this.write(this.list().filter((account) => account.id !== id))
   }

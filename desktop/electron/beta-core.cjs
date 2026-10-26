@@ -80,6 +80,8 @@ class PersistentEventStore {
   }
 
   append(profileId, event) {
+    // Microsoft device-code sign-in events are live-only; they must never reach persistent history.
+    if (event?.type === 'login-code') return
     const file = this.fileFor(profileId)
     fs.mkdirSync(this.directory, { recursive: true })
     rotate(file, this.maxBytes)
@@ -307,7 +309,7 @@ function rotate(file, maxBytes) {
 }
 
 function redact(value, key = '') {
-  if (/password|token|secret|authorization/i.test(key)) return '[redacted]'
+  if (/password|token|secret|authorization/i.test(key) || /^(?:code|user_?code|device_?code)$/i.test(key)) return '[redacted]'
   if (typeof value === 'string') return value.replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[redacted-email]').slice(0, 4000)
   if (Array.isArray(value)) return value.slice(0, 512).map((entry) => redact(entry))
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).slice(0, 512).map(([child, entry]) => [child, redact(entry, child)]))
