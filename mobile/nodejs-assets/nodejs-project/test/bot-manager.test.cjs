@@ -141,6 +141,28 @@ test('mobile quiesces gameplay packets during modern server configuration', () =
   assert.deepEqual(writes.at(-1), ['position', { x: 1, y: 64, z: 2 }])
 })
 
+test('mobile accepts a policy-blocked pack without loading it; real download failures still decline', async (t) => {
+  const { PACK_POLICY_ERROR } = require('../resource-pack.cjs')
+  const run = async (id, loadError) => {
+    const bot = new FakeBot()
+    const writes = []
+    bot._client.write = (name, payload) => writes.push([name, payload])
+    bot.acceptResourcePack = () => { bot.accepted = true }
+    const manager = new BotManager({
+      profilesPath: 'profiles', emit: () => {}, createBot: () => bot,
+      resourcePackLoader: { load: async () => { throw loadError } }
+    })
+    t.after(() => manager.disconnect(id))
+    manager.connect({ id, username: 'user@example.com', host: 'localhost', antiAfk: false, autoReconnect: false })
+    bot.emit('resourcePack', '0123456789012345678901234567890123456789', 'http://10.0.0.5/a.zip')
+    await new Promise((resolve) => setImmediate(resolve))
+    return { accepted: bot.accepted === true, declined: writes.some(([name]) => name === 'resource_pack_receive') }
+  }
+  const policy = Object.assign(new Error('Resource pack host resolves to a private or non-routable address.'), { code: PACK_POLICY_ERROR })
+  assert.deepEqual(await run('policy', policy), { accepted: true, declined: false })
+  assert.deepEqual(await run('broken', new Error('Resource pack download failed with HTTP 500.')), { accepted: false, declined: true })
+})
+
 test('mobile loads resource-pack art and exposes clickable server menus', async (t) => {
   const events = []
   const bot = new FakeBot()

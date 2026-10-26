@@ -1735,16 +1735,43 @@ test('resource packs are not downloaded directly when the account uses a proxy',
   blocked.bot.emit('resourcePack', '0123456789012345678901234567890123456789', 'https://packs.example/a.zip')
   await new Promise((resolve) => setImmediate(resolve))
   assert.equal(blocked.getLoaded(), undefined)
-  assert.equal(blocked.bot.accepted, undefined)
+  // Not downloaded, but still accepted: declining makes many servers kick the account.
+  assert.equal(blocked.bot.accepted, true)
   assert.match(blocked.events.filter(([type]) => type === 'log').at(-1)[2].message, /proxy/i)
   assert.equal(blocked.diagnostics.some((entry) => entry.event === 'resource_pack_skipped_proxy'), true)
-  assert.equal(blocked.bot.writes.some(([name]) => name === 'resource_pack_receive'), true)
+  assert.equal(blocked.bot.writes.some(([name]) => name === 'resource_pack_receive'), false)
 
   const allowed = packHarness({ proxy, allowDirectPackDownload: true })
   allowed.bot.emit('resourcePack', '0123456789012345678901234567890123456789', 'https://packs.example/a.zip')
   await new Promise((resolve) => setImmediate(resolve))
   assert.equal(allowed.getLoaded()[0], 'https://packs.example/a.zip')
   assert.equal(allowed.bot.accepted, true)
+})
+
+test('a pack blocked by destination policy is accepted without loading; real download failures still decline', async () => {
+  const { HostPolicyError } = require('../electron/net-policy.cjs')
+  const run = async (loadError) => {
+    const bot = new FakeBot()
+    const diagnostics = []
+    bot.acceptResourcePack = () => { bot.accepted = true }
+    const manager = new BotManager({
+      profilesPath: 'profiles', emit: () => {}, diagnose: (entry) => diagnostics.push(entry), createBot: () => bot,
+      resourcePackLoader: { load: async () => { throw loadError } }
+    })
+    manager.connect({ id: 'pack-policy', username: 'user@example.com', host: 'localhost', antiAfk: false, autoReconnect: false })
+    bot.emit('resourcePack', '0123456789012345678901234567890123456789', 'http://10.0.0.5/a.zip')
+    await new Promise((resolve) => setImmediate(resolve))
+    return { bot, diagnostics, declined: bot.writes.some(([name]) => name === 'resource_pack_receive') }
+  }
+
+  const blocked = await run(new HostPolicyError('Resource pack host is not allowed (private or loopback address).'))
+  assert.equal(blocked.bot.accepted, true)
+  assert.equal(blocked.declined, false)
+  assert.equal(blocked.diagnostics.some((entry) => entry.event === 'resource_pack_skipped_policy'), true)
+
+  const broken = await run(new Error('Resource pack download failed with HTTP 500.'))
+  assert.equal(broken.bot.accepted, undefined)
+  assert.equal(broken.declined, true)
 })
 
 test('allowPrivatePackHosts from the account config is passed to the pack loader', async () => {

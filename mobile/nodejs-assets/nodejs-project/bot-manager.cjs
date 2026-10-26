@@ -2,7 +2,7 @@ const path = require('node:path')
 const { profilePath } = require('./profile-path.cjs')
 const { applyProtocolFixes } = require('./protocol-fixes.cjs')
 const { createProxyConnect } = require('./proxy-connect.cjs')
-const { ResourcePackLoader, normalizePackEvent } = require('./resource-pack.cjs')
+const { ResourcePackLoader, normalizePackEvent, PACK_POLICY_ERROR } = require('./resource-pack.cjs')
 const { normalizeVersionSelection } = require('./version-support.cjs')
 const { installMovementPacketCompatibility, installModernPlayerInputCompatibility } = require('./movement-compatibility.cjs')
 applyProtocolFixes()
@@ -194,6 +194,13 @@ class BotManager {
         this.emit('log', account.id, { kind: 'system', message: 'Server resource pack loaded. Custom menu art is enabled.', at: Date.now() })
       } catch (error) {
         if (this.sessions.get(account.id) !== session) return
+        if (error?.code === PACK_POLICY_ERROR) {
+          // Blocked by our own destination policy: accept without loading so a
+          // server that requires its pack does not kick the account.
+          bot.acceptResourcePack?.()
+          this.emit('log', account.id, { kind: 'system', message: `Server resource pack not downloaded: ${String(error.message).slice(0, 160)} The pack was accepted so the server will not kick; custom menu art is off.`, at: Date.now() })
+          return
+        }
         rejectResourcePack(bot, first, second, pack.hash)
         this.emit('log', account.id, { kind: 'error', message: `Server resource pack failed: ${String(error?.message || error).slice(0, 180)}`, at: Date.now() })
       }

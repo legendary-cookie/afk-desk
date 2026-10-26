@@ -4,6 +4,7 @@ const { profilePath, validateProfileId } = require('./profile-path.cjs')
 const { applyProtocolFixes } = require('./protocol-fixes.cjs')
 const { createProxyConnect } = require('./proxy-connect.cjs')
 const { ResourcePackLoader, normalizePackEvent } = require('./resource-pack.cjs')
+const { HostPolicyError } = require('./net-policy.cjs')
 const {
   CONFIGURATION_PACKET_NAMES,
   installMovementPacketCompatibility,
@@ -302,12 +303,14 @@ class BotManager {
       const host = safeUrlHost(pack.url)
       // Pack downloads use the global fetch, which cannot be routed through the account's
       // SOCKS/HTTP proxy. Fetching directly would reveal the user's real IP to a
-      // server-chosen host, so refuse unless the account explicitly opts in.
+      // server-chosen host, so skip the download unless the account opts in.
+      // The bot never needs the pack to play (it only supplies menu artwork), so
+      // still answer "accepted": declining makes many servers kick the account.
       if (session.account.proxy?.enabled && session.account.allowDirectPackDownload !== true) {
-        const message = 'Server resource pack skipped: this account uses a proxy and pack downloads would bypass it. Enable "allow direct pack download" for this account to load packs.'
-        this.emit('log', account.id, { kind: 'error', message, at: Date.now() })
+        const message = 'Server resource pack not downloaded: this account uses a proxy and the download would bypass it. The pack was accepted so the server will not kick; custom menu art is off. Enable "allow direct pack download" for this account to load it.'
+        this.emit('log', account.id, { kind: 'system', message, at: Date.now() })
         this.diagnose({ event: 'resource_pack_skipped_proxy', accountId: account.id, host })
-        rejectResourcePack(bot, first, second, pack.hash)
+        bot.acceptResourcePack?.()
         return
       }
       this.emit('log', account.id, { kind: 'system', message: `Loading server resource pack from ${host}…`, at: Date.now() })
@@ -320,6 +323,15 @@ class BotManager {
         this.emit('log', account.id, { kind: 'system', message: 'Server resource pack loaded. Custom menu art is enabled.', at: Date.now() })
         this.diagnose({ event: 'resource_pack_loaded', accountId: account.id, source: session.resourcePack.source, sha1: session.resourcePack.sha1 })
       } catch (error) {
+        if (error instanceof HostPolicyError) {
+          // Blocked by our own destination policy (e.g. a private/loopback host):
+          // treat like the proxy case and accept without loading so the server
+          // does not kick the account.
+          bot.acceptResourcePack?.()
+          this.emit('log', account.id, { kind: 'system', message: `Server resource pack not downloaded: ${String(error.message).slice(0, 160)} The pack was accepted so the server will not kick; custom menu art is off.`, at: Date.now() })
+          this.diagnose({ event: 'resource_pack_skipped_policy', accountId: account.id, host, message: String(error.message).slice(0, 180) })
+          return
+        }
         rejectResourcePack(bot, first, second, pack.hash)
         this.emit('log', account.id, { kind: 'error', message: `Server resource pack failed: ${String(error?.message || error).slice(0, 180)}`, at: Date.now() })
         this.diagnose({ event: 'resource_pack_failed', accountId: account.id, host, message: String(error?.message || error).slice(0, 180) })

@@ -63,11 +63,11 @@ class ResourcePackLoader {
         await validatePackDestination(currentUrl, allowPrivatePackHosts, this.lookup)
         response = await Promise.race([Promise.resolve().then(() => this.fetchImpl(currentUrl, { signal: controller.signal, redirect: 'manual' })), aborted])
         if (![301, 302, 303, 307, 308].includes(response?.status)) break
-        if (redirects >= 5) throw new Error('Resource pack has too many redirects.')
+        if (redirects >= 5) throw policyError('Resource pack has too many redirects.')
         const location = response.headers?.get?.('location')
-        if (!location) throw new Error('Resource pack redirect is missing its destination.')
+        if (!location) throw policyError('Resource pack redirect is missing its destination.')
         const nextUrl = new URL(location, currentUrl)
-        if (!['http:', 'https:'].includes(nextUrl.protocol)) throw new Error('Resource pack URL must use HTTP or HTTPS.')
+        if (!['http:', 'https:'].includes(nextUrl.protocol)) throw policyError('Resource pack URL must use HTTP or HTTPS.')
         try { Promise.resolve(response.body?.cancel?.()).catch(() => {}) } catch {}
         currentUrl = nextUrl
       }
@@ -140,12 +140,12 @@ function boundedLimit(value, maximum) {
 }
 
 async function validatePackDestination(url, allowPrivatePackHosts, lookup) {
-  if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Resource pack URL must use HTTP or HTTPS.')
+  if (!['http:', 'https:'].includes(url.protocol)) throw policyError('Resource pack URL must use HTTP or HTTPS.')
   if (allowPrivatePackHosts === true) return
   const hostname = url.hostname.replace(/^\[|\]$/g, '').toLowerCase()
   const addresses = net.isIP(hostname) ? [{ address: hostname }] : await lookup(hostname, { all: true, verbatim: true })
-  if (!Array.isArray(addresses) || !addresses.length) throw new Error('Resource pack host did not resolve to an address.')
-  if (addresses.some(({ address }) => isRestrictedAddress(address))) throw new Error('Resource pack host resolves to a private or non-routable address.')
+  if (!Array.isArray(addresses) || !addresses.length) throw policyError('Resource pack host did not resolve to an address.')
+  if (addresses.some(({ address }) => isRestrictedAddress(address))) throw policyError('Resource pack host resolves to a private or non-routable address.')
 }
 
 function isRestrictedAddress(address) {
@@ -504,4 +504,14 @@ function pngDimensions(buffer) {
   return { width, height }
 }
 
-module.exports = { ResourcePackLoader, ParsedResourcePack, parseResourcePack, normalizePackEvent, itemComponents, resolveItemDefinition, flattenComponentText }
+// Errors from our own destination policy (not network/server failures). The
+// bot manager accepts such packs without loading them, so servers that
+// require a pack do not kick the account.
+const PACK_POLICY_ERROR = 'PACK_HOST_POLICY'
+function policyError(message) {
+  const error = new Error(message)
+  error.code = PACK_POLICY_ERROR
+  return error
+}
+
+module.exports = { PACK_POLICY_ERROR, ResourcePackLoader, ParsedResourcePack, parseResourcePack, normalizePackEvent, itemComponents, resolveItemDefinition, flattenComponentText }
