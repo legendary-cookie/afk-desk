@@ -1,0 +1,758 @@
+'use strict'
+const test = require('node:test')
+const assert = require('node:assert/strict')
+const { EventEmitter } = require('node:events')
+const { AuthManager, IDLE_TIMEOUT_MS, ABSOLUTE_TIMEOUT_MS, MAX_TRACKERS, TRACKER_TTL_MS, MAX_SESSIONS, MAX_SESSIONS_PER_USER, MAX_TOKENS } = require('../server/auth.cjs')
+const { createApiRouter, recordAudit } = require('../server/api-routes.cjs')
+const { createRemoteServer, buildAllowedOrigins, isOriginHeaderAllowed } = require('../server/http-server.cjs')
+const { createCommandLayer } = require('../core/commands.cjs')
+const { AppCore } = require('../core/app-core.cjs')
+const { CHANNEL_SPECS } = require('../server/api-routes.cjs')
+const { validateInvoke } = require('../server/remote-policy.cjs')
+const { createBrowserBridge } = require('../server/browser-bridge.js')
+class MemoryAuth extends AuthManager {
+  _load() { return { admin: null, tokens: [], remoteConfig: null } }
+  _save() {}
+}
+const PASSWORD = 'StrongOriginal!2026'
+function fixture(t, { now = Date.now } = {}) {
+  const auth = new MemoryAuth({ dataDir: '.', now })
+  const buckets = new Map(), calls = []
+  const accounts = [{ id: 'a1', username: 'secret@example.com', email: 'secret@example.com', profileName: 'Builder', host: 'mc.test', edition: 'java', proxy: { password: 'fake-proxy-password' } }]
+  const core = {
+    userDataPath: '.', emitToUi() {},
+    store: { list: () => accounts },
+    notifySettings: { getDecrypted: () => [{ webhookUrl: 'https://discord.com/api/webhooks/123/fake-secret', botToken: '123456789:FAKE_TOKEN_12345678901234567890' }] },
+    eventStore: { append(id, entry) { buckets.set(id, [...(buckets.get(id) || []), entry]) } },
+    _appendAudit: AppCore.prototype._appendAudit,
+    accounts: { list: () => accounts, save: x => { calls.push(['save', x]); return x }, delete: x => calls.push(['delete', x]), duplicate: x => { calls.push(['duplicate', x]); return accounts[0] }, reorder: x => { calls.push(['reorder', x]); return accounts } },
+    logs: { list: arg => buckets.get(typeof arg === 'string' ? arg : arg.id) || [], clear: () => {} },
+    audit: { recent: () => buckets.get('audit') || [] },
+    status: () => ({ status: 'online' }),
+    settings: { get: () => ({ uiScale: 100 }), save: x => { calls.push(['settings', x]); return x } },
+    macros: { list: () => ({ macros: [{ id: 'm1', name: 'Macro' }] }), run: x => calls.push(['run', x]), stop: x => calls.push(['stop', x]) },
+    bots: { connect: x => calls.push(['connect', x]), disconnect: x => calls.push(['disconnect', x]), sendChat: (...a) => calls.push(['chat', ...a]), dropItems: (...a) => calls.push(['drop', ...a]), control: x => calls.push(['control', x]) },
+    notify: { test: x => calls.push(['notify', x]) }
+  }
+  core.commands = createCommandLayer({ core, now, audit: e => core._appendAudit(e) })
+  const router = createApiRouter({ core, auth, now, isLoopbackIp: ip => ip === '127.0.0.1' })
+  const session = auth.createSession()
+  const responses = []
+  async function request(pathname, body = {}, credential = session, method = 'POST', ip = '127.0.0.1') {
+    const headers = typeof credential === 'string' ? { authorization: `Bearer ${credential}` } : credential ? { cookie: `afk_session=${credential.id}`, 'x-afk-csrf': credential.csrfToken } : {}
+    const res = { headers: {}, setHeader(k, v) { this.headers[k.toLowerCase()] = v } }
+    await router.handleApi({ headers }, res, { pathname, method, body, clientIp: ip, sendJson: (_res, status, json) => { res.status = status; res.json = json; responses.push(json) } })
+    return res
+  }
+  const invoke = (channel, args, credential = session, extra = {}) => request('/api/invoke', { channel, args, ...extra }, credential)
+  return { auth, buckets, core, calls, session, request, invoke, responses }
+}
+class FakeWs extends EventEmitter {
+  constructor() { super(); this.readyState = 1; this.bufferedAmount = 0; this.messages = []; this.closed = null; this.terminated = false }
+  send(value) { this.messages.push(JSON.parse(value)) }
+  close(code) { this.closed = code; this.readyState = 3; this.emit('close') }
+  terminate() { this.terminated = true; this.close(1006) }
+}
+function wsHarness(t, f, now = Date.now) {
+  const remote = createRemoteServer({ core: f.core, auth: f.auth, port: 8787, bind: '127.0.0.1', now })
+  t.after(() => remote.stop())
+  let upgradeHook = null
+  remote.wss.handleUpgrade = (_req, socket, _head, callback) => {
+    upgradeHook?.()
+    const ws = new FakeWs()
+    callback(ws)
+    socket.resolve({ ws })
+  }
+  function upgrade(credential, { origin = 'http://127.0.0.1:8787', csrf = credential?.csrfToken, hook = null } = {}) {
+    upgradeHook = hook
+    return new Promise(resolve => {
+      const socket = { remoteAddress: '127.0.0.1', resolve, response: '', write(x) { this.response += x }, destroy() { resolve({ rejected: this.response }) } }
+      const headers = { host: '127.0.0.1:8787', origin }
+      if (typeof credential === 'string') headers.authorization = `Bearer ${credential}`
+      else if (credential) { headers.cookie = `afk_session=${credential.id}`; if (csrf) headers['sec-websocket-protocol'] = `afk-csrf.${csrf}` }
+      remote.httpServer.emit('upgrade', { url: '/ws', headers, socket }, socket, Buffer.alloc(0))
+    })
+  }
+  return { remote, upgrade }
+}
+
+test('R2-1: real audit and account buckets never expose authenticating actor IDs; audit requires admin session', async t => {
+  const f = fixture(t)
+  const token = f.auth.createTokenSync({ scope: 'read' })
+  recordAudit(f.core, Date.now, { actor: { kind: 'session', id: f.session.id, scope: 'admin' }, command: 'account.connect', accountId: 'a1', result: 'allowed' })
+  recordAudit(f.core, Date.now, { actor: { kind: 'token', id: token.record.id, scope: 'read' }, command: 'status', accountId: 'a1', result: 'allowed' })
+  assert.equal(f.buckets.get('audit').length, 2)
+  assert.equal(f.buckets.get('a1').length, 2)
+  const persisted = JSON.stringify([...f.buckets.values()])
+  assert.ok(!persisted.includes(f.session.id)); assert.ok(!persisted.includes(token.record.id))
+  const auditId = f.buckets.get('audit')[0].actor.id
+  assert.match(auditId, /^[a-f0-9]{24}$/)
+  assert.equal(f.auth.getSession(auditId), null)
+  f.core.eventStore.append('a1', { type: 'log', kind: 'chat', message: 'hello', actor: { id: f.session.id } })
+  f.core.eventStore.append('a1', { type: 'status', status: 'online' })
+  for (const channel of ['audit:recent', 'logs:list']) assert.equal((await f.invoke(channel, channel === 'logs:list' ? { id: 'audit' } : {}, token.token)).status, 403)
+  assert.equal((await f.request('/api/commands/audit.recent', {}, token.token)).status, 403)
+  const accountLogs = await f.invoke('logs:list', { id: 'a1' }, token.token)
+  assert.equal(accountLogs.json.result.length, 2)
+  assert.ok(accountLogs.json.result.every(e => !e.actor && e.type !== 'audit'))
+  const adminToken = f.auth.createTokenSync({ scope: 'admin' }).token
+  assert.equal((await f.invoke('logs:list', { id: 'audit' }, adminToken)).status, 403)
+  assert.equal((await f.invoke('logs:list', { id: 'audit' })).status, 200)
+})
+
+test('R2-2: remoteAccess is rejected before core hooks and account/settings writes require an admin session', async t => {
+  const f = fixture(t), token = f.auth.createTokenSync({ scope: 'admin' }).token
+  for (const credential of [token, f.session]) {
+    for (const remoteAccess of [null, {}, { adminPassword: 'Replacement!1234' }, { bind: '0.0.0.0', trustProxy: true, enabled: false }]) {
+      assert.equal((await f.invoke('settings:save', { remoteAccess }, credential)).status, 403)
+    }
+    for (const args of [[{ remoteAccess: {} }], { macros: [{ remoteAccess: {} }] }]) assert.equal((await f.invoke('settings:save', args, credential)).status, 403)
+  }
+  for (const channel of ['accounts:save', 'accounts:delete', 'accounts:duplicate-profile', 'accounts:reorder', 'settings:save']) assert.equal((await f.invoke(channel, {}, token)).status, 403)
+  assert.equal((await f.request('/api/password', { currentPassword: PASSWORD, newPassword: 'Replacement!1234' }, token)).status, 403)
+  assert.deepEqual(f.calls, [])
+  assert.equal((await f.invoke('settings:save', { uiScale: 100 })).status, 200)
+})
+
+test('R2-3: revocation and expiry during asynchronous bearer scrypt cannot authenticate', async t => {
+  let now = 1000
+  const f = fixture(t, { now: () => now })
+  for (const action of ['revoke', 'expire']) {
+    const created = f.auth.createTokenSync({ ttlMs: 10 })
+    const pending = f.auth.verifyBearerToken(`Bearer ${created.token}`)
+    if (action === 'revoke') f.auth.revokeToken(created.record.id); else now += 11
+    assert.equal(await pending, null)
+  }
+})
+
+test('R2-3: each WS delivery checks idle, absolute, token expiry and revocation; upgrade rechecks credentials', async t => {
+  let now = 1000
+  const f = fixture(t, { now: () => now }), h = wsHarness(t, f, () => now)
+  for (const kind of ['idle', 'absolute', 'token-expiry', 'token-revoke', 'session-revoke']) {
+    let credential = f.auth.createSession(), token
+    if (kind.startsWith('token')) { token = f.auth.createTokenSync({ ttlMs: 100 }); credential = token.token }
+    const { ws } = await h.upgrade(credential)
+    assert.ok(ws)
+    ws.messages = []
+    if (kind === 'idle') now += IDLE_TIMEOUT_MS
+    if (kind === 'absolute') { now += ABSOLUTE_TIMEOUT_MS; credential.lastActiveAt = now }
+    if (kind === 'token-expiry') now += 100
+    if (kind === 'token-revoke') f.auth.revokeToken(token.record.id)
+    if (kind === 'session-revoke') f.auth.revokeSession(credential.id)
+    h.remote.broadcast('bot:event', { type: 'status', id: 'a1', payload: { status: 'online' } })
+    assert.equal(ws.closed, 4401, kind); assert.equal(ws.messages.length, 0, kind)
+  }
+  const session = f.auth.createSession()
+  const result = await h.upgrade(session, { hook: () => f.auth.revokeSession(session.id) })
+  assert.equal(result.ws.closed, 4401)
+  const token = f.auth.createTokenSync({})
+  const verify = f.auth.verifyBearerToken.bind(f.auth)
+  f.auth.verifyBearerToken = async (...args) => { const record = await verify(...args); f.auth.revokeToken(token.record.id); return record }
+  assert.match((await h.upgrade(token.token)).rejected, /401/)
+})
+
+test('R2-4: complete origins and session-bound WS CSRF reject cross-port, cross-scheme and missing proofs', async t => {
+  const origins = buildAllowedOrigins('127.0.0.1', ['https://desk.test:9443'], 8787, false)
+  for (const origin of ['http://localhost:9999', 'https://localhost:8787', 'http://localhost', 'https://desk.test:9444', 'http://desk.test:8787', 'https://desk.test:8787', 'http://localhost:8787/path', 'http://user@localhost:8787']) assert.equal(isOriginHeaderAllowed(origin, origins), false, origin)
+  assert.equal(isOriginHeaderAllowed('http://localhost:8787', origins), true)
+  assert.equal(isOriginHeaderAllowed('https://desk.test:9443', origins), true)
+  const f = fixture(t), h = wsHarness(t, f)
+  for (const options of [{ csrf: null }, { csrf: 'incorrect' }, { origin: 'http://127.0.0.1:9999' }, { origin: 'https://127.0.0.1:8787' }]) assert.match((await h.upgrade(f.session, options)).rejected, /403/)
+  assert.ok((await h.upgrade(f.session)).ws)
+})
+
+test('R2-5: parallel logins reserve attempts before hashing and reject beyond 2 concurrency slots', async t => {
+  const f = fixture(t)
+  f.auth.setAdminPasswordSync(PASSWORD)
+  const responses = await Promise.all(Array.from({ length: 12 }, (_, i) => f.request('/api/login', { username: `user${i}`, password: 'wrong-password' }, null)))
+  assert.equal(responses.filter(r => r.status === 401).length, 2)
+  assert.equal(responses.filter(r => r.status === 429).length, 10)
+  assert.equal(f.auth.loginAttemptsByIp.get('127.0.0.1').attempts.length, 5)
+  assert.equal(f.auth.loginAttemptsByUser.size, 5)
+})
+
+test('R2-5: bearer work is rate-limited before scrypt; tracker maps and credential retention are bounded', async t => {
+  let now = 1000
+  const f = fixture(t, { now: () => now })
+  f.auth.bearerAttemptsByIp.set('attacker', Array(120).fill(now))
+  await assert.rejects(f.auth.verifyBearerToken('Bearer afk_1234567890abcdef_1234567890123456', 'attacker'), e => e.statusCode === 429)
+  for (let i = 0; i < MAX_TRACKERS; i++) {
+    f.auth.apiCallsByActor.set(`actor${i}`, [now])
+    f.auth.loginAttemptsByIp.set(`ip${i}`, { attempts: [], failures: 0, lockedUntil: 0, updatedAt: now })
+    f.auth.loginAttemptsByUser.set(`user${i}`, { attempts: [], failures: 0, lockedUntil: 0, updatedAt: now })
+    f.auth.bearerAttemptsByIp.set(`ip${i}`, [now])
+  }
+  f.auth.bearerAttemptsByIp.delete('attacker')
+  assert.equal(f.auth.checkApiRateLimit('extra').allowed, true)
+  assert.equal(f.auth.apiCallsByActor.has('actor0'), false)
+  assert.equal(f.auth.apiCallsByActor.has('extra'), true)
+  assert.equal(f.auth.reserveLoginAttempt('extra', 'extra').allowed, true)
+  assert.equal(f.auth.checkWindow(f.auth.bearerAttemptsByIp, 'extra', 120).allowed, true)
+  for (const map of [f.auth.apiCallsByActor, f.auth.loginAttemptsByIp, f.auth.loginAttemptsByUser, f.auth.bearerAttemptsByIp]) assert.equal(map.size, MAX_TRACKERS)
+  now += TRACKER_TTL_MS + 1
+  for (const map of [f.auth.apiCallsByActor, f.auth.loginAttemptsByIp, f.auth.loginAttemptsByUser, f.auth.bearerAttemptsByIp]) { f.auth.pruneTrackers(map); assert.equal(map.size, 0) }
+  for (let i = 0; i < 20; i++) f.auth.createSession()
+  assert.equal(f.auth.sessions.size, MAX_SESSIONS_PER_USER)
+  for (let i = 0; i < MAX_SESSIONS + 2; i++) f.auth.createSession({ username: `u${i}` })
+  assert.equal(f.auth.sessions.size, MAX_SESSIONS)
+  const template = f.auth.createTokenSync({}).record
+  f.auth.state.tokens = Array.from({ length: MAX_TOKENS }, (_, i) => ({ ...template, id: String(i), revokedAt: null, expiresAt: null }))
+  assert.throws(() => f.auth.createTokenSync({}), /capacity/)
+})
+
+test('R2-5: token issuance shares the two-hash bearer budget and reserves token capacity before await', async t => {
+  const f = fixture(t)
+  const pending = Array.from({ length: 2 }, () => f.auth.createToken())
+  assert.throws(() => f.auth.createTokenSync(), e => e.statusCode === 429)
+  await assert.rejects(f.auth.verifyBearerToken('Bearer afk_1234567890abcdef_1234567890123456'), e => e.statusCode === 429)
+  await assert.rejects(f.auth.createToken(), e => e.statusCode === 429)
+  await Promise.all(pending)
+  const template = f.auth.state.tokens[0]
+  f.auth.state.tokens = Array.from({ length: MAX_TOKENS - 1 }, (_, i) => ({ ...template, id: String(i) }))
+  const last = f.auth.createToken()
+  await assert.rejects(f.auth.createToken(), e => e.statusCode === 429)
+  await last
+  assert.equal(f.auth.state.tokens.length, MAX_TOKENS)
+  assert.equal(f.auth.pendingTokens, 0)
+  assert.equal((await f.request('/api/tokens')).status, 429)
+})
+
+test('R2-5: expired quiet sockets are pruned before retaining another connection', async t => {
+  let now = 1
+  const f = fixture(t, { now: () => now }), h = wsHarness(t, f, () => now)
+  const token = f.auth.createTokenSync({ ttlMs: 10 })
+  const { ws } = await h.upgrade(token.token)
+  now += 10
+  assert.ok((await h.upgrade(f.auth.createSession())).ws)
+  assert.equal(ws.closed, 4401)
+  assert.equal(f.auth.wsConnections.has(`token:${token.record.id}`), false)
+})
+
+test('R2-6: all global logout aliases reject bearer tokens and non-admin sessions', async t => {
+  const f = fixture(t)
+  const read = f.auth.createTokenSync({ scope: 'read' }).token
+  const admin = f.auth.createTokenSync({ scope: 'admin' }).token
+  const low = f.auth.createSession({ scope: 'read' })
+  for (const credential of [read, admin, low]) for (const [url, body] of [['/api/logout-all', {}], ['/api/logout', { everywhere: true }], ['/api/logout', { all: true }]]) {
+    assert.equal((await f.request(url, body, credential)).status, 403)
+    assert.ok(f.auth.getSession(f.session.id))
+  }
+  assert.equal((await f.request('/api/logout-all')).status, 200)
+  assert.equal(f.auth.sessions.size, 0)
+})
+
+test('R2-7: password change requires current password, rotates cookie/CSRF and revokes all old sockets', async t => {
+  const f = fixture(t), h = wsHarness(t, f)
+  f.auth.setAdminPasswordSync(PASSWORD)
+  const stolen = f.auth.createSession()
+  const a = (await h.upgrade(f.session)).ws, b = (await h.upgrade(stolen)).ws
+  assert.equal((await f.request('/api/password', { newPassword: 'Replacement!1234' })).status, 401)
+  const res = await f.request('/api/password', { currentPassword: PASSWORD, newPassword: 'Replacement!1234' })
+  assert.equal(res.status, 200)
+  assert.equal(a.closed, 4401); assert.equal(b.closed, 4401)
+  assert.equal(f.auth.getSession(stolen.id), null); assert.equal(f.auth.getSession(f.session.id), null)
+  const newId = res.headers['set-cookie'].split(';')[0].split('=')[1]
+  assert.notEqual(newId, f.session.id); assert.notEqual(res.json.csrfToken, f.session.csrfToken)
+  assert.ok(f.auth.getSession(newId)); assert.equal(f.auth.sessions.size, 1)
+})
+
+test('R2-7: revocation while hashing a new password cannot replace credentials or resurrect a session', async t => {
+  const f = fixture(t)
+  f.auth.setAdminPasswordSync(PASSWORD)
+  const original = f.auth.setAdminPassword.bind(f.auth)
+  f.auth.setAdminPassword = (...args) => {
+    const pending = original(...args)
+    f.auth.revokeSession(f.session.id)
+    return pending
+  }
+  const res = await f.request('/api/password', { currentPassword: PASSWORD, newPassword: 'Replacement!1234' })
+  assert.equal(res.status, 401)
+  assert.equal(f.auth.sessions.size, 0)
+  assert.equal(await f.auth.verifyAdminPassword(PASSWORD), true)
+})
+
+test('R2-8: invoke attacks encounter command validation, confirmation, and shared per-actor limits', async t => {
+  const f = fixture(t)
+  assert.equal((await f.invoke('bot:chat', { id: 'a1', message: 'x'.repeat(300) })).status, 400)
+  assert.equal((await f.invoke('bot:connect', 'missing-account')).status, 400)
+  for (const channel of ['bot:disconnect', 'bot:drop-stack', 'bot:drop-items']) {
+    const args = channel === 'bot:disconnect' ? 'a1' : { id: 'a1', slot: 1 }
+    const denied = await f.invoke(channel, args)
+    assert.equal(denied.status, 409); assert.equal(denied.json.error.code, 'CONFIRM_REQUIRED')
+    assert.equal((await f.invoke(channel, args, f.session, { confirmed: true })).status, 200)
+  }
+  for (let i = 0; i < 60; i++) await f.core.commands.execute({ kind: 'session', id: f.session.id, scope: 'admin' }, 'status', {})
+  assert.equal((await f.invoke('bot:connect', 'a1')).status, 429)
+  assert.ok(!f.calls.some(c => c[0] === 'chat'))
+})
+
+test('R2-8: every allowlisted channel rejects unexpected fields and nested or out-of-bounds arguments', async t => {
+  const f = fixture(t)
+  for (const channel of Object.keys(CHANNEL_SPECS)) assert.throws(() => validateInvoke(channel, { unexpected: 'attack' }), undefined, channel)
+  for (const args of [{ id: 'a1', control: 'jump', duration: 1e10 }, { id: 'a1', control: { nested: 'jump' } }, { id: 'a1', control: 'jump', duration: '100' }]) assert.equal((await f.invoke('bot:control', args)).status, 400)
+  for (const [channel, args] of [['bot:control', { id: 'a1' }], ['accounts:reorder', { ids: ['a1'], unexpected: true }], ['logs:list', ['a1', { id: 'audit' }]], ['logs:list', { id: 'a1', kinds: {} }]]) assert.equal((await f.invoke(channel, args)).status, 400)
+  assert.deepEqual(f.calls, [])
+})
+
+test('R2-8: browser bridge retries CONFIRM_REQUIRED only after explicit user confirmation', async () => {
+  const requests = []
+  let approved = false
+  const bridge = createBrowserBridge({ WebSocketImpl: null, confirmImpl: () => approved,
+    fetchImpl: async (url, init) => {
+      const body = init.body ? JSON.parse(init.body) : null
+      if (url === '/api/login') return { ok: true, json: async () => ({ ok: true, scope: 'admin', csrfToken: 'csrf-proof' }) }
+      requests.push(body)
+      return body.confirmed === true
+        ? { ok: true, json: async () => ({ ok: true, result: 'done' }) }
+        : { ok: false, status: 409, json: async () => ({ ok: false, error: { code: 'CONFIRM_REQUIRED', message: 'Confirm' } }) }
+    }
+  })
+  await bridge.login(PASSWORD)
+  await assert.rejects(bridge.disconnect('a1'), e => e.code === 'CONFIRM_REQUIRED')
+  assert.equal(requests.length, 1)
+  approved = true
+  assert.equal(await bridge.disconnect('a1'), 'done')
+  assert.equal(requests.length, 3)
+  assert.equal(requests[2].confirmed, true)
+  bridge._close()
+})
+
+test('R2-8: command actor trackers reject overflow and expire after one minute', async t => {
+  let now = 1
+  const f = fixture(t, { now: () => now })
+  // A no-op audit sink avoids creating a large log fixture for this map test.
+  const commands = createCommandLayer({ core: f.core, now: () => now })
+  for (let i = 0; i < MAX_TRACKERS; i++) assert.equal((await commands.execute({ kind: 'token', id: String(i), scope: 'read' }, 'status')).ok, true)
+  assert.equal((await commands.execute({ kind: 'token', id: 'overflow', scope: 'read' }, 'status')).error.code, 'RATE_LIMITED')
+  now += 60000
+  assert.equal((await commands.execute({ kind: 'token', id: 'overflow', scope: 'read' }, 'status')).ok, true)
+})
+
+test('R2-9/10: WS only exposes projected data, admin sessions alone see login codes; inbound and outbound budgets close clients', async t => {
+  const f = fixture(t), h = wsHarness(t, f)
+  const token = f.auth.createTokenSync({ scope: 'admin' }).token
+  const admin = (await h.upgrade(f.session)).ws, bearer = (await h.upgrade(token)).ws
+  h.remote.broadcast('bot:event', { type: 'login-code', id: 'a1', payload: { userCode: 'DEVICE-CODE' } })
+  assert.ok(admin.messages.some(m => m.payload.type === 'login-code'))
+  assert.ok(!bearer.messages.some(m => m.payload.type === 'login-code'))
+  for (let i = 0; i < 10; i++) bearer.emit('message', Buffer.from('x'))
+  assert.equal(bearer.closed, null)
+  bearer.emit('message', Buffer.from('x')); assert.equal(bearer.closed, 1008)
+  admin.bufferedAmount = 1024 * 1024 + 1
+  h.remote.broadcast('bot:event', { type: 'status', id: 'a1', payload: { status: 'online' } })
+  assert.equal(admin.terminated, true)
+  const next = (await h.upgrade(f.auth.createSession())).ws
+  next.send = () => { next.bufferedAmount = 1024 * 1024 + 1 }
+  h.remote.broadcast('bot:event', { type: 'status', id: 'a1', payload: { status: 'online' } })
+  assert.equal(next.terminated, true, 'queue crossing the bound during send is terminated immediately')
+})
+
+test('R2-sweep: populated API and WS fixtures never expose proxy/webhook/bot secrets, emails or authentication IDs', async t => {
+  const f = fixture(t), h = wsHarness(t, f)
+  const token = f.auth.createTokenSync({ scope: 'read' })
+  const secrets = { password: 'fake-proxy-password', webhookUrl: 'https://discord.com/api/webhooks/123/fake-secret', botToken: '123456789:FAKE_TOKEN_12345678901234567890', username: 'private@example.com', sessionId: f.session.id, token: token.token }
+  const ws = (await h.upgrade(f.session)).ws
+  recordAudit(f.core, Date.now, { actor: { kind: 'session', id: f.session.id, scope: 'admin' }, command: 'status', accountId: 'a1' })
+  const echoedSecrets = Object.values(secrets).join(' ')
+  f.core.eventStore.append('a1', { type: 'log', kind: 'chat', ...secrets, message: echoedSecrets })
+  for (const type of ['status', 'telemetry', 'log', 'identity', 'version', 'storage-warning']) {
+    h.remote.broadcast('bot:event', { type, id: 'a1', payload: { ...secrets, kind: 'chat', status: 'online', detail: echoedSecrets, message: echoedSecrets, name: echoedSecrets } })
+  }
+  for (const [channel, args] of [['accounts:list'], ['logs:list', { id: 'audit' }], ['logs:list', { id: 'a1' }], ['settings:get'], ['audit:recent']]) assert.equal((await f.invoke(channel, args)).status, 200)
+  await f.request('/api/commands/status', { args: {} })
+  await f.request('/api/session', {}, f.session, 'GET')
+  await f.request('/api/capabilities', {}, f.session, 'GET')
+  const setup = f.auth.issueSetupToken()
+  assert.equal((await f.request('/api/setup', { setupToken: setup.token, username: 'private@example.com', password: PASSWORD }, null)).status, 200)
+  await f.invoke('private@example.com')
+  await f.invoke('logs:list', { id: 'a1', kinds: {} })
+  const all = JSON.stringify([f.responses, ws.messages])
+  for (const secret of [...Object.values(secrets), '@example.com', token.record.id, token.token.split('_')[2]]) assert.ok(!all.includes(secret), secret)
+  const account = (await f.invoke('accounts:list')).json.result[0]
+  assert.deepEqual(Object.keys(account).sort(), ['edition', 'id', 'name', 'server', 'status'])
+})
+
+test('Security re-review 1: lockout DoS immunity for loopback/recently-authenticated, (IP, username) lockout, global username delay, hash starvation separation, unauthenticated bearer flood rejection, tracker overflow eviction', async (t) => {
+  let now = 10_000
+  const dir = '.'
+  const auth = new MemoryAuth({ dataDir: '.', now: () => now })
+  auth.setAdminPasswordSync('AdminSecured!123')
+
+  // 1A. Attacker at remote IP fails 5 times on 'admin'
+  const attackerIp = '198.51.100.23'
+  for (let i = 0; i < 5; i++) {
+    const rate = auth.checkLoginRateLimit(attackerIp, 'admin')
+    assert.equal(rate.allowed, true)
+    auth.recordLoginAttempt(attackerIp, 'admin', false)
+  }
+  // Attacker IP is now locked out
+  assert.equal(auth.checkLoginRateLimit(attackerIp, 'admin').allowed, false)
+
+  // Loopback (127.0.0.1 and ::1) is NOT locked out by username lockout
+  assert.equal(auth.checkLoginRateLimit('127.0.0.1', 'admin').allowed, true)
+  assert.equal(auth.checkLoginRateLimit('::1', 'admin').allowed, true)
+
+  // An IP that recently authenticated successfully is NOT locked out
+  const goodIp = '192.168.1.15'
+  auth.recordLoginAttempt(goodIp, 'admin', true)
+  assert.equal(auth.isRecentlyAuthenticated(goodIp), true)
+  assert.equal(auth.checkLoginRateLimit(goodIp, 'admin').allowed, true)
+
+  // Global per-username threshold (10 attempts across IPs) adds delay (max 30 s), never a full lockout
+  for (let i = 0; i < 10; i++) {
+    auth.recordLoginAttempt(`10.0.1.${i}`, 'admin', false)
+  }
+  const newIpRate = auth.checkLoginRateLimit('198.51.100.99', 'admin')
+  assert.equal(newIpRate.allowed, true)
+  assert.ok(newIpRate.delayMs > 0 && newIpRate.delayMs <= 30_000)
+  // Loopback and recently authenticated IP have 0 delay
+  assert.equal(auth.checkLoginRateLimit('127.0.0.1', 'admin').delayMs, 0)
+  assert.equal(auth.checkLoginRateLimit(goodIp, 'admin').delayMs, 0)
+
+  // 1B. Hash starvation: separate concurrency slots (2 login + 2 bearer)
+  // Saturate 2 bearer slots
+  const bearerHold1 = auth.createToken()
+  const bearerHold2 = auth.createToken()
+  // 3rd bearer hash is rejected
+  await assert.rejects(auth.createToken(), (e) => e.statusCode === 429)
+  // But login attempt can STILL run concurrently because login has its own 2 slots!
+  const loginResult = await auth.verifyAdminPassword('AdminSecured!123', 'admin')
+  assert.equal(loginResult, true)
+  await Promise.all([bearerHold1, bearerHold2])
+
+  // 1C. Reject unauthenticated bearer floods per IP before reaching the queue
+  const floodIp = '203.0.113.88'
+  for (let i = 0; i < 10; i++) {
+    await auth.verifyBearerToken(`Bearer afk_${i}1234567_${'a'.repeat(24)}`, floodIp)
+  }
+  // 11th unauthenticated attempt from floodIp throws 429 before queue
+  await assert.rejects(auth.verifyBearerToken(`Bearer afk_99999999_${'a'.repeat(24)}`, floodIp), (e) => e.statusCode === 429)
+
+  // 1D. Tracker overflow evicts oldest entries and does not lock out new keys
+  const map = new Map()
+  for (let i = 0; i < MAX_TRACKERS; i++) {
+    map.set(`key${i}`, [now])
+  }
+  const checkExtra = auth.checkWindow(map, 'new-key', 10)
+  assert.equal(checkExtra.allowed, true)
+  assert.equal(map.has('key0'), false) // oldest evicted
+  assert.equal(map.has('new-key'), true) // new key added
+  assert.equal(map.size, MAX_TRACKERS)
+})
+
+test('Security re-review 2: WS limit 4 per session, closes oldest socket when session exceeds limit, 5 per token', async (t) => {
+  const f = fixture(t), h = wsHarness(t, f)
+  // 4 sockets connect simultaneously for a session
+  const sSockets = []
+  for (let i = 0; i < 4; i++) {
+    const { ws } = await h.upgrade(f.session)
+    assert.ok(ws)
+    sSockets.push(ws)
+  }
+  // 5th socket connects for the same session: oldest (sSockets[0]) is closed
+  const oldestClosePromise = new Promise((resolve) => sSockets[0].on('close', resolve))
+  const { ws: ws5 } = await h.upgrade(f.session)
+  assert.ok(ws5)
+  await oldestClosePromise
+  assert.equal(sSockets[0].closed, 4000)
+
+  // Token limit is 5; 6th is rejected with 429
+  const token = f.auth.createTokenSync({ scope: 'read' }).token
+  const tSockets = []
+  for (let i = 0; i < 5; i++) {
+    const { ws } = await h.upgrade(token)
+    assert.ok(ws)
+    tSockets.push(ws)
+  }
+  const overToken = await h.upgrade(token)
+  assert.match(overToken.rejected, /429/)
+})
+
+test('Security re-review 3: browser-bridge clears CSRF, stops reconnect, and prompts login on 4401/1008 or 401/403; exponential backoff on other closes', async () => {
+  class MockWs extends EventEmitter {
+    constructor(url, protocols) {
+      super()
+      this.url = url
+      this.protocols = protocols
+      this.readyState = 1
+      MockWs.lastInstance = this
+      MockWs.instances.push(this)
+    }
+    addEventListener(event, fn) { this.on(event, fn) }
+    removeEventListener(event, fn) { this.off(event, fn) }
+    close(code) {
+      this.closedCode = code
+      this.readyState = 3
+      this.emit('close', { code })
+    }
+  }
+  MockWs.instances = []
+
+  function mockDoc() {
+    return {
+      body: { append() {} },
+      getElementById: () => null,
+      createElement: () => ({
+        style: {}, focus() {}, append() {}, addEventListener() {},
+        setAttribute() {}, remove() {}, showModal() {}
+      })
+    }
+  }
+
+  // 3A. WS close with 4401
+  const bridge = createBrowserBridge({
+    WebSocketImpl: MockWs,
+    documentObj: mockDoc(),
+    fetchImpl: async (url) => {
+      if (url === '/api/login') return { ok: true, json: async () => ({ ok: true, csrfToken: 'csrf-1', scope: 'admin' }) }
+      return { ok: true, json: async () => ({}) }
+    }
+  })
+  await bridge.login('password')
+  assert.equal(bridge._getCsrfToken(), 'csrf-1')
+  bridge.onBotEvent(() => {})
+  const activeWs = MockWs.lastInstance
+  assert.ok(activeWs)
+
+  activeWs.close(4401)
+  assert.equal(bridge._getCsrfToken(), null)
+  bridge._close()
+
+  // 3B. WS close with 1008
+  MockWs.instances = []
+  const bridge1008 = createBrowserBridge({
+    WebSocketImpl: MockWs,
+    documentObj: mockDoc(),
+    fetchImpl: async (url) => {
+      if (url === '/api/login') return { ok: true, json: async () => ({ ok: true, csrfToken: 'csrf-2', scope: 'admin' }) }
+      return { ok: true, json: async () => ({}) }
+    }
+  })
+  await bridge1008.login('password')
+  assert.equal(bridge1008._getCsrfToken(), 'csrf-2')
+  bridge1008.onBotEvent(() => {})
+  MockWs.lastInstance.close(1008)
+  assert.equal(bridge1008._getCsrfToken(), null)
+  bridge1008._close()
+
+  // 3C. HTTP 401 / 403 from /api/session
+  for (const status of [401, 403]) {
+    const bridgeSession = createBrowserBridge({
+      WebSocketImpl: MockWs,
+      documentObj: mockDoc(),
+      fetchImpl: async () => ({ status, ok: false, json: async () => ({ ok: false }) })
+    })
+    const sessionRes = await bridgeSession.getSession()
+    assert.equal(sessionRes, null)
+    assert.equal(bridgeSession._getCsrfToken(), null)
+    bridgeSession._close()
+  }
+
+  // 3D. Exponential backoff on other closes (e.g. 1006)
+  const scheduledTimeouts = []
+  const origSetTimeout = globalThis.setTimeout
+  const bridgeBackoff = createBrowserBridge({
+    WebSocketImpl: MockWs,
+    documentObj: mockDoc(),
+    fetchImpl: async () => ({ ok: true, json: async () => ({ ok: true, csrfToken: 'csrf-bo', scope: 'admin' }) })
+  })
+  await bridgeBackoff.login('pass')
+  bridgeBackoff.onBotEvent(() => {})
+  globalThis.setTimeout = (fn, delay) => {
+    scheduledTimeouts.push(delay)
+    return 123
+  }
+  try {
+    MockWs.lastInstance.close(1006)
+    MockWs.lastInstance.close(1006)
+    MockWs.lastInstance.close(1006)
+    MockWs.lastInstance.close(1006)
+    MockWs.lastInstance.close(1006)
+    assert.deepEqual(scheduledTimeouts, [2000, 4000, 8000, 16000, 30000])
+  } finally {
+    globalThis.setTimeout = origSetTimeout
+    bridgeBackoff._close()
+  }
+})
+
+test('Security re-review 4: startup race buffer holds up to 200 bot and macro events and replays to first subscriber', async () => {
+  class MockWs extends EventEmitter {
+    constructor(url, protocols) {
+      super()
+      this.url = url
+      this.protocols = protocols
+      this.readyState = 1
+      MockWs.lastInstance = this
+    }
+    addEventListener(event, fn) { this.on(event, fn) }
+    removeEventListener(event, fn) { this.off(event, fn) }
+    emitMsg(channel, payload) {
+      this.emit('message', { data: JSON.stringify({ channel, payload }) })
+    }
+  }
+
+  const bridge = createBrowserBridge({
+    WebSocketImpl: MockWs,
+    fetchImpl: async () => ({ ok: true, json: async () => ({ ok: true, csrfToken: 'csrf-buf', scope: 'admin' }) })
+  })
+  await bridge.login('pass')
+  const ws = MockWs.lastInstance
+
+  // Push 250 bot events before any subscriber exists
+  for (let i = 1; i <= 250; i++) {
+    ws.emitMsg('bot:event', { seq: i, text: `event-${i}` })
+  }
+  // Push 2 macro events
+  ws.emitMsg('macro-run', { macroId: 'm1', status: 'running' })
+  ws.emitMsg('macro-run', { macroId: 'm1', status: 'stopped' })
+
+  // First subscriber to bot:event
+  const receivedBot = []
+  bridge.onBotEvent((ev) => receivedBot.push(ev))
+
+  // Buffer bounded to last 200 events: 51 through 250
+  assert.equal(receivedBot.length, 200)
+  assert.equal(receivedBot[0].seq, 51)
+  assert.equal(receivedBot[199].seq, 250)
+
+  // Second subscriber to bot:event should NOT receive the replay backlog
+  const receivedSecond = []
+  bridge.onBotEvent((ev) => receivedSecond.push(ev))
+  assert.equal(receivedSecond.length, 0)
+
+  // Live event goes to both
+  ws.emitMsg('bot:event', { seq: 251, text: 'live' })
+  assert.equal(receivedBot.length, 201)
+  assert.equal(receivedSecond.length, 1)
+
+  // First subscriber to macro-run
+  const receivedMacro = []
+  bridge.onMacroRun((ev) => receivedMacro.push(ev))
+  assert.equal(receivedMacro.length, 2)
+  assert.equal(receivedMacro[0].status, 'running')
+  assert.equal(receivedMacro[1].status, 'stopped')
+
+  bridge._close()
+})
+
+test('Security re-review 5: browser mode remote access settings section is read-only with desktop-only note and never sends remoteAccess in settings:save', async () => {
+  const { mountRemoteAccessSettingsUi } = require('../server/browser-bridge.js')
+
+  function makeElement(tag) {
+    const el = {
+      tag, id: '', className: '', textContent: '', value: '', type: '', readOnly: false, disabled: false,
+      children: [], attributes: {}, listeners: {},
+      append(...nodes) { this.children.push(...nodes) },
+      insertBefore(node, _ref) { this.children.unshift(node) },
+      replaceChildren(...nodes) { this.children = [...nodes] },
+      setAttribute(k, v) { this.attributes[k] = v },
+      getAttribute(k) { return this.attributes[k] },
+      addEventListener(ev, fn) { this.listeners[ev] = fn },
+      querySelector(sel) {
+        if (sel === '.settings-body') return el.body
+        if (sel === '.settings-about') return el.about
+        return null
+      }
+    }
+    return el
+  }
+
+  const openBtn = makeElement('button')
+  openBtn.id = 'open-settings'
+  const settingsDialog = makeElement('dialog')
+  settingsDialog.id = 'settings-dialog'
+  const settingsBody = makeElement('div')
+  settingsBody.className = 'settings-body'
+  const settingsAbout = makeElement('div')
+  settingsAbout.className = 'settings-about'
+  settingsBody.append(settingsAbout)
+  settingsDialog.body = settingsBody
+  settingsDialog.about = settingsAbout
+
+  const elementsById = {
+    'open-settings': openBtn,
+    'settings-dialog': settingsDialog
+  }
+  const mockDoc = {
+    getElementById: (id) => elementsById[id] || null,
+    createElement: makeElement
+  }
+
+  const savedPayloads = []
+  const bridge = createBrowserBridge({
+    fetchImpl: async (url, init) => {
+      if (url === '/api/login') return { ok: true, json: async () => ({ ok: true, csrfToken: 'csrf-set', scope: 'admin' }) }
+      if (url === '/api/invoke') {
+        const body = JSON.parse(init.body)
+        savedPayloads.push(body)
+        return { ok: true, json: async () => ({ ok: true, result: body.args }) }
+      }
+      return { ok: true, json: async () => ({}) }
+    }
+  })
+  await bridge.login('pass')
+
+  // Test that bridge.saveSettings strips remoteAccess before invoke
+  await bridge.saveSettings({
+    uiScale: 110,
+    remoteAccess: { enabled: true, bind: '0.0.0.0', port: 9999 }
+  })
+  assert.equal(savedPayloads.length, 1)
+  assert.equal(savedPayloads[0].channel, 'settings:save')
+  assert.equal(savedPayloads[0].args.uiScale, 110)
+  assert.equal(Object.hasOwn(savedPayloads[0].args, 'remoteAccess'), false)
+
+  // Mount UI and click open-settings
+  globalThis.afkDesk = {
+    getSettings: async () => ({
+      uiScale: 100,
+      remoteAccess: {
+        bind: '100.85.14.94',
+        port: 8787,
+        allowedHosts: ['myhost.tailscale.ts.net'],
+        running: true,
+        tokens: [{ id: 't1', name: 'Home Assistant', scope: 'read', tokenHint: '••••abcd' }]
+      }
+    })
+  }
+
+  mountRemoteAccessSettingsUi(mockDoc)
+  await openBtn.listeners['click']?.()
+
+  const section = settingsBody.children.find((c) => c.id === 'remote-access-settings-section')
+  assert.ok(section, 'remote-access-settings-section must exist')
+
+  const note = section.children.find((c) => c.id === 'remote-access-desktop-only-note')
+  assert.ok(note, 'note element must exist')
+  assert.match(note.textContent, /desktop app/i)
+
+  const statusEl = section.children.find((c) => c.id === 'remote-access-status')
+  assert.match(statusEl.textContent, /Running on 100\.85\.14\.94:8787/)
+
+  const grid = section.children.find((c) => c.className === 'settings-visual-grid')
+  const bindInput = grid.children[0].children[1]
+  assert.equal(bindInput.value, '100.85.14.94')
+  assert.equal(bindInput.readOnly, true)
+  assert.equal(bindInput.disabled, true)
+
+  const portInput = grid.children[1].children[1]
+  assert.equal(portInput.value, '8787')
+  assert.equal(portInput.readOnly, true)
+  assert.equal(portInput.disabled, true)
+
+  const hostsInput = grid.children[2].children[1]
+  assert.equal(hostsInput.value, 'myhost.tailscale.ts.net')
+  assert.equal(hostsInput.readOnly, true)
+  assert.equal(hostsInput.disabled, true)
+
+  const tokenList = section.children.find((c) => c.id === 'remote-access-token-list')
+  assert.equal(tokenList.children.length, 1)
+  assert.match(tokenList.children[0].children[0].textContent, /Home Assistant \[read\] ••••abcd/)
+  assert.equal(tokenList.children[0].children.length, 1)
+
+  assert.equal(section.children.some((c) => c.id === 'remote-access-apply'), false)
+  assert.equal(section.children.some((c) => c.id === 'remote-access-token-create'), false)
+
+  delete globalThis.afkDesk
+  bridge._close()
+})

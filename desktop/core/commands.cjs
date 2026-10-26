@@ -28,7 +28,7 @@ function createCommandLayer({ core, audit = () => {}, now = Date.now, timers = g
   }
   async function execute(actor, name, args = {}, options = {}) {
     let result, code
-    const spec = COMMANDS[name]
+    const spec = Object.hasOwn(COMMANDS, name) ? COMMANDS[name] : null
     const done = async (ok, value, err) => {
       result = ok ? value : undefined; code = ok ? undefined : err
       try { await audit({ at: now(), actor: { kind: actor?.kind, id: actor?.id, scope: actor?.scope, ip: actor?.ip }, command: name, ...(args?.accountId ? { accountId: args.accountId } : {}), result: ok ? 'allowed' : (err === 'FORBIDDEN' ? 'forbidden' : 'invalid'), ...(err ? { code: err } : {}) }) } catch {}
@@ -39,7 +39,10 @@ function createCommandLayer({ core, audit = () => {}, now = Date.now, timers = g
       if (!scopeAllows(actor?.scope, spec.scope)) return await done(false, 'Insufficient scope.', 'FORBIDDEN')
       const invalid = validate(spec, args)
       if (invalid) return await done(false, invalid, 'INVALID')
-      const key = actorKey(actor), timestamp = now(), recent = (calls.get(key) || []).filter((x) => timestamp - x < 60_000)
+      const key = actorKey(actor), timestamp = now()
+      for (const [k, times] of calls) if (timestamp - times.at(-1) >= 60_000) calls.delete(k)
+      if (!calls.has(key) && calls.size >= 10_000) return await done(false, 'Rate limit exceeded.', 'RATE_LIMITED')
+      const recent = (calls.get(key) || []).filter((x) => timestamp - x < 60_000)
       if (recent.length >= LIMITS.perActorPerMinute) return await done(false, 'Rate limit exceeded.', 'RATE_LIMITED')
       recent.push(timestamp); calls.set(key, recent)
       if (spec.danger === 'confirm' && options.confirmed !== true) return await done(false, 'Confirmation required.', 'CONFIRM_REQUIRED')

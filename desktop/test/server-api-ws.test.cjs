@@ -5,6 +5,10 @@ const fs = require('node:fs')
 const http = require('node:http')
 const os = require('node:os')
 const path = require('node:path')
+const vm = require('node:vm')
+const { createRequire } = require('node:module')
+const { pathToFileURL } = require('node:url')
+const { EventEmitter } = require('node:events')
 const { Readable } = require('node:stream')
 const { WebSocket } = require('ws')
 const { AppCore } = require('../core/app-core.cjs')
@@ -137,7 +141,8 @@ function httpJson({ port, method = 'POST', path: reqPath = '/api/invoke', token 
 
 function connectWs({ port, headers = {} }) {
   return new Promise((resolve) => {
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, {
+    const protocols = headers['Sec-WebSocket-Protocol'] ? [headers['Sec-WebSocket-Protocol']] : []
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, protocols, {
       headers: {
         Host: `127.0.0.1:${port}`,
         Origin: `http://127.0.0.1:${port}`,
@@ -215,7 +220,7 @@ test('scope enforcement per channel on POST /api/invoke and 501 on Electron-only
     ['bot:control', { id: savedAcc.id, control: 'jump', duration: 200 }],
     ['bot:disconnect', savedAcc.id]
   ]) {
-    const res = await httpJson({ port, token: controlTok, body: { channel, args } })
+    const res = await httpJson({ port, token: controlTok, body: { channel, args, confirmed: true } })
     assert.equal(res.status, 200, `control token should allow ${channel}`)
     assert.equal(res.json.ok, true)
   }
@@ -236,7 +241,7 @@ test('scope enforcement per channel on POST /api/invoke and 501 on Electron-only
   const controlTokensRes = await httpJson({ port, method: 'GET', path: '/api/tokens', token: controlTok })
   assert.equal(controlTokensRes.status, 403)
 
-  // 5. Admin token CAN call admin channels
+  // 5. Account administration requires an admin session, never an admin token.
   const adminSaveAcc = await httpJson({
     port,
     token: adminTok,
@@ -245,8 +250,13 @@ test('scope enforcement per channel on POST /api/invoke and 501 on Electron-only
       args: { username: 'AdminCreated', host: 'play.example.com', port: 25565 }
     }
   })
-  assert.equal(adminSaveAcc.status, 200)
-  assert.equal(adminSaveAcc.json.result.username, 'AdminCreated')
+  assert.equal(adminSaveAcc.status, 403)
+  const session = auth.createSession()
+  const sessionSave = await httpJson({ port, cookie: `afk_session=${session.id}`, csrf: session.csrfToken,
+    body: { channel: 'accounts:save', args: { username: 'AdminCreated', host: 'play.example.com', port: 25565 } } })
+  assert.equal(sessionSave.status, 200)
+  assert.equal(sessionSave.json.result.name, 'play.example.com')
+  assert.equal(sessionSave.json.result.username, undefined)
 
   // 6. Electron-only channels return 501 Not Implemented and are reported in capabilities
   for (const channel of ['auth:open-isolated', 'system:open-external', 'window:minimize', 'dialog:open-file', 'app:auto-launch']) {
@@ -359,14 +369,15 @@ test('token management HTTP endpoints: create/show-once, list without secret, re
 test('secrets never appear in any API response or WebSocket message (proxy password, webhook URL, bot token, MSAL token)', async (t) => {
   const { port, core, auth } = await createApiFixture(t)
   const adminTok = auth.createTokenSync({ name: 'admin-tok', scope: 'admin' }).token
+  const session = auth.createSession()
 
   const FAKE_PROXY_PASS = 'FAKE_PROXY_PASSWORD_SECRET_9999'
   const FAKE_WEBHOOK = 'https://discord.com/api/webhooks/123456789/FAKE_DISCORD_WEBHOOK_SECRET_8888'
   const FAKE_BOT_TOKEN = '123456:FAKE_TELEGRAM_BOT_TOKEN_SECRET_7777'
   const FAKE_REFRESH_TOKEN = 'FAKE_MSAL_REFRESH_TOKEN_SECRET_6666'
 
-  core.accounts.save({
-    username: 'SecretBot',
+  const account = core.accounts.save({
+    username: 'secret@example.com',
     host: 'play.example.com',
     port: 25565,
     proxy: {
@@ -394,6 +405,15 @@ test('secrets never appear in any API response or WebSocket message (proxy passw
     botToken: FAKE_BOT_TOKEN,
     chatId: '12345'
   })
+  core._appendAudit({ actor: { kind: 'session', id: session.id, scope: 'admin' },
+    accountId: account.id, command: 'account.connect', result: 'allowed' })
+  core._appendAudit({ actor: { kind: 'token', id: adminTok.split('_')[1], scope: 'admin' },
+    accountId: account.id, command: 'status', result: 'allowed' })
+  const echoedSecrets = `hello secret@example.com ${FAKE_PROXY_PASS} ${FAKE_WEBHOOK} ${FAKE_BOT_TOKEN} prefix${session.id}suffix ${adminTok}`
+  core.eventStore.append(account.id, { type: 'log', kind: 'chat', message: echoedSecrets,
+    password: FAKE_PROXY_PASS, webhookUrl: FAKE_WEBHOOK, botToken: FAKE_BOT_TOKEN, refreshToken: FAKE_REFRESH_TOKEN })
+  assert.ok(core.logs.list('audit').length >= 2)
+  assert.ok(core.logs.list(account.id).some(e => e.type === 'audit'))
 
   const wsConn = await connectWs({
     port,
@@ -405,7 +425,7 @@ test('secrets never appear in any API response or WebSocket message (proxy passw
   // Emit a bot event containing secret-named fields
   core.emitBotEvent('status', 'acc-1', {
     status: 'online',
-    detail: 'Connected',
+    detail: echoedSecrets,
     password: FAKE_PROXY_PASS,
     refreshToken: FAKE_REFRESH_TOKEN,
     webhookUrl: FAKE_WEBHOOK,
@@ -419,10 +439,11 @@ test('secrets never appear in any API response or WebSocket message (proxy passw
     ['accounts:list', undefined],
     ['notify:list', undefined],
     ['settings:get', undefined],
-    ['logs:list', { id: '__all__' }],
+    ['logs:list', { id: 'audit' }],
+    ['logs:list', { id: account.id }],
     ['proxy:health', undefined]
   ]) {
-    const res = await httpJson({ port, token: adminTok, body: { channel, args } })
+    const res = await httpJson({ port, cookie: `afk_session=${session.id}`, csrf: session.csrfToken, body: { channel, args } })
     assert.equal(res.status, 200)
     responsesToInspect.push(res.text)
   }
@@ -437,7 +458,7 @@ test('secrets never appear in any API response or WebSocket message (proxy passw
   responsesToInspect.push(JSON.stringify(wsConn.messages))
 
   const combined = responsesToInspect.join('\n')
-  for (const secret of [FAKE_PROXY_PASS, FAKE_WEBHOOK, FAKE_BOT_TOKEN, FAKE_REFRESH_TOKEN]) {
+  for (const secret of [FAKE_PROXY_PASS, FAKE_WEBHOOK, FAKE_BOT_TOKEN, FAKE_REFRESH_TOKEN, '@example.com', session.id, adminTok, adminTok.split('_')[2]]) {
     assert.equal(combined.includes(secret), false, `Secret "${secret}" must never appear in API/WS output`)
   }
 })
@@ -482,13 +503,29 @@ test('WebSocket /ws enforces auth, Origin, Host, concurrency caps, scope-filtere
   const cookie = loginRes.headers['set-cookie'][0].split(';')[0]
   const csrf = loginRes.json.csrfToken
 
-  const sessionWs1 = await connectWs({ port, headers: { Cookie: cookie } })
+  const sessionWs1 = await connectWs({ port, headers: { Cookie: cookie, 'Sec-WebSocket-Protocol': `afk-csrf.${csrf}` } })
   assert.equal(sessionWs1.ok, true)
-  t.after(() => sessionWs1.ws.close())
+  t.after(() => { try { sessionWs1.ws.close() } catch {} })
 
-  const sessionWs2 = await connectWs({ port, headers: { Cookie: cookie } })
-  assert.equal(sessionWs2.ok, false)
-  assert.equal(sessionWs2.statusCode, 429)
+  // Session limit is 4 concurrent sockets; up to 4 succeed
+  const sessionWs2 = await connectWs({ port, headers: { Cookie: cookie, 'Sec-WebSocket-Protocol': `afk-csrf.${csrf}` } })
+  const sessionWs3 = await connectWs({ port, headers: { Cookie: cookie, 'Sec-WebSocket-Protocol': `afk-csrf.${csrf}` } })
+  const sessionWs4 = await connectWs({ port, headers: { Cookie: cookie, 'Sec-WebSocket-Protocol': `afk-csrf.${csrf}` } })
+  assert.equal(sessionWs2.ok, true)
+  assert.equal(sessionWs3.ok, true)
+  assert.equal(sessionWs4.ok, true)
+  t.after(() => {
+    try { sessionWs2.ws.close() } catch {}
+    try { sessionWs3.ws.close() } catch {}
+    try { sessionWs4.ws.close() } catch {}
+  })
+
+  // 5th connection closes the oldest socket (sessionWs1) instead of rejecting
+  const s1Closed = new Promise((resolve) => sessionWs1.ws.once('close', resolve))
+  const sessionWs5 = await connectWs({ port, headers: { Cookie: cookie, 'Sec-WebSocket-Protocol': `afk-csrf.${csrf}` } })
+  assert.equal(sessionWs5.ok, true)
+  t.after(() => { try { sessionWs5.ws.close() } catch {} })
+  await s1Closed
 
   // 5. WS scope filtering: read token gets status/telemetry/logs, but NOT login-code; admin session gets login-code
   const readWs = await connectWs({ port, headers: { Authorization: `Bearer ${readTok}` } })
@@ -501,15 +538,15 @@ test('WebSocket /ws enforces auth, Origin, Host, concurrency caps, scope-filtere
   await new Promise((r) => setTimeout(r, 60))
 
   // Admin session received both status and login-code (headless device-code sign-in)
-  assert.ok(sessionWs1.messages.some((m) => m.channel === 'bot:event' && m.payload.type === 'status'))
-  assert.ok(sessionWs1.messages.some((m) => m.channel === 'bot:event' && m.payload.type === 'login-code' && m.payload.payload.userCode === 'ABCD-1234'))
+  assert.ok(sessionWs5.messages.some((m) => m.channel === 'bot:event' && m.payload.type === 'status'))
+  assert.ok(sessionWs5.messages.some((m) => m.channel === 'bot:event' && m.payload.type === 'login-code' && m.payload.payload.userCode === 'ABCD-1234'))
 
   // Read token received status, but NOT login-code
   assert.ok(readWs.messages.some((m) => m.channel === 'bot:event' && m.payload.type === 'status'))
   assert.equal(readWs.messages.some((m) => m.channel === 'bot:event' && m.payload.type === 'login-code'), false)
 
-  // 6. Logging out session immediately closes sessionWs1
-  const closedPromise = new Promise((resolve) => sessionWs1.ws.once('close', (code) => resolve(code)))
+  // 6. Logging out session immediately closes active sessionWs5
+  const closedPromise = new Promise((resolve) => sessionWs5.ws.once('close', (code) => resolve(code)))
   await httpJson({
     port,
     path: '/api/logout',
@@ -518,10 +555,18 @@ test('WebSocket /ws enforces auth, Origin, Host, concurrency caps, scope-filtere
     body: {}
   })
   const closeCode = await closedPromise
-  assert.equal(closeCode, 1008)
+  assert.equal(closeCode, 4401)
 })
 
 test('browser-bridge.js no-ops when window.afkDesk exists and implements full preload API over fetch + WebSocket', async (t) => {
+  const existing = Object.freeze({ existingPreload: true })
+  const window = { afkDesk: existing }
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../server/browser-bridge.js'), 'utf8'), {
+    window, globalThis: window,
+    fetch: () => assert.fail('existing preload must not fetch'),
+    WebSocket: class { constructor() { assert.fail('existing preload must not connect') } }
+  })
+  assert.equal(window.afkDesk, existing)
   const { port } = await createApiFixture(t)
 
   let sessionCookie = ''
@@ -535,8 +580,9 @@ test('browser-bridge.js no-ops when window.afkDesk exists and implements full pr
       return res
     },
     WebSocketImpl: class extends WebSocket {
-      constructor(url) {
-        super(url, {
+      constructor(url, protocols) {
+        assert.match(protocols[0], /^afk-csrf\.[a-f0-9]{64}$/)
+        super(url, protocols, {
           headers: {
             Origin: `http://127.0.0.1:${port}`,
             ...(sessionCookie ? { Cookie: sessionCookie } : {})
@@ -567,7 +613,8 @@ test('browser-bridge.js no-ops when window.afkDesk exists and implements full pr
     host: 'mc.example.com',
     port: 25565
   })
-  assert.equal(saved.username, 'BridgePlayer')
+  assert.equal(saved.name, 'mc.example.com')
+  assert.equal(saved.username, undefined)
 
   await assert.rejects(
     () => bridge.openExternal('https://example.com'),
@@ -629,105 +676,70 @@ test('CLI init --password-stdin creates admin and SIGTERM shutdown calls core.sh
   assert.equal(exitCode, 0)
 })
 
-test('Desktop embedded mode: disabled by default, refuses enable without admin password, starts and stops via settings', async (t) => {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'afk-embedded-'))
-  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }))
-  const secretBox = createFileSecretBox({ dataDir })
-  const auth = new AuthManager({ dataDir })
-  let embeddedServer = null
-  let core = null
-
-  const getRemoteAccess = () => {
-    const cfg = auth.getRemoteConfig()
-    return {
-      enabled: Boolean(cfg.enabled),
-      running: Boolean(embeddedServer?.isRunning()),
-      bind: cfg.bind || '127.0.0.1',
-      port: embeddedServer?.getPort() || cfg.port || 0,
-      allowedHosts: cfg.allowedHosts || [],
-      hasAdmin: auth.hasAdmin(),
-      interfaces: detectNetworkInterfaces(),
-      tokens: auth.listTokens()
-    }
-  }
-
-  const saveRemoteAccess = (input) => {
-    if (!input || typeof input !== 'object') return getRemoteAccess()
-    if (input.adminPassword) auth.setAdminPasswordSync(input.adminPassword)
-    const nextEnabled = input.enabled !== undefined ? Boolean(input.enabled) : auth.getRemoteConfig().enabled
-    if (nextEnabled && !auth.hasAdmin()) {
-      throw new Error('Set an admin password before enabling remote access.')
-    }
-    const saved = auth.saveRemoteConfig({
-      enabled: nextEnabled,
-      bind: input.bind || '127.0.0.1',
-      port: input.port ?? 0,
-      allowedHosts: input.allowedHosts || []
-    })
-    return saved
-  }
-
-  core = new AppCore({
-    userDataPath: dataDir,
-    secretBox,
-    BotManager: FakeBotManager,
-    normalizeSkinUrl: (u) => u || '',
-    platform: {
-      getVersion: () => '0.10.0-embedded',
-      getRemoteAccess,
-      saveRemoteAccess
-    }
+test('R2-11: main.cjs embedded lifecycle is off by default, requires password, and starts/stops through trusted settings IPC', async (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'afk-main-embedded-'))
+  const handlers = new Map(), windows = [], errors = [], servers = []
+  const app = new EventEmitter()
+  Object.assign(app, {
+    whenReady: () => Promise.resolve(), getPath: () => dataDir, getVersion: () => 'test',
+    quit: () => app.emit('before-quit'), getLoginItemSettings: () => ({ openAtLogin: false }), setLoginItemSettings() {}
   })
-  await core.start()
+  class BrowserWindow {
+    constructor() {
+      this.webContents = new EventEmitter()
+      Object.assign(this.webContents, { mainFrame: { url: '' }, send() {}, setWindowOpenHandler() {},
+        session: { setPermissionRequestHandler() {}, setPermissionCheckHandler() {} } })
+      windows.push(this)
+    }
+    loadFile(file) { this.webContents.mainFrame.url = pathToFileURL(file).href }
+    isDestroyed() { return false }
+  }
+  const electron = { app, BrowserWindow, ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
+    dialog: { showErrorBox: (...args) => errors.push(args) }, Notification: { isSupported: () => false } }
+  const filename = path.join(__dirname, '../electron/main.cjs'), realRequire = createRequire(filename)
+  const sandbox = { __dirname: path.dirname(filename), process, console, Buffer, URL, setTimeout, clearTimeout,
+    require(name) {
+      if (name === 'electron') return electron
+      if (name === './bot-manager.cjs') return { BotManager: FakeBotManager, normalizeSkinUrl: () => '' }
+      if (name === '../server/http-server.cjs') return { detectNetworkInterfaces, createRemoteServer(options) {
+        // Real HTTP lifecycle and production hooks, with only the OS listener replaced.
+        const remote = createRemoteServer(options)
+        remote.httpServer.listen = () => { queueMicrotask(() => remote.httpServer.emit('listening')); return remote.httpServer }
+        servers.push(remote)
+        return remote
+      } }
+      return realRequire(name)
+    }
+  }
   t.after(async () => {
-    await embeddedServer?.stop()
-    await core.shutdown()
+    app.emit('before-quit')
+    await new Promise(resolve => setImmediate(resolve))
+    fs.rmSync(dataDir, { recursive: true, force: true })
   })
-
-  // Disabled by default
-  const initialSettings = core.settings.get()
-  assert.equal(initialSettings.remoteAccess.enabled, false)
-  assert.equal(initialSettings.remoteAccess.running, false)
-
-  // Enabling without admin password throws
-  assert.throws(
-    () => core.settings.save({ remoteAccess: { _update: true, enabled: true } }),
-    /Set an admin password/
-  )
-
-  // Setting admin password and enabling starts embedded server
-  const updated = core.settings.save({
-    remoteAccess: {
-      _update: true,
-      enabled: true,
-      bind: '127.0.0.1',
-      port: 0,
-      adminPassword: 'EmbeddedAdminPass!2026'
-    }
-  })
-  assert.equal(updated.remoteAccess.enabled, true)
-
-  embeddedServer = createRemoteServer({
-    core,
-    auth,
-    dataDir,
-    bind: '127.0.0.1',
-    port: 0,
-    desktopEmbedded: true,
-    getRemoteAccessStatus: getRemoteAccess,
-    saveRemoteAccessSettings: saveRemoteAccess
-  })
-  await embeddedServer.start()
-  assert.equal(core.settings.get().remoteAccess.running, true)
-
-  const health = await httpJson({
-    port: embeddedServer.getPort(),
-    method: 'GET',
-    path: '/healthz'
-  })
-  assert.equal(health.status, 200)
-  assert.equal(health.json.ok, true)
-
-  await embeddedServer.stop()
-  assert.equal(core.settings.get().remoteAccess.running, false)
+  vm.runInNewContext(fs.readFileSync(filename, 'utf8'), sandbox, { filename })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(errors, [])
+  const window = windows[0]
+  const event = { sender: window.webContents, senderFrame: window.webContents.mainFrame }
+  const settings = () => handlers.get('settings:get')(event)
+  const save = remoteAccess => handlers.get('settings:save')(event, { remoteAccess })
+  assert.equal(settings().remoteAccess.enabled, false)
+  assert.equal(servers.length, 0)
+  assert.throws(() => save({ _update: true, enabled: true }), /Set an admin password/)
+  assert.equal(servers.length, 0)
+  save({ _update: true, enabled: true, adminPassword: 'EmbeddedAdminPass!2026', bind: '127.0.0.1', port: 8787 })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(servers.length, 1)
+  assert.equal(servers[0].isRunning(), true)
+  assert.equal(settings().remoteAccess.running, true)
+  save({ _update: true, enabled: false })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(servers[0].isRunning(), false)
+  assert.equal(settings().remoteAccess.running, false)
+  save({ _update: true, enabled: true })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(servers[1].isRunning(), true)
+  app.emit('before-quit')
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(servers[1].isRunning(), false)
 })

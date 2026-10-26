@@ -245,16 +245,22 @@ test('rate limits: login 5/min with exponential lockout, API 120/min, WS 1/sessi
   assert.equal(overLimit.allowed, false)
   assert.ok(overLimit.retryAfterMs > 0)
 
-  // WS connection limit: 1 per session, 5 per token
-  const sessionActor = { kind: 'session', id: 'sess-1' }
-  const ws1 = {}
+  // WS connection limit: 4 per session, 5 per token (oldest session socket closed on exceed)
+  const sessionActor = { kind: 'session', id: auth.createSession().id }
+  const sSockets = []
+  for (let i = 0; i < 4; i++) {
+    assert.equal(auth.canAttachWebSocket(sessionActor), true)
+    const ws = { id: i, closed: false, close() { this.closed = true } }
+    auth.attachWebSocket(sessionActor, ws)
+    sSockets.push(ws)
+  }
   assert.equal(auth.canAttachWebSocket(sessionActor), true)
-  const detachS1 = auth.attachWebSocket(sessionActor, ws1)
-  assert.equal(auth.canAttachWebSocket(sessionActor), false)
-  detachS1()
-  assert.equal(auth.canAttachWebSocket(sessionActor), true)
+  const ws5 = { id: 5, closed: false, close() { this.closed = true } }
+  auth.attachWebSocket(sessionActor, ws5)
+  assert.equal(sSockets[0].closed, true)
+  assert.equal(ws5.closed, false)
 
-  const tokenActor = { kind: 'token', id: 'tok-1' }
+  const tokenActor = { kind: 'token', id: auth.createTokenSync().record.id }
   const detaches = []
   for (let i = 0; i < 5; i++) {
     assert.equal(auth.canAttachWebSocket(tokenActor), true)

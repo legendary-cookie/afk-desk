@@ -220,7 +220,15 @@ test('bind policy: refuses public/wildcard bind without trustProxy unless iUnder
       clearInterval: () => {}
     }
   })
+  // Exercise the production bind policy without exposing a wildcard listener.
+  let listenOptions
+  warnRemote.httpServer.listen = (port, host) => {
+    listenOptions = { port, host }
+    queueMicrotask(() => warnRemote.httpServer.emit('listening'))
+    return warnRemote.httpServer
+  }
   await warnRemote.start()
+  assert.equal(listenOptions.host, '0.0.0.0')
   await warnRemote.stop()
   assert.ok(warnings.length >= 2)
   assert.match(warnings[0], /SECURITY WARNING/)
@@ -495,4 +503,21 @@ test('static files serve allowlisted desktop/src and desktop/assets and reject p
     )
     assert.doesNotMatch(res.text, /"afk-desk-server"/)
   }
+})
+
+
+test('trustProxy: spoofed leading X-Forwarded-For entries cannot evade per-IP login limits or claim loopback', async (t) => {
+  // Regression: getClientIp took the FIRST (client-controlled) X-Forwarded-For entry,
+  // so "127.0.0.1, <real ip>" bypassed login lockout behind a reverse proxy.
+  const { port } = await createTestFixture(t, { trustProxy: true })
+  const statuses = []
+  for (let i = 0; i < 12; i++) {
+    const res = await rawRequest({
+      port, method: 'POST', path: '/api/login',
+      headers: { 'Content-Type': 'application/json', Origin: `http://127.0.0.1:${port}`, 'X-Forwarded-For': `10.9.${i}.1, 127.0.0.1, 203.0.113.9` },
+      body: { username: 'admin', password: `wrong-password-${i}` }
+    })
+    statuses.push(res.status)
+  }
+  assert.ok(statuses.includes(429), `expected lockout (429) for the real client 203.0.113.9, got ${statuses.join(',')}`)
 })
