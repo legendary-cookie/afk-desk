@@ -18,6 +18,7 @@ const { createBotEventAdapter } = require('../electron/macro/bot-events.cjs')
 const { IPC, LIMITS } = require('../electron/macro/contract.cjs')
 const { NotifySettings, classifyKickReason, crossedLowHealth } = require('../electron/notify/settings.cjs')
 const { fetchWithPolicy } = require('../electron/net-policy.cjs')
+const { resolveSystemAppData } = require('../electron/resource-pack.cjs')
 const { rememberedVersionState } = require('../electron/version-compatibility.cjs')
 const { supportedVersions, normalizeVersionSelection } = require('../electron/version-support.cjs')
 const { normalizeModdedProfile } = require('../electron/modded-compatibility.cjs')
@@ -104,7 +105,9 @@ class AppCore {
     const profilesPath = path.join(userDataPath, 'profiles')
     const managerOptions = {
       profilesPath,
-      appDataPath: userDataPath,
+      // Launcher caches (.minecraft, ModrinthApp, PrismLauncher...) live in the
+      // system app-data folder, NOT in AFK Desk's own userData folder.
+      appDataPath: resolveSystemAppData(process.env, userDataPath),
       useLauncherPackCache: () => this.settingsStore.get().useLauncherPackCache,
       emit: this.emitBotEvent.bind(this),
       diagnose: (entry) => {

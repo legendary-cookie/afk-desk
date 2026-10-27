@@ -4,7 +4,7 @@ const { isDeepStrictEqual } = require('node:util')
 const { profilePath, validateProfileId } = require('./profile-path.cjs')
 const { applyProtocolFixes } = require('./protocol-fixes.cjs')
 const { createProxyConnect } = require('./proxy-connect.cjs')
-const { ResourcePackLoader, normalizePackEvent, discoverLauncherPackDirs } = require('./resource-pack.cjs')
+const { ResourcePackLoader, normalizePackEvent, discoverLauncherPackDirs, resolveSystemAppData } = require('./resource-pack.cjs')
 const { HostPolicyError } = require('./net-policy.cjs')
 const { INPUTS } = require('./macro/contract.cjs')
 const {
@@ -61,7 +61,7 @@ class BotManager {
     random = Math.random,
     diagnose = () => {},
     resourcePackLoader,
-    appDataPath = path.dirname(profilesPath),
+    appDataPath = resolveSystemAppData(process.env, path.dirname(profilesPath)),
     userProfile = require('node:os').homedir(),
     useLauncherPackCache = () => true
   }) {

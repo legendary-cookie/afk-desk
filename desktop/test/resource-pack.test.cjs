@@ -510,3 +510,11 @@ test('component text flattening is bounded and iterative', () => {
   assert.equal(flattenComponentText({ text: 'Hi ', extra: [{ text: 'there' }, '!'] }), 'Hi there!')
   assert.equal(flattenComponentText('{"text":"json","extra":[{"text":"!"}]}'), 'json!')
 })
+
+test('launcher pack cache is searched from system %APPDATA%, not AFK Desk userData', () => {
+  const { resolveSystemAppData } = require('../electron/resource-pack.cjs')
+  assert.equal(resolveSystemAppData({ APPDATA: 'C:\\Users\\u\\AppData\\Roaming' }, 'C:\\Users\\u\\AppData\\Roaming\\afkdesk'), 'C:\\Users\\u\\AppData\\Roaming')
+  assert.equal(resolveSystemAppData({}, '/home/u/.config/afkdesk'), require('node:path').dirname('/home/u/.config/afkdesk'))
+  const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'core', 'app-core.cjs'), 'utf8')
+  assert.doesNotMatch(src, /appDataPath:\s*userDataPath/)
+})

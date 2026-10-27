@@ -610,4 +610,12 @@ function findHashNamedFiles(root, hash, { maxDepth = 3, maxDirs = 400 } = {}) {
   }
   return found
 }
-module.exports = { ResourcePackLoader, ParsedResourcePack, parseResourcePack, normalizePackEvent, itemComponents, resolveItemDefinition, flattenComponentText, discoverLauncherPackDirs }
+// The system app-data folder that holds launcher caches. On Windows this is
+// %APPDATA%; elsewhere discoverLauncherPackDirs works from userProfile, so the
+// fallback (parent of AFK Desk's own data folder) is just a safe default.
+function resolveSystemAppData(env = process.env, userDataPath = '') {
+  if (env && env.APPDATA) return env.APPDATA
+  return userDataPath ? path.dirname(userDataPath) : ''
+}
+
+module.exports = { resolveSystemAppData, ResourcePackLoader, ParsedResourcePack, parseResourcePack, normalizePackEvent, itemComponents, resolveItemDefinition, flattenComponentText, discoverLauncherPackDirs }
