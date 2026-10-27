@@ -24,9 +24,10 @@
 
 | Platform / Channel | Version | Download | Notes |
 | --- | --- | --- | --- |
-| **Windows (Stable)** | `0.9.2` | [AFK-Desk-Setup-0.9.2.exe](https://github.com/legendary-cookie/afk-desk/releases/download/v0.9.2/AFK-Desk-Setup-0.9.2.exe) · [Release page](https://github.com/legendary-cookie/afk-desk/releases/tag/v0.9.2) | Recommended stable Windows desktop installer (Electron + Mineflayer). |
-| **Windows (Pre-release Beta)** | `0.10.0-beta.9` | [AFK-Desk-Setup-0.10.0-beta.9.exe](https://github.com/legendary-cookie/afk-desk/releases/download/v0.10.0-beta.9/AFK-Desk-Setup-0.10.0-beta.9.exe) · [Release page](https://github.com/legendary-cookie/afk-desk/releases/tag/v0.10.0-beta.9) | Adds on-demand 3D/map POV view, workspace themes, experimental Bedrock mode, and beta automations UI. |
-| **Android (Stable)** | `0.9.2` | [AFK-Desk-Android-0.9.2.apk](https://github.com/legendary-cookie/afk-desk/releases/download/v0.9.2/AFK-Desk-Android-0.9.2.apk) · [Release page](https://github.com/legendary-cookie/afk-desk/releases/tag/v0.9.2) | Standalone on-device client with embedded Node.js engine and foreground service (Android 7.0+). |
+| **Windows (Recommended Beta)** | `0.11.0-beta.1` | [AFK-Desk-Setup-0.11.0-beta.1.exe](https://github.com/legendary-cookie/afk-desk/releases/download/v0.11.0-beta.1/AFK-Desk-Setup-0.11.0-beta.1.exe) · [Release page](https://github.com/legendary-cookie/afk-desk/releases/tag/v0.11.0-beta.1) | Recommended. Macro engine v2 with templates, Discord/Telegram notifications, Discord bot control, Bedrock support, and remote access settings. |
+| **Android (Recommended Beta)** | `0.11.0-beta.1` | [AFK-Desk-Android-0.11.0-beta.1.apk](https://github.com/legendary-cookie/afk-desk/releases/download/v0.11.0-beta.1/AFK-Desk-Android-0.11.0-beta.1.apk) · [Release page](https://github.com/legendary-cookie/afk-desk/releases/tag/v0.11.0-beta.1) | Recommended. Installs over 0.9.2 and keeps your data (same signing key). Android 7.0+. |
+| **Windows (Previous Stable)** | `0.9.2` | [AFK-Desk-Setup-0.9.2.exe](https://github.com/legendary-cookie/afk-desk/releases/download/v0.9.2/AFK-Desk-Setup-0.9.2.exe) · [Release page](https://github.com/legendary-cookie/afk-desk/releases/tag/v0.9.2) | Previous stable Windows installer. |
+| **Android (Previous Stable)** | `0.9.2` | [AFK-Desk-Android-0.9.2.apk](https://github.com/legendary-cookie/afk-desk/releases/download/v0.9.2/AFK-Desk-Android-0.9.2.apk) · [Release page](https://github.com/legendary-cookie/afk-desk/releases/tag/v0.9.2) | Previous stable on-device client (Android 7.0+). |
 | **iOS (Source)** | `0.1.0` | [Build instructions](mobile/BUILDING.md) | Shared React Native Xcode project; requires macOS, Xcode, and personal signing. |
 
 All releases and source archives are listed on the [GitHub Releases page](https://github.com/legendary-cookie/afk-desk/releases). Artifact SHA-256 hashes are recorded in [RELEASE_CHECKSUMS.txt](RELEASE_CHECKSUMS.txt).
@@ -55,7 +56,7 @@ All releases and source archives are listed on the [GitHub Releases page](https:
 ![Inventory panel with item tooltip and slot locks](docs/images/inventory-panel.png)
 
 ### POV & Menus
-- **Lightweight Bot POV (Windows 0.10.0-beta.9)**: On-demand perspective (3D voxel) and top-down map views of loaded chunks with HUD, `WASD` + mouse-look pointer lock, and coordinate actions (`Look`, `Walk`, `Use block`, `Dig`, `Attack nearest`, `Use held`). Rendering stops completely when the POV dialog is closed.
+- **Lightweight Bot POV (Windows 0.10.0-beta.9 and later)**: On-demand perspective (3D voxel) and top-down map views of loaded chunks with HUD, `WASD` + mouse-look pointer lock, and coordinate actions (`Look`, `Walk`, `Use block`, `Dig`, `Attack nearest`, `Use held`). Rendering stops completely when the POV dialog is closed.
 - **Interactive server menus**: Click slots in server chest GUIs (`/menu`, `/shop`, `/warp`) with full hover tooltips, downloaded server resource-pack item models, and bitmap-font GUI container backgrounds.
 
 ![Bot POV dashboard](docs/images/pov-view.png)
@@ -76,7 +77,7 @@ All releases and source archives are listed on the [GitHub Releases page](https:
 - **Java Edition (Windows & Android)**: **28 complete bot versions from `1.8.8` through `1.21.11`**, with automatic server version detection and explicit version selection:
   `1.8.8`, `1.9.4`, `1.10.2`, `1.11.2`, `1.12.2`, `1.13.2`, `1.14.4`, `1.15.2`, `1.16.5`, `1.17.1`, `1.18.2`, `1.19`, `1.19.2`, `1.19.3`, `1.19.4`, `1.20`, `1.20.1`, `1.20.2`, `1.20.4`, `1.20.6`, `1.21.1`, `1.21.3`, `1.21.4`, `1.21.5`, `1.21.6`, `1.21.8`, `1.21.9`, `1.21.11`.
 - **Modded & Proxy Servers**: Supports Vanilla, Paper/Spigot/Purpur, BungeeCord/Velocity, and lightweight brand/channel/legacy Forge FML1–FML3 handshakes. Client-side Java mod code is not executed. See [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) for exact boundaries.
-- **Bedrock Edition (Experimental in Windows 0.10.0-beta.9)**: Supports Microsoft sign-in, connecting, chat/commands, auto-reconnect, and basic health/hunger/position telemetry over UDP/RakNet. Movement, inventory actions, POV blocks, and TCP proxies are not enabled for Bedrock.
+- **Bedrock Edition (Windows 0.10.0-beta.9 and later)**: Supports Microsoft sign-in, connecting, chat/commands, auto-reconnect, and basic health/hunger/position telemetry over UDP/RakNet. Movement, inventory actions, POV blocks, and TCP proxies are not enabled for Bedrock.
 
 ## Quick Start
 
@@ -149,7 +150,8 @@ See [mobile/README.md](mobile/README.md) and [mobile/BUILDING.md](mobile/BUILDIN
 
 - **Released — `0.9.2` (Stable Windows & Android)**: Complete 28-version Java matrix (`1.8.8`–`1.21.11`), directional water physics, modern configuration-phase proxy transfer guards, resource-pack server menus, item locks, and auto-deposit.
 - **Released — `0.10.0-beta.9` (Windows Pre-release)**: Lightweight on-demand 3D/map POV view, workspace themes, smart proxy pool, experimental Bedrock Edition support, persistent event logs, and initial automations UI.
-- **In Development — `0.10.0` Stability Milestone**: Ongoing reliability, storage safety, and regression hardening across desktop and mobile engines.
+- **Released — `0.11.0-beta.1` (Recommended, Windows & Android)**: Macro engine v2 with templates, Discord/Telegram notifications, Discord bot control, Bedrock phase 1, and remote access settings.
+- **In Development — `0.11.0` Stable**: Ongoing reliability, storage safety, and regression hardening across desktop and mobile engines.
 - **Coming in `0.11` (In Development)**:
   - **Macro Engine v2** ([design doc](docs/design/macro-engine.md) · [user guide preview](docs/user-guide/macros.md)): Shared macro library with account/tag targets, edge-triggered events (`join`, `worldChange`, `timer`, `schedule`, `chat` globs, `healthBelow`, `inventoryFull`, `windowOpen`), cooperative cancellation, rate budgets, and strict item-lock enforcement.
   - **Outbound Discord & Telegram Notifications** ([contract](desktop/electron/notify/contract.cjs) · [user guide preview](docs/user-guide/notifications.md)): Encrypted, rate-limited, outbound-only Discord webhook and Telegram bot alerts for disconnects, kicks, bans, deaths, low health, full inventory, and macro events.
