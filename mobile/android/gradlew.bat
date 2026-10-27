@@ -38,6 +38,13 @@ for %%i in ("%APP_HOME%") do set APP_HOME=%%~fi
 @rem Add default JVM options here. You can also use JAVA_OPTS and GRADLE_OPTS to pass JVM options to this script.
 set DEFAULT_JVM_OPTS="-Xmx64m" "-Xms64m"
 
+@rem Keep JVM options for Gradle, but do not pass JAVA_TOOL_OPTIONS to child Java
+@rem tools (such as Prefab), which print a notice to stderr that AGP misreads as an error.
+if defined JAVA_TOOL_OPTIONS (
+    set "GRADLE_OPTS=%GRADLE_OPTS% %JAVA_TOOL_OPTIONS%"
+    set "JAVA_TOOL_OPTIONS="
+)
+
 @rem Find java.exe
 if defined JAVA_HOME goto findJavaFromJavaHome
 
