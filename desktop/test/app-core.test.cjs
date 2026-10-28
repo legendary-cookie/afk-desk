@@ -8,6 +8,23 @@ const vm = require('node:vm')
 const Module = require('node:module')
 const { EventEmitter } = require('node:events')
 const { pathToFileURL } = require('node:url')
+const { validateAccount } = require('../core/app-core.cjs')
+
+test('account normalization defaults and bounds deposit and server-message retry settings', () => {
+  const base = { id: 'settings', username: 'fixture@example.com', host: 'localhost' }
+  const defaults = validateAccount(base, null, null)
+  assert.equal(defaults.autoDepositMode, 'immediate')
+  assert.equal(defaults.autoDepositInterval, 300)
+  assert.equal(defaults.autoDepositFullThreshold, 0)
+  assert.equal(defaults.serverChangeRetryMinutes, 30)
+  const bounded = validateAccount({ ...base, autoDepositMode: 'broken', autoDepositInterval: 999999, autoDepositFullThreshold: 36, serverChangeRetryMinutes: -5 }, null, null)
+  assert.equal(bounded.autoDepositMode, 'immediate')
+  assert.equal(bounded.autoDepositInterval, 86400)
+  assert.equal(bounded.autoDepositFullThreshold, 35)
+  assert.equal(bounded.serverChangeRetryMinutes, 0)
+  assert.equal(validateAccount({ ...base, autoDepositInterval: 0 }, null, null).autoDepositInterval, 1)
+  assert.equal(validateAccount({ ...base, autoDepositMode: undefined }, { autoDepositMode: 'interval' }, null).autoDepositMode, 'interval')
+})
 
 const ORIGINAL_IPC_CHANNELS = Object.freeze([
   'accounts:list',

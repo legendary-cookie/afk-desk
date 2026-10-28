@@ -14,7 +14,8 @@ type Account = {
   antiAfk: boolean; antiAfkInterval: string; autoReconnect: boolean; autoReconnectDelay: string;
   autoReconnectMaxAttempts: string; connectOnStartup: boolean; joinMessage: string;
   serverChangeMessage: string; messageDelay: string; autoDepositToChest: boolean;
-  autoDepositRange: string; proxy: ProxyConfig;
+  autoDepositRange: string; autoDepositMode: 'immediate' | 'interval' | 'inventoryFull' | 'intervalOrFull';
+  autoDepositInterval: string; autoDepositFullThreshold: string; serverChangeRetryMinutes: string; proxy: ProxyConfig;
 };
 type ChatClick = {action: 'open_url' | 'run_command' | 'suggest_command' | 'copy_to_clipboard'; value: string};
 type Segment = {text: string; color?: string; bold?: boolean; italic?: boolean; underlined?: boolean; strikethrough?: boolean; hover?: string; click?: ChatClick};
@@ -32,13 +33,18 @@ const blankAccount = (): Account => ({
   id: `${Date.now()}-${Math.random().toString(16).slice(2)}`, username: '', host: '', port: '25565', version: '',
   antiAfk: true, antiAfkInterval: '45', autoReconnect: true, autoReconnectDelay: '5', autoReconnectMaxAttempts: '0',
   connectOnStartup: false, joinMessage: '', serverChangeMessage: '', messageDelay: '6',
-  autoDepositToChest: false, autoDepositRange: '5', proxy: {...EMPTY_PROXY},
+  autoDepositToChest: false, autoDepositRange: '5', autoDepositMode: 'immediate', autoDepositInterval: '300',
+  autoDepositFullThreshold: '0', serverChangeRetryMinutes: '30', proxy: {...EMPTY_PROXY},
 });
 
 const normalizeAccount = (account: Partial<Account>): Account => ({
   ...blankAccount(), ...account,
   autoDepositToChest: account.autoDepositToChest === true,
   autoDepositRange: String(Math.max(1, Math.min(Math.round(Number(account.autoDepositRange) || 5), 16))),
+  autoDepositMode: ['immediate', 'interval', 'inventoryFull', 'intervalOrFull'].includes(account.autoDepositMode as string) ? account.autoDepositMode! : 'immediate',
+  autoDepositInterval: String(Math.max(1, Math.min(Math.round(Number(account.autoDepositInterval) || 300), 86400))),
+  autoDepositFullThreshold: String(Math.max(0, Math.min(Math.round(Number(account.autoDepositFullThreshold) || 0), 35))),
+  serverChangeRetryMinutes: String(Math.max(0, Math.min(Math.round(Number(account.serverChangeRetryMinutes ?? 30) || 0), 1440))),
   proxy: {...EMPTY_PROXY, ...(account.proxy || {})},
 });
 
@@ -177,9 +183,10 @@ function App(): React.JSX.Element {
     }
     const existing = accountsRef.current.find(item => item.id === account.id);
     setAccounts(old => old.some(item => item.id === account.id) ? old.map(item => item.id === account.id ? account : item) : [...old, account]);
-    if (existing && (existing.autoDepositToChest !== account.autoDepositToChest || existing.autoDepositRange !== account.autoDepositRange)) {
-      engineCommand({action: 'set-auto-deposit', accountId: account.id, enabled: account.autoDepositToChest, range: Number(account.autoDepositRange)}).catch(error => Alert.alert('Auto-deposit update failed', error.message));
+    if (existing && (existing.autoDepositToChest !== account.autoDepositToChest || existing.autoDepositRange !== account.autoDepositRange || existing.autoDepositMode !== account.autoDepositMode || existing.autoDepositInterval !== account.autoDepositInterval || existing.autoDepositFullThreshold !== account.autoDepositFullThreshold)) {
+      engineCommand({action: 'set-auto-deposit', accountId: account.id, enabled: account.autoDepositToChest, range: Number(account.autoDepositRange), config: account}).catch(error => Alert.alert('Auto-deposit update failed', error.message));
     }
+    if (existing) engineCommand({action: 'update-account-config', account}).catch(error => Alert.alert('Account update failed', error.message));
     setSelectedId(account.id);
     setEditing(null);
   };
@@ -207,7 +214,7 @@ function App(): React.JSX.Element {
     if (!selected) return;
     const previous = selected.autoDepositToChest;
     setAccounts(old => old.map(item => item.id === selected.id ? {...item, autoDepositToChest: enabled} : item));
-    try { await engineCommand({action: 'set-auto-deposit', accountId: selected.id, enabled, range: Number(selected.autoDepositRange)}); }
+    try { await engineCommand({action: 'set-auto-deposit', accountId: selected.id, enabled, range: Number(selected.autoDepositRange), config: selected}); }
     catch (error: any) {
       setAccounts(old => old.map(item => item.id === selected.id ? {...item, autoDepositToChest: previous} : item));
       Alert.alert('Auto-deposit update failed', error.message);
@@ -433,8 +440,13 @@ function AccountModal({value, onClose, onSave, onDelete}: {value: Account | null
         <Field label="Message after joining" value={draft.joinMessage} onChange={(v: string) => set('joinMessage', v)} />
         <Field label="Message after changing servers" value={draft.serverChangeMessage} onChange={(v: string) => set('serverChangeMessage', v)} />
         <Field label="Automatic message delay (seconds)" value={draft.messageDelay} onChange={(v: string) => set('messageDelay', v)} keyboardType="number-pad" />
+        <Field label="Retry server messages for (minutes; 0 disables)" value={draft.serverChangeRetryMinutes} onChange={(v: string) => set('serverChangeRetryMinutes', v)} keyboardType="number-pad" />
         <Toggle label="Auto-deposit inventory" value={draft.autoDepositToChest === true} onChange={v => set('autoDepositToChest', v)} />
         <Field label="Auto-deposit range (1–16 blocks)" value={draft.autoDepositRange || '5'} onChange={(v: string) => set('autoDepositRange', v)} keyboardType="number-pad" />
+        <Text style={styles.help}>Deposit trigger: {draft.autoDepositMode}</Text>
+        <View style={styles.segmented}>{(['immediate', 'interval', 'inventoryFull', 'intervalOrFull'] as const).map(mode => <Pressable key={mode} style={[styles.segment, draft.autoDepositMode === mode && styles.segmentSelected]} onPress={() => set('autoDepositMode', mode)}><Text style={styles.buttonText}>{mode === 'immediate' ? 'Every scan' : mode === 'interval' ? 'Interval' : mode === 'inventoryFull' ? 'When full' : 'Interval or full'}</Text></Pressable>)}</View>
+        {(draft.autoDepositMode === 'interval' || draft.autoDepositMode === 'intervalOrFull') && <Field label="Deposit interval (seconds; 1–86400)" value={draft.autoDepositInterval} onChange={(v: string) => set('autoDepositInterval', v)} keyboardType="number-pad" />}
+        {(draft.autoDepositMode === 'inventoryFull' || draft.autoDepositMode === 'intervalOrFull') && <Field label="Free main-inventory slots to count as full (0–35)" value={draft.autoDepositFullThreshold} onChange={(v: string) => set('autoDepositFullThreshold', v)} keyboardType="number-pad" />}
         <Text style={styles.help}>Only containers with a clear line of sight are used. Turning this off stops remaining queued stacks.</Text>
         <Text style={styles.sectionTitle}>Proxy</Text>
         <Toggle label="Use a proxy for this account" value={draft.proxy.enabled} onChange={v => proxy('enabled', v)} />

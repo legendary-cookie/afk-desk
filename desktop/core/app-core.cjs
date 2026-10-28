@@ -512,8 +512,8 @@ class AppCore {
     const existing = this.store.list().find((a) => a.id === input?.id)
     const saved = this.store.save(validateAccount(input, existing, this.secretBox, this._normalizeSkinUrl))
     this.macroEngine?.setLibrary(this.macroLibrary.list())
-    if (existing && (existing.autoDepositToChest !== saved.autoDepositToChest || existing.autoDepositRange !== saved.autoDepositRange)) {
-      this.botManager.setAutoDeposit?.(saved.id, saved.autoDepositToChest, saved.autoDepositRange)
+    if (existing && (existing.autoDepositToChest !== saved.autoDepositToChest || existing.autoDepositRange !== saved.autoDepositRange || existing.autoDepositMode !== saved.autoDepositMode || existing.autoDepositInterval !== saved.autoDepositInterval || existing.autoDepositFullThreshold !== saved.autoDepositFullThreshold)) {
+      this.botManager.setAutoDeposit?.(saved.id, saved.autoDepositToChest, saved.autoDepositRange, saved)
     }
     if (existing && existing.environmentalMovement !== saved.environmentalMovement) {
       this.botManager.setEnvironmentalMovement?.(saved.id, saved.environmentalMovement)
@@ -570,7 +570,7 @@ class AppCore {
   async _setAutoDeposit({ id, enabled }) {
     const a = this._require(id)
     const updated = this.store.save({ ...a, autoDepositToChest: enabled === true })
-    this.botManager.setAutoDeposit?.(id, updated.autoDepositToChest, updated.autoDepositRange)
+    this.botManager.setAutoDeposit?.(id, updated.autoDepositToChest, updated.autoDepositRange, updated)
     return publicAccount(updated)
   }
 
@@ -915,6 +915,9 @@ function validateAccount(input, existing, secretBox, normalizeSkinUrl = defaultN
     connectOnStartup: input?.connectOnStartup === true,
     autoDepositToChest: input?.autoDepositToChest === true,
     autoDepositRange: Math.round(bounded(input?.autoDepositRange ?? existing?.autoDepositRange, 1, 16, 5)),
+    autoDepositMode: ['immediate', 'interval', 'inventoryFull', 'intervalOrFull'].includes(input?.autoDepositMode ?? existing?.autoDepositMode) ? (input?.autoDepositMode ?? existing?.autoDepositMode) : 'immediate',
+    autoDepositInterval: Math.round(bounded(input?.autoDepositInterval ?? existing?.autoDepositInterval, 1, 86400, 300)),
+    autoDepositFullThreshold: Math.round(bounded(input?.autoDepositFullThreshold ?? existing?.autoDepositFullThreshold, 0, 35, 0)),
     lockedInventorySlots: normalizeSlots(input?.lockedInventorySlots ?? existing?.lockedInventorySlots),
     proxy: validateProxy(input?.proxy, existing?.proxy, secretBox),
     proxyMode: ['direct', 'manual', 'smart'].includes(input?.proxyMode) ? input.proxyMode : (input?.proxy?.enabled ? 'manual' : 'direct'),
@@ -929,7 +932,8 @@ function validateAccount(input, existing, secretBox, normalizeSkinUrl = defaultN
     automations: normalizeAutomations(input?.automations ?? existing?.automations),
     joinMessage: String(input?.joinMessage || '').trim().slice(0, 256),
     serverChangeMessage: String(input?.serverChangeMessage || '').trim().slice(0, 256),
-    messageDelay: Math.max(0, Math.min(input?.messageDelay === '' || input?.messageDelay == null ? 6 : Number(input.messageDelay) || 0, 600))
+    messageDelay: Math.max(0, Math.min(input?.messageDelay === '' || input?.messageDelay == null ? 6 : Number(input.messageDelay) || 0, 600)),
+    serverChangeRetryMinutes: Math.round(bounded(input?.serverChangeRetryMinutes ?? existing?.serverChangeRetryMinutes, 0, 1440, 30))
   }
 }
 

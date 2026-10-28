@@ -47,6 +47,9 @@ const WALK_STALL_EPSILON = 0.01
 const CHEST_SCAN_INTERVAL = 5000
 const DEFAULT_AUTO_DEPOSIT_RANGE = 5
 const MAX_AUTO_DEPOSIT_RANGE = 16
+const MESSAGE_CONFIRMATION_MS = 15_000
+const AUTOMATIC_SWITCH_COOLDOWN_MS = 60_000
+const SERVER_CHANGE_RETRY_DELAYS = [15, 30, 60, 120]
 class BotManager {
   constructor({
     profilesPath,
@@ -136,7 +139,7 @@ class BotManager {
       manualControlTimers: new Map(),
       antiAfkActionTimers: new Set(),
       messageTimers: new Set(),
-      automaticServerSwitches: new Set(),
+      automaticServerSwitches: new Map(),
       ready: false,
       switching: false,
       depositing: false,
@@ -145,6 +148,13 @@ class BotManager {
       inventoryAction: false,
       inventoryQueue: Promise.resolve(),
       joinMessageSent: false,
+      joinedAt: Date.now(),
+      lastDepositAt: 0,
+      pendingMessageConfirmation: null,
+      serverChangeRetryTimer: null,
+      serverChangeRetryAttempts: 0,
+      serverChangeRetryStartedAt: 0,
+      lastDimension: null,
       worldReadyAt: 0,
       nearestChest: null,
       fluidMotion: {
@@ -236,7 +246,7 @@ class BotManager {
       if (firstReady && account.antiAfk !== false) this.enableAntiAfk(account.id, account)
       if (firstReady && account.joinMessage && !session.joinMessageSent) {
         session.joinMessageSent = true
-        this.scheduleMessage(account.id, account.joinMessage, account.messageDelay)
+        this.scheduleMessage(account.id, account.joinMessage, account.messageDelay, { kind: 'join' })
       }
     }
 
@@ -286,6 +296,9 @@ class BotManager {
     }
 
     bot.on('login', () => {
+      const dimension = bot.game?.dimension
+      if (session.lastDimension !== null && dimension != null && dimension !== session.lastDimension) this.confirmServerChange(account.id, session)
+      if (dimension != null) session.lastDimension = dimension
       if (session.switching) markReady()
       else if (!session.ready) this.status(account.id, 'connected', 'Authenticated. Joining world…')
       emitIdentity()
@@ -375,9 +388,11 @@ class BotManager {
     bot.on('respawn', () => {
       session.worldReadyAt = 0
       markReady()
-      if (account.serverChangeMessage) this.scheduleMessage(account.id, account.serverChangeMessage, account.messageDelay)
+      this.confirmServerChange(account.id, session)
+      if (session.account.serverChangeMessage) this.scheduleMessage(account.id, session.account.serverChangeMessage, session.account.messageDelay, { kind: 'serverChange' })
     })
     bot.on('messagestr', (message, _position, originalMessage) => {
+      this.handleMessageConfirmation(account.id, session, String(message || ''))
       markWorldReady()
       markReady()
       const formatted = originalMessage?.toMotd?.() || message
@@ -452,6 +467,12 @@ class BotManager {
     const state = this.reconnects.get(account.id)
     if (!state) return false
     state.account = { ...account }
+    const session = this.sessions.get(account.id)
+    if (session) {
+      const pendingMessage = session.pendingMessageConfirmation?.message || session.serverChangeRetryMessage
+      if ((pendingMessage && pendingMessage !== account.joinMessage && pendingMessage !== account.serverChangeMessage) || account.serverChangeRetryMinutes === 0) this.clearServerChangeRetry(account.id, session)
+      session.account = { ...session.account, ...account }
+    }
     if (account.autoReconnect === false) {
       if (state.timer) this.clearReconnectTimer(state.timer)
       state.timer = null
@@ -1085,14 +1106,20 @@ class BotManager {
     if (bot.currentWindow) bot.closeWindow(bot.currentWindow)
   }
 
-  setAutoDeposit(id, enabled, range) {
+  setAutoDeposit(id, enabled, range, config = {}) {
     const session = this.sessions.get(id)
     if (!session) return
     const nextEnabled = enabled === true
     const nextRange = normalizeAutoDepositRange(range ?? session.account.autoDepositRange)
-    const changed = session.account.autoDepositToChest !== nextEnabled || session.account.autoDepositRange !== nextRange
+    const nextMode = ['immediate', 'interval', 'inventoryFull', 'intervalOrFull'].includes(config.autoDepositMode) ? config.autoDepositMode : session.account.autoDepositMode || 'immediate'
+    const nextInterval = clampNumber(config.autoDepositInterval ?? session.account.autoDepositInterval, 1, 86400, 300)
+    const nextThreshold = clampNumber(config.autoDepositFullThreshold ?? session.account.autoDepositFullThreshold, 0, 35, 0)
+    const changed = session.account.autoDepositToChest !== nextEnabled || session.account.autoDepositRange !== nextRange || session.account.autoDepositMode !== nextMode || session.account.autoDepositInterval !== nextInterval || session.account.autoDepositFullThreshold !== nextThreshold
     session.account.autoDepositToChest = nextEnabled
     session.account.autoDepositRange = nextRange
+    session.account.autoDepositMode = nextMode
+    session.account.autoDepositInterval = nextInterval
+    session.account.autoDepositFullThreshold = nextThreshold
     if (changed) session.depositRevision += 1
     if (!nextEnabled) {
       try { session.activeDepositContainer?.close() } catch {}
@@ -1110,7 +1137,7 @@ class BotManager {
     const block = findNearestChest(session.bot, session.account.autoDepositRange)
     session.nearestChest = block ? chestLocation(session.bot, block) : null
     this.emitTelemetry(id)
-    if (!session.account.autoDepositToChest || !block) return
+    if (!session.account.autoDepositToChest || !block || !shouldAutoDeposit(session, Date.now())) return
     const lockedSlots = lockedSlotSet(session.account)
     const items = (session.bot.inventory?.items?.() || []).filter((item) => !lockedSlots.has(Number(item.slot)))
     if (!items.length) return
@@ -1130,6 +1157,7 @@ class BotManager {
         deposited += await transferPlayerSlot(session.bot, chest, slot, current.count)
       }
       if (deposited > 0) {
+        session.lastDepositAt = Date.now()
         const { x, y, z } = chestLocation(session.bot, block)
         this.emit('log', id, { kind: 'sent', message: `Deposited ${deposited} items into ${containerLabel(block)} at ${x}, ${y}, ${z}.`, at: Date.now() })
       }
@@ -1157,12 +1185,15 @@ class BotManager {
     this.emit('telemetry', id, snapshot)
   }
 
-  scheduleMessage(id, message, delaySeconds = 2) {
+  scheduleMessage(id, message, delaySeconds = 2, { kind = 'manual', retry = false } = {}) {
     const session = this.sessions.get(id)
     if (!session) return
     const automaticSwitch = automaticServerSwitchKey(message)
-    if (automaticSwitch && session.automaticServerSwitches.has(automaticSwitch)) return
-    if (automaticSwitch) session.automaticServerSwitches.add(automaticSwitch)
+    // Allow the same /server command again after a cooldown, so a restart that drops the
+    // bot back to the lobby re-sends it, while arrival respawns do not loop it.
+    const lastSwitchAt = automaticSwitch ? session.automaticServerSwitches.get(automaticSwitch) : undefined
+    if (lastSwitchAt !== undefined && Date.now() - lastSwitchAt < AUTOMATIC_SWITCH_COOLDOWN_MS && !retry) return
+    if (automaticSwitch) session.automaticServerSwitches.set(automaticSwitch, Date.now())
     const delay = Math.max(0, Math.min(Number(delaySeconds) || 0, 30)) * 1000
     const startedAt = Date.now()
     const schedule = (callback, wait) => {
@@ -1197,10 +1228,74 @@ class BotManager {
     }
     const sendNow = () => {
       if (!this.sessions.has(id)) return
-      try { this.sendChat(id, String(message).slice(0, 256)) }
+      if (kind === 'join' && message !== session.account.joinMessage) return
+      if (kind === 'serverChange' && message !== session.account.serverChangeMessage) return
+      try {
+        this.sendChat(id, String(message).slice(0, 256))
+        if (kind !== 'manual' && session.account.serverChangeRetryMinutes > 0) this.startMessageConfirmation(id, session, String(message).slice(0, 256))
+      }
       catch (error) { this.emit('log', id, { kind: 'error', message: `Automatic message failed: ${error.message}`, at: Date.now() }) }
     }
     schedule(send, delay)
+  }
+
+  startMessageConfirmation(id, session, message) {
+    this.clearServerChangeRetry(id, session, false)
+    const pending = { message, expectedWorldChange: /^\s*\/(?:server|join|play)(?:\s|$)/i.test(message), startedAt: session.serverChangeRetryStartedAt || Date.now() }
+    session.serverChangeRetryMessage = message
+    session.serverChangeRetryStartedAt = pending.startedAt
+    session.pendingMessageConfirmation = pending
+    session.messageConfirmationTimer = this.scheduleNetworkTimer(() => {
+      session.messageConfirmationTimer = null
+      if (this.sessions.get(id) !== session || session.pendingMessageConfirmation !== pending) return
+      if (pending.expectedWorldChange) this.retryServerChange(id, session, pending)
+      else this.confirmServerChange(id, session)
+    }, MESSAGE_CONFIRMATION_MS)
+  }
+
+  handleMessageConfirmation(id, session, message) {
+    const pending = session.pendingMessageConfirmation
+    if (!pending) return
+    if (/already connected/i.test(message)) return this.confirmServerChange(id, session)
+    if (!/could not connect|unable to connect|server is (?:restarting|offline|starting|down)|not online|is currently (?:offline|unavailable)|connection refused|already connecting/i.test(message)) return
+    this.retryServerChange(id, session, pending)
+  }
+
+  retryServerChange(id, session, pending) {
+    if (this.sessions.get(id) !== session || session.pendingMessageConfirmation !== pending) return
+    if (session.messageConfirmationTimer) this.clearNetworkTimer(session.messageConfirmationTimer)
+    session.messageConfirmationTimer = null
+    session.pendingMessageConfirmation = null
+    const retryWindow = clampNumber(session.account.serverChangeRetryMinutes, 0, 1440, 30) * 60_000
+    if (!retryWindow || Date.now() - pending.startedAt >= retryWindow) return this.clearServerChangeRetry(id, session)
+    const attempt = ++session.serverChangeRetryAttempts + 1
+    const seconds = SERVER_CHANGE_RETRY_DELAYS[Math.min(session.serverChangeRetryAttempts - 1, SERVER_CHANGE_RETRY_DELAYS.length - 1)]
+    this.emit('log', id, { kind: 'info', message: `Server not ready, retrying ${pending.message} in ${seconds}s (attempt ${attempt})`, at: Date.now() })
+    session.serverChangeRetryTimer = this.scheduleNetworkTimer(() => {
+      session.serverChangeRetryTimer = null
+      if (this.sessions.get(id) !== session || !session.account.serverChangeRetryMinutes || Date.now() - pending.startedAt >= session.account.serverChangeRetryMinutes * 60_000 || (pending.message !== session.account.joinMessage && pending.message !== session.account.serverChangeMessage)) return this.clearServerChangeRetry(id, session)
+      this.scheduleMessage(id, pending.message, 0, { kind: pending.message === session.account.joinMessage ? 'join' : 'serverChange', retry: true })
+    }, seconds * 1000)
+  }
+
+  confirmServerChange(id, session) {
+    if (!session.pendingMessageConfirmation && !session.serverChangeRetryTimer) return
+    this.clearServerChangeRetry(session.account.id, session)
+    session.serverChangeRetryStartedAt = 0
+    session.serverChangeRetryAttempts = 0
+  }
+
+  clearServerChangeRetry(id, session, clearState = true) {
+    if (session.messageConfirmationTimer) this.clearNetworkTimer(session.messageConfirmationTimer)
+    if (session.serverChangeRetryTimer) this.clearNetworkTimer(session.serverChangeRetryTimer)
+    session.messageConfirmationTimer = null
+    session.serverChangeRetryTimer = null
+    if (clearState) {
+      session.pendingMessageConfirmation = null
+      session.serverChangeRetryStartedAt = 0
+      session.serverChangeRetryAttempts = 0
+      session.serverChangeRetryMessage = ''
+    }
   }
 
   enableAntiAfk(id, input = {}) {
@@ -1406,6 +1501,7 @@ class BotManager {
     session.antiAfkActionTimers?.clear()
     for (const timer of session.messageTimers || []) clearTimeout(timer)
     session.messageTimers?.clear()
+    this.clearServerChangeRetry(session.account.id, session)
     session.antiAfkTimer = null
     session.telemetryTimer = null
     session.chestScanTimer = null
@@ -1843,6 +1939,21 @@ function normalizeAutoDepositRange(value) {
 
 function isDepositActive(session, revision) {
   return session?.account?.autoDepositToChest === true && session.depositRevision === revision
+}
+
+function shouldAutoDeposit(session, now = Date.now()) {
+  const account = session?.account || {}
+  const mode = ['immediate', 'interval', 'inventoryFull', 'intervalOrFull'].includes(account.autoDepositMode) ? account.autoDepositMode : 'immediate'
+  if (mode === 'immediate') return true
+  const locked = lockedSlotSet(account)
+  const slots = session.bot.inventory?.slots || []
+  let freeSlots = 0
+  for (let slot = 9; slot <= 44; slot += 1) if (!locked.has(slot) && !slots[slot]) freeSlots += 1
+  const full = freeSlots <= clampNumber(account.autoDepositFullThreshold, 0, 35, 0)
+  const interval = now - (session.lastDepositAt || session.joinedAt || now) >= clampNumber(account.autoDepositInterval, 1, 86400, 300) * 1000
+  if (mode === 'interval') return interval
+  if (mode === 'inventoryFull') return full
+  return interval || full
 }
 
 function chestLocation(bot, block) {
@@ -2399,4 +2510,4 @@ function rejectResourcePack(bot, first, second, hash) {
   } catch {}
 }
 
-module.exports = { BotManager, lockedSlotSet, itemNameMatches, itemLoreMatches, windowTitleText, windowTitleMatches, lockedGuiSlot, normalizeLoginCode, extractText, parseMinecraftFormatting, parseInteractiveChat, normalizeSkinUrl, findNearestChest, buildTelemetry, buildWindowSnapshot, normalizeLockedSlots, describeNetworkError, reconnectDelaySeconds, reconnectFloorSeconds, jitterReconnectDelay, normalizeAntiAfkSettings, inspectFluidCurrent, recordFluidCorrection, installMovementPacketCompatibility, installModernPlayerInputCompatibility }
+module.exports = { BotManager, lockedSlotSet, shouldAutoDeposit, itemNameMatches, itemLoreMatches, windowTitleText, windowTitleMatches, lockedGuiSlot, normalizeLoginCode, extractText, parseMinecraftFormatting, parseInteractiveChat, normalizeSkinUrl, findNearestChest, buildTelemetry, buildWindowSnapshot, normalizeLockedSlots, describeNetworkError, reconnectDelaySeconds, reconnectFloorSeconds, jitterReconnectDelay, normalizeAntiAfkSettings, inspectFluidCurrent, recordFluidCorrection, installMovementPacketCompatibility, installModernPlayerInputCompatibility }

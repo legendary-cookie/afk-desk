@@ -112,7 +112,7 @@ const el = Object.fromEntries([
   'proxy-enabled', 'proxy-fields', 'proxy-type', 'proxy-host', 'proxy-port', 'proxy-username', 'proxy-password', 'proxy-password-help', 'proxy-clear-password', 'share-proxy-pool',
   'proxy-label', 'proxy-max-sessions', 'alert-disconnect', 'alert-errors', 'alert-health', 'anti-afk', 'anti-afk-min-delay', 'anti-afk-max-delay', 'anti-afk-duration', 'anti-afk-look-degrees',
   'anti-afk-walk-distance', 'anti-afk-jump', 'anti-afk-look', 'anti-afk-sneak', 'anti-afk-swing', 'anti-afk-walk', 'environmental-movement', 'auto-reconnect', 'auto-reconnect-delay', 'auto-reconnect-backoff',
-  'auto-reconnect-max-delay', 'auto-reconnect-rate-limit-delay', 'auto-reconnect-max', 'connect-timeout', 'reconnect-reset-delay', 'auto-deposit-setting', 'auto-deposit-range', 'join-message', 'server-change-message', 'message-delay',
+  'auto-reconnect-max-delay', 'auto-reconnect-rate-limit-delay', 'auto-reconnect-max', 'connect-timeout', 'reconnect-reset-delay', 'auto-deposit-setting', 'auto-deposit-range', 'auto-deposit-mode', 'auto-deposit-interval-wrap', 'auto-deposit-interval', 'auto-deposit-interval-unit', 'auto-deposit-full-threshold', 'auto-deposit-threshold-wrap', 'join-message', 'server-change-message', 'message-delay', 'server-change-retry-minutes',
   'form-error', 'delete-account', 'duplicate-profile', 'login-dialog', 'login-code', 'open-login-private', 'open-login', 'close-login', 'ui-scale', 'ui-scale-value',
   'pov-settings-refresh', 'pov-settings-fps', 'pov-settings-radius', 'pov-settings-render-distance', 'pov-settings-columns', 'pov-max-feeds', 'pov-settings-view-mode', 'pov-show-hud', 'column-resizer', 'inventory-resizer',
   'server-window-dialog', 'server-window-title', 'server-window-stage', 'server-window-art', 'server-window-grid', 'close-server-window', 'logs-dialog', 'close-logs', 'log-filter', 'refresh-logs',
@@ -156,6 +156,8 @@ async function init() {
 
 function bindEvents() {
   el['add-account'].addEventListener('click', () => openAccountDialog())
+  el['auto-deposit-mode'].addEventListener('change', updateAutoDepositFields)
+  el['auto-deposit-interval-unit'].addEventListener('change', updateAutoDepositFields)
   el['open-settings'].addEventListener('click', openSettingsDialog)
   el['open-command-center'].addEventListener('click', openCommandCenter)
   el['close-command-center'].addEventListener('click', closeCommandCenter)
@@ -817,6 +819,13 @@ function formatNumber(value) {
   return Number.isInteger(value) ? String(value) : Number(value || 0).toFixed(1)
 }
 
+function updateAutoDepositFields() {
+  const mode = el['auto-deposit-mode'].value
+  el['auto-deposit-interval-wrap'].hidden = !['interval', 'intervalOrFull'].includes(mode)
+  el['auto-deposit-threshold-wrap'].hidden = !['inventoryFull', 'intervalOrFull'].includes(mode)
+  el['auto-deposit-interval'].max = String(Math.floor(86400 / Number(el['auto-deposit-interval-unit'].value || 1)))
+}
+
 function openAccountDialog(account) {
   el['account-form'].reset()
   el['form-error'].hidden = true
@@ -877,9 +886,17 @@ function openAccountDialog(account) {
   el['reconnect-reset-delay'].value = account?.reconnectResetDelay ?? 60
   el['auto-deposit-setting'].checked = account?.autoDepositToChest === true
   el['auto-deposit-range'].value = account?.autoDepositRange ?? 5
+  el['auto-deposit-mode'].value = account?.autoDepositMode || 'immediate'
+  const depositInterval = Number(account?.autoDepositInterval) || 300
+  const intervalUnit = depositInterval % 3600 === 0 ? 3600 : depositInterval % 60 === 0 ? 60 : 1
+  el['auto-deposit-interval-unit'].value = String(intervalUnit)
+  el['auto-deposit-interval'].value = depositInterval / intervalUnit
+  el['auto-deposit-full-threshold'].value = account?.autoDepositFullThreshold ?? 0
+  updateAutoDepositFields()
   el['join-message'].value = account?.joinMessage || ''
   el['server-change-message'].value = account?.serverChangeMessage || ''
   el['message-delay'].value = account?.messageDelay ?? 6
+  el['server-change-retry-minutes'].value = account?.serverChangeRetryMinutes ?? 30
   el['dialog-title'].textContent = account ? 'Edit account' : 'Add account'
   el['delete-account'].hidden = !account
   el['duplicate-profile'].hidden = !account
@@ -950,9 +967,13 @@ async function saveAccount(event) {
     reconnectResetDelay: Number(el['reconnect-reset-delay'].value),
     autoDepositToChest: el['auto-deposit-setting'].checked,
     autoDepositRange: Number(el['auto-deposit-range'].value),
+    autoDepositMode: el['auto-deposit-mode'].value,
+    autoDepositInterval: Number(el['auto-deposit-interval'].value) * Number(el['auto-deposit-interval-unit'].value),
+    autoDepositFullThreshold: Number(el['auto-deposit-full-threshold'].value),
     joinMessage: el['join-message'].value,
     serverChangeMessage: el['server-change-message'].value,
-    messageDelay: Number(el['message-delay'].value)
+    messageDelay: Number(el['message-delay'].value),
+    serverChangeRetryMinutes: Number(el['server-change-retry-minutes'].value)
   }
   try {
     const saved = await api.saveAccount(input)

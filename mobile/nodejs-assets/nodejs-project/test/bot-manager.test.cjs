@@ -1,7 +1,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const { EventEmitter } = require('node:events')
-const { BotManager, findNearestChest, parseInteractiveChat, extractText, installConfigurationPacketGuard } = require('../bot-manager.cjs')
+const { BotManager, shouldAutoDeposit, findNearestChest, parseInteractiveChat, extractText, installConfigurationPacketGuard } = require('../bot-manager.cjs')
 const { withResolvers } = require('./compat.cjs')
 
 class FakeBot extends EventEmitter {
@@ -21,6 +21,36 @@ class FakeBot extends EventEmitter {
   tabComplete() { return Promise.resolve([{ match: 'server', tooltip: 'Switch server' }]) }
   closeWindow(window) { this.closedWindow = window; this.currentWindow = null; this.emit('windowClose') }
 }
+
+test('mobile auto-deposit modes count unlocked main-inventory slots only', () => {
+  const slots = Array(46).fill(null)
+  const session = { bot: { inventory: { slots } }, account: { autoDepositMode: 'inventoryFull', autoDepositFullThreshold: 0, lockedInventorySlots: [9] }, joinedAt: 1000 }
+  assert.equal(shouldAutoDeposit(session, 1000), false)
+  for (let slot = 10; slot <= 44; slot += 1) slots[slot] = { name: 'stone' }
+  assert.equal(shouldAutoDeposit(session, 1000), true)
+  session.account.autoDepositMode = 'interval'
+  session.account.autoDepositInterval = 10
+  assert.equal(shouldAutoDeposit(session, 10999), false)
+  assert.equal(shouldAutoDeposit(session, 11000), true)
+})
+
+test('mobile cancels a pending automatic-message retry when a world change confirms it', async (t) => {
+  const bot = new FakeBot()
+  bot.chat = message => { bot.sent = [...(bot.sent || []), message] }
+  const logs = []
+  const manager = new BotManager({ profilesPath: 'profiles', emit: (...event) => logs.push(event), createBot: () => bot })
+  manager.connect({ id: 'mobile-message-retry', username: 'fixture', host: 'localhost', antiAfk: false, autoReconnect: false, joinMessage: '/server towny', messageDelay: 0, serverChangeRetryMinutes: 30 })
+  t.after(() => manager.disconnect('mobile-message-retry'))
+  bot.entity = { position: { x: 0, y: 64, z: 0 } }
+  bot.emit('spawn')
+  await new Promise(resolve => setTimeout(resolve, 5))
+  bot.emit('messagestr', 'Unable to connect')
+  const session = manager.sessions.get('mobile-message-retry')
+  assert.ok(session.serverChangeRetryTimer)
+  assert.ok(logs.some(([type, , entry]) => type === 'log' && entry.kind === 'info' && /retrying \/server towny in 15s/.test(entry.message)))
+  bot.emit('respawn')
+  assert.equal(session.serverChangeRetryTimer, null)
+})
 
 test('chat component walkers cap deeply nested and wide server trees', () => {
   let deep = { text: 'tail' }

@@ -17,7 +17,7 @@ bridge.channel.on('engine-command', async (rawCommand) => {
   try {
     const command = validateCommand(rawCommand)
     ;({ requestId } = command)
-    const { action, account, accountId, value, duration, enabled, range, slot } = command
+    const { action, account, accountId, value, duration, enabled, range, slot, config } = command
     let result = null
     switch (action) {
       case 'connect': manager.connect(account); break
@@ -29,7 +29,8 @@ bridge.channel.on('engine-command', async (rawCommand) => {
       case 'drop-stack': await manager.dropStack(accountId, slot); break
       case 'window-click': await manager.clickWindowSlot(accountId, slot); break
       case 'window-close': manager.closeWindow(accountId); break
-      case 'set-auto-deposit': manager.setAutoDeposit(accountId, enabled, range); break
+      case 'set-auto-deposit': manager.setAutoDeposit(accountId, enabled, range, config); break
+      case 'update-account-config': manager.updateAccountConfig(account); break
       case 'shutdown':
         for (const id of [...manager.sessions.keys()]) manager.disconnect(id)
         break

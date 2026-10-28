@@ -4,7 +4,7 @@ const { EventEmitter } = require('node:events')
 const fs = require('node:fs')
 const path = require('node:path')
 const { Vec3 } = require('vec3')
-const { BotManager, normalizeLoginCode, extractText, parseMinecraftFormatting, parseInteractiveChat, normalizeSkinUrl, findNearestChest, buildTelemetry, buildWindowSnapshot, describeNetworkError, reconnectDelaySeconds, inspectFluidCurrent, recordFluidCorrection, installMovementPacketCompatibility, installModernPlayerInputCompatibility } = require('../electron/bot-manager.cjs')
+const { BotManager, shouldAutoDeposit, normalizeLoginCode, extractText, parseMinecraftFormatting, parseInteractiveChat, normalizeSkinUrl, findNearestChest, buildTelemetry, buildWindowSnapshot, describeNetworkError, reconnectDelaySeconds, inspectFluidCurrent, recordFluidCorrection, installMovementPacketCompatibility, installModernPlayerInputCompatibility } = require('../electron/bot-manager.cjs')
 
 test('malformed resource-pack art cannot prevent inventory or menu snapshots', () => {
   const badPack = { itemAppearance: () => { throw new Error('invalid model') }, titleAppearance: () => null }
@@ -13,6 +13,35 @@ test('malformed resource-pack art cannot prevent inventory or menu snapshots', (
   bot.inventory.items = () => [item]
   assert.equal(buildTelemetry(bot, null, false, null, badPack).inventory[0].name, 'stone')
   assert.equal(buildWindowSnapshot({ inventoryStart: 1, slots: [item], title: 'Chest' }, null, null, badPack).slots[0].name, 'stone')
+})
+
+test('auto-deposit trigger modes and locked main-inventory slots', () => {
+  const slots = Array(46).fill(null)
+  slots[5] = { name: 'helmet' }
+  slots[45] = { name: 'shield' }
+  const session = { bot: { inventory: { slots } }, account: {}, joinedAt: 1000, lastDepositAt: 0 }
+  session.account.autoDepositMode = 'immediate'
+  assert.equal(shouldAutoDeposit(session, 1000), true)
+  session.account.autoDepositMode = 'interval'
+  session.account.autoDepositInterval = 10
+  assert.equal(shouldAutoDeposit(session, 10999), false)
+  assert.equal(shouldAutoDeposit(session, 11000), true)
+  session.account.autoDepositMode = 'inventoryFull'
+  session.account.autoDepositFullThreshold = 0
+  session.account.lockedInventorySlots = [9]
+  assert.equal(shouldAutoDeposit(session, 2000), false)
+  slots[10] = { name: 'stone' }
+  for (let slot = 11; slot <= 44; slot += 1) slots[slot] = { name: 'stone' }
+  assert.equal(shouldAutoDeposit(session, 2000), true)
+  session.account.autoDepositMode = 'intervalOrFull'
+  session.account.autoDepositInterval = 10
+  slots[10] = null
+  assert.equal(shouldAutoDeposit(session, 2000), false)
+  assert.equal(shouldAutoDeposit(session, 11000), true)
+  session.lastDepositAt = 1000
+  assert.equal(shouldAutoDeposit(session, 2000), false)
+  slots[10] = { name: 'stone' }
+  assert.equal(shouldAutoDeposit(session, 2000), true)
 })
 const { computeSignedChatChecksum } = require('../electron/protocol-fixes.cjs')
 const { snapshotNearbyEntities } = require('../electron/movement-compatibility.cjs')
@@ -349,6 +378,114 @@ test('automatic server switches wait until the world reports ready', async (t) =
   await new Promise((resolve) => setTimeout(resolve, 550))
   assert.deepEqual(bot.messages, ['/server towny'])
   assert.deepEqual(bot.writes, [])
+})
+
+test('automatic server message retries after proxy failure and is cancelled by respawn', async (t) => {
+  const timers = []
+  const events = []
+  const bot = new FakeBot()
+  const manager = new BotManager({
+    profilesPath: 'profiles', emit: (...event) => events.push(event), createBot: () => bot,
+    scheduleNetworkTimer: (callback, ms) => { const timer = { callback, ms, cleared: false }; timers.push(timer); return timer },
+    clearNetworkTimer: (timer) => { timer.cleared = true }
+  })
+  manager.connect({ id: 'message-retry', username: 'fixture', host: 'localhost', antiAfk: false, autoReconnect: false, joinMessage: '/server towny', messageDelay: 0, serverChangeRetryMinutes: 30 })
+  t.after(() => manager.disconnect('message-retry'))
+  bot.entity = { yaw: 0, pitch: 0 }
+  bot.emit('spawn')
+  bot.emit('health')
+  await new Promise((resolve) => setTimeout(resolve, 5))
+  assert.deepEqual(bot.messages, ['/server towny'])
+  bot.emit('messagestr', 'Could not connect to that server')
+  assert.ok(events.some(([type, , entry]) => type === 'log' && entry.kind === 'info' && /retrying \/server towny in 15s/.test(entry.message)))
+  const retry = timers.find((timer) => timer.ms === 15_000 && !timer.cleared)
+  assert.ok(retry)
+  bot.emit('respawn')
+  assert.equal(retry.cleared, true)
+})
+
+test('server message retry window expiry and zero setting stop retries', async (t) => {
+  for (const [id, retryMinutes, expire] of [['message-retry-expired', 1, true], ['message-retry-disabled', 0, false]]) {
+    const timers = []
+    const bot = new FakeBot()
+    const manager = new BotManager({
+      profilesPath: 'profiles', emit: () => {}, createBot: () => bot,
+      scheduleNetworkTimer: (callback, ms) => { const timer = { callback, ms, cleared: false }; timers.push(timer); return timer },
+      clearNetworkTimer: (timer) => { timer.cleared = true }
+    })
+    manager.connect({ id, username: 'fixture', host: 'localhost', antiAfk: false, autoReconnect: false, joinMessage: '/server towny', messageDelay: 0, serverChangeRetryMinutes: retryMinutes })
+    t.after(() => manager.disconnect(id))
+    bot.entity = { yaw: 0, pitch: 0 }
+    bot.emit('spawn')
+    bot.emit('health')
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    if (expire) manager.sessions.get(id).pendingMessageConfirmation.startedAt = Date.now() - 61_000
+    bot.emit('messagestr', 'Connection refused')
+    assert.equal(timers.some((timer) => timer.ms === 15_000 && !timer.cleared), false)
+  }
+})
+
+test('a /server message without a world change retries after the confirmation window', async (t) => {
+  const timers = []
+  const events = []
+  const bot = new FakeBot()
+  const manager = new BotManager({
+    profilesPath: 'profiles', emit: (...event) => events.push(event), createBot: () => bot,
+    scheduleNetworkTimer: (callback, ms) => { const timer = { callback, ms, cleared: false }; timers.push(timer); return timer },
+    clearNetworkTimer: (timer) => { timer.cleared = true }
+  })
+  manager.connect({ id: 'message-no-world-change', username: 'fixture', host: 'localhost', antiAfk: false, autoReconnect: false, joinMessage: '/server towny', messageDelay: 0, serverChangeRetryMinutes: 30 })
+  t.after(() => manager.disconnect('message-no-world-change'))
+  bot.entity = { yaw: 0, pitch: 0 }
+  bot.emit('spawn')
+  bot.emit('health')
+  await new Promise(resolve => setTimeout(resolve, 5))
+  const confirmation = timers.find(timer => timer.ms === 15_000 && !timer.cleared)
+  assert.ok(confirmation)
+  confirmation.callback()
+  assert.ok(timers.some(timer => timer.ms === 15_000 && !timer.cleared && timer !== confirmation))
+  assert.ok(events.some(([type, , entry]) => type === 'log' && entry.kind === 'info' && /retrying \/server towny in 15s/.test(entry.message)))
+})
+
+test('already-connected proxy response confirms the message without retrying', async (t) => {
+  const timers = []
+  const bot = new FakeBot()
+  const manager = new BotManager({
+    profilesPath: 'profiles', emit: () => {}, createBot: () => bot,
+    scheduleNetworkTimer: (callback, ms) => { const timer = { callback, ms, cleared: false }; timers.push(timer); return timer },
+    clearNetworkTimer: (timer) => { timer.cleared = true }
+  })
+  manager.connect({ id: 'message-already-connected', username: 'fixture', host: 'localhost', antiAfk: false, autoReconnect: false, joinMessage: '/server towny', messageDelay: 0, serverChangeRetryMinutes: 30 })
+  t.after(() => manager.disconnect('message-already-connected'))
+  bot.entity = { yaw: 0, pitch: 0 }
+  bot.emit('spawn')
+  bot.emit('health')
+  await new Promise(resolve => setTimeout(resolve, 5))
+  bot.emit('messagestr', 'You are already connected to that server')
+  assert.equal(manager.sessions.get('message-already-connected').pendingMessageConfirmation, null)
+  assert.equal(timers.some(timer => timer.ms === 15_000 && !timer.cleared), false)
+})
+
+test('clearing an automatic message cancels its pending retry', async (t) => {
+  const timers = []
+  const bot = new FakeBot()
+  const manager = new BotManager({
+    profilesPath: 'profiles', emit: () => {}, createBot: () => bot,
+    scheduleNetworkTimer: (callback, ms) => { const timer = { callback, ms, cleared: false }; timers.push(timer); return timer },
+    clearNetworkTimer: (timer) => { timer.cleared = true }
+  })
+  const account = { id: 'message-cleared', username: 'fixture', host: 'localhost', antiAfk: false, autoReconnect: false, joinMessage: '/server towny', messageDelay: 0, serverChangeRetryMinutes: 30 }
+  manager.connect(account)
+  t.after(() => manager.disconnect(account.id))
+  bot.entity = { yaw: 0, pitch: 0 }
+  bot.emit('spawn')
+  bot.emit('health')
+  await new Promise(resolve => setTimeout(resolve, 5))
+  bot.emit('messagestr', 'Could not connect')
+  const retry = timers.find(timer => timer.ms === 15_000 && !timer.cleared)
+  assert.ok(retry)
+  manager.updateAccountConfig({ ...account, joinMessage: '' })
+  assert.equal(retry.cleared, true)
 })
 
 test('live chat marks a session online and a late login event cannot downgrade it', () => {
