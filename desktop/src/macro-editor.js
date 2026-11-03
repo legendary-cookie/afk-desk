@@ -91,7 +91,7 @@
 
   // Contract metadata is provided by the preload; the browser bridge can use
   // the local fallback definitions when the desktop contract is unavailable.
-  const contract = typeof window !== 'undefined' ? window.afkDesk?.macros?.contract : null
+  const contract = typeof window !== 'undefined' ? window.afkDesk?.macros?.contract : (typeof module === 'object' && module.exports ? (() => { const c = require('../electron/macro/contract.cjs'); return { triggers: c.TRIGGER_TYPES, steps: c.STEP_TYPES, conditions: c.CONDITION_METADATA } })() : null)
   if (contract) {
     for (const [type, meta] of Object.entries(contract.triggers)) if (TRIGGER_TYPES[type]) Object.assign(TRIGGER_TYPES[type], meta)
     for (const [type, meta] of Object.entries(contract.steps)) if (STEP_TYPES[type]) Object.assign(STEP_TYPES[type], meta)
@@ -354,6 +354,70 @@
     if (status === 'cancelled' || status === 'stopped' || status === 'interrupted' || status === 'skipped') return 'warning'
     return 'idle'
   }
+
+    // Rendering never writes defaults into the draft; only user edits change it.
+    function createSchemaFields(schema, value, onChange, depth = 0, conditionEditor = null) {
+      const fields = document.createElement('div')
+      fields.className = 'macro-form-grid macro-schema-fields'
+      for (const [key, spec] of Object.entries(schema)) {
+        const label = document.createElement('label')
+        label.className = 'field'
+        const title = document.createElement('span')
+        title.textContent = spec.label
+        label.append(title)
+        if (spec.type === 'condition' && depth < 3 && conditionEditor) {
+          const button = document.createElement('button')
+          button.type = 'button'
+          button.textContent = value[key] ? 'Remove condition' : 'Add condition'
+          button.addEventListener('click', () => onChange(key, value[key] ? undefined : structuredClone(spec.default)))
+          label.append(button)
+          if (value[key]) label.append(conditionEditor(value[key], next => onChange(key, next), depth + 1))
+        } else {
+          let input
+          if (spec.enum) {
+            input = document.createElement('select')
+            if (!spec.required) {
+              const empty = document.createElement('option')
+              empty.value = ''
+              empty.textContent = 'Default / unset'
+              input.append(empty)
+            }
+            for (const option of spec.enum) {
+              const item = document.createElement('option')
+              item.value = option
+              item.textContent = option
+              input.append(item)
+            }
+            input.value = value[key] ?? (spec.required ? spec.default : '')
+          } else {
+            input = document.createElement('input')
+            input.type = spec.type === 'boolean' ? 'checkbox' : spec.type === 'number' ? 'number' : 'text'
+            if (spec.type === 'boolean') input.checked = value[key] ?? spec.default ?? false
+            else if (spec.type === 'object' || spec.type === 'array' || spec.type === 'primitive') input.value = key in value ? JSON.stringify(value[key]) : ''
+            else input.value = value[key] ?? ''
+            if (spec.min != null) input.min = String(spec.min)
+            if (spec.max != null) input.max = String(spec.max)
+            if (spec.type === 'number') input.step = 'any'
+            if (spec.default != null && spec.type !== 'boolean') input.placeholder = typeof spec.default === 'object' ? JSON.stringify(spec.default) : String(spec.default)
+          }
+          input.required = Boolean(spec.required)
+          input.setAttribute('aria-label', spec.label)
+          input.addEventListener('change', () => {
+            let next = input.type === 'checkbox' ? input.checked : input.value
+            if (next === '' && !spec.required) next = undefined
+            else if (spec.type === 'number') next = Number(next)
+            else if (['object', 'array', 'primitive'].includes(spec.type)) {
+              try { next = JSON.parse(next); input.setCustomValidity('') } catch { input.setCustomValidity('Enter valid JSON'); input.reportValidity(); return }
+            }
+            onChange(key, next)
+          })
+          label.append(input)
+        }
+        fields.append(label)
+      }
+      return fields
+    }
+
 
   function createMacroEditor(ctx) {
     const { api, state, el, toast, cleanError } = ctx
@@ -1181,6 +1245,15 @@
 
     function renderTriggerFields() {
       const container = el['macro-trigger-fields']
+      if (container && draft && TRIGGER_TYPES[draft.trigger?.type]?.params) {
+        const trigger = draft.trigger
+        container.replaceChildren(createSchemaFields(TRIGGER_TYPES[trigger.type].params, trigger, (key, value) => {
+          pushHistory()
+          if (value === undefined) delete trigger[key]; else trigger[key] = value
+          renderTriggerFields()
+        }))
+        return
+      }
       if (!container || !draft) return
       container.replaceChildren()
       const trigger = draft.trigger || (draft.trigger = { type: 'manual' })
@@ -1461,6 +1534,15 @@
       wrap.append(typeSelect)
 
       const type = cond.type || 'always'
+      const schema = CONDITION_TYPES.find(item => item.value === type)?.params
+      if (schema) {
+        wrap.append(createSchemaFields(schema, cond, (key, value) => {
+          const next = { ...cond }
+          if (value === undefined) delete next[key]; else next[key] = value
+          onChange(next)
+        }, depth, createConditionEditor))
+        return wrap
+      }
       if (type === 'online') {
         const boolSelect = document.createElement('select')
         boolSelect.setAttribute('aria-label', 'Online state')
@@ -1869,7 +1951,7 @@
 
         // Step-specific fields
         const fields = buildStepFields(step, stepPath, valPath, depth)
-        if (fields) card.append(fields)
+        if (fields) { const panel = fields.querySelector('.macro-schema-fields'); if (panel) panel.hidden = !isSelected; card.append(fields) }
         if (step.type === 'repeat') {
           const loopEnd = document.createElement('div')
           loopEnd.className = 'macro-loop-end'
@@ -1895,7 +1977,11 @@
       const cards = el['macro-step-list']?.querySelectorAll('.macro-step-card') || []
       const targetKey = JSON.stringify(selectedStepPath)
       cards.forEach((card) => {
-        card.classList.toggle('selected', card.dataset.stepPath === targetKey)
+        const selected = card.dataset.stepPath === targetKey
+        card.classList.toggle('selected', selected)
+        const body = [...card.children].find(child => child.classList.contains('macro-step-body'))
+        const panel = body && [...body.children].find(child => child.classList.contains('macro-schema-fields'))
+        if (panel) panel.hidden = !selected
       })
     }
 
@@ -1957,6 +2043,29 @@
       const body = document.createElement('div')
       body.className = 'macro-step-body'
       const type = step.type
+      const schema = STEP_TYPES[type]?.params
+      if (schema) {
+        body.append(createSchemaFields(schema, step, (key, value) => {
+          pushHistory()
+          if (value === undefined) delete step[key]; else step[key] = value
+          // Alternative representations must not compete during normalization.
+          if (value !== undefined) {
+            if (type === 'wait' && key === 'ms') { delete step.minMs; delete step.maxMs }
+            if (type === 'wait' && (key === 'minMs' || key === 'maxMs')) { delete step.ms; delete step.jitterMs }
+            if (type === 'move' && key === 'distance') delete step.durationMs
+            if (type === 'move' && key === 'durationMs') delete step.distance
+            if (type === 'repeat' && key === 'while') delete step.times
+            if (type === 'repeat' && key === 'times') { delete step.while; delete step.maxIterations }
+            if (type === 'reconnect' && key === 'delaySec') delete step.delayMs
+            if (type === 'reconnect' && key === 'delayMs') delete step.delaySec
+          }
+          renderSteps()
+        }, 0, createConditionEditor))
+        if (type === 'if') {
+          body.append(createNestedBlock('Then steps', step.then || [], [...stepPath, 0], `${valPath}/then`, depth + 1), createNestedBlock('Else steps', step.else || [], [...stepPath, 1], `${valPath}/else`, depth + 1))
+        } else if (type === 'repeat') body.append(createNestedBlock('Repeat loop steps', step.steps || [], stepPath, `${valPath}/steps`, depth + 1))
+        return body
+      }
 
       if (type === 'chat') {
         body.append(
@@ -2894,7 +3003,7 @@
     }
   }
 
-  const exposed = { createMacroEditor, TEMPLATES, paletteGroups, serializeDraft, parseDraft }
+  const exposed = { createMacroEditor, createSchemaFields, TEMPLATES, paletteGroups, serializeDraft, parseDraft }
   if (typeof window !== 'undefined') {
     window.afkMacroEditor = exposed
   }

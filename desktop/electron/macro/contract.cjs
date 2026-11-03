@@ -137,6 +137,55 @@ const CONDITION_METADATA = Object.freeze({
   not: { label: 'NOT (invert condition)', category: 'Logic' },
 })
 
+// Form fields describe the persisted keys. Empty schemas represent parameterless nodes.
+const field = (type, label, options = {}) => ({ type, label, required: false, ...options })
+const number = (label, min, max, defaultValue, required = false) => field('number', label, { min, max, default: defaultValue, required })
+const string = (label, defaultValue = '', required = false) => field('string', label, { default: defaultValue, required })
+const choice = (label, values, defaultValue, required = false) => field('string', label, { enum: values, default: defaultValue, required })
+const bool = (label, defaultValue = false) => field('boolean', label, { default: defaultValue })
+const condition = label => field('condition', label, { default: { type: 'always' } })
+const selection = field('object', 'Item selector (slot, name or lore)', { default: { slot: 0 }, required: true })
+const comparator = choice('Comparison', ['==', '!=', '<', '<=', '>', '>='], '>=')
+const triggerSchemas = {
+  playerAppears: { ignoreRegex: string('Ignore usernames matching regex') },
+  timer: { intervalMs: number('Interval (ms)', 1000, 86400000, 60000, true), jitterMs: number('Jitter (ms)', 0, 43200000, 0) },
+  schedule: { at: string('Time (HH:MM)', '', true) },
+  chat: { match: choice('Match', ['contains', 'glob'], 'contains'), pattern: string('Pattern', '', true), sources: field('array', 'Sources (JSON)', { default: ['chat', 'system', 'actionBar'] }) },
+  healthBelow: { below: number('Threshold', 0, 20, 8, true) }, hungerBelow: { below: number('Threshold', 0, 20, 14, true) },
+  windowOpen: { title: string('Window title') }
+}
+const stepSchemas = {
+  chat: { message: string('Message or command', '', true) },
+  wait: { ms: number('Duration (ms)', 0, 3600000, 500), jitterMs: number('Jitter (ms)', 0, 60000, 0), minMs: number('Minimum (ms)', 0, 3600000, 0), maxMs: number('Maximum (ms)', 0, 3600000, 0) },
+  notify: { message: string('Message', '', true), desktop: bool('Desktop', true), webhook: bool('Webhook') },
+  move: { control: choice('Direction', ['forward', 'back', 'left', 'right'], 'forward', true), durationMs: number('Duration (ms)', 100, 10000, 350), distance: number('Distance', 0.5, 64, 1) },
+  look: { mode: choice('Mode', ['absolute', 'relative', 'at'], 'relative', true), yaw: number('Yaw (radians)', -6.283185307, 6.283185307, 0), pitch: number('Pitch (radians)', -1.570796327, 1.570796327, 0), target: choice('Target', ['block', 'entity'], 'block'), x: number('X', -30000000, 30000000, 0), y: number('Y', -30000000, 30000000, 0), z: number('Z', -30000000, 30000000, 0), entity: string('Entity') },
+  control: { control: choice('Control', ['sneak', 'jump', 'sprint'], 'sneak', true), action: choice('Action', ['hold', 'release'], 'hold', true) },
+  autoclick: { button: choice('Button', ['left', 'right'], 'left'), cps: number('Clicks per second', 1, 20, 5), durationSec: number('Duration (seconds)', 1, 3600, null) },
+  leftClick: { action: choice('Action', ['once', 'hold', 'release'], 'once', true), only: choice('Only', ['blocks', 'entities'], 'blocks') },
+  rightClick: { action: choice('Action', ['once', 'hold', 'release'], 'once', true) },
+  selectHotbar: { slot: number('Slot', 0, 8, 0, true) }, holdItem: { name: string('Item name', '', true) },
+  useInventory: { select: selection, click: choice('Click', ['left', 'right', 'shift', 'drop'], 'left', true) },
+  useGui: { select: selection, click: choice('Click', ['left', 'right', 'shift', 'drop'], 'left', true) },
+  waitForWindow: { title: string('Window title'), giveUpAfterMs: number('Timeout (ms)', 100, 300000, 10000, true) },
+  drop: { select: selection, count: number('Count', 1, 64, 1, true) }, deposit: { select: selection, count: number('Count', 1, 64, 1, true) }, dropAll: { filter: string('Name filter') },
+  reconnect: { delaySec: number('Delay (seconds)', 0, 3600, 5), delayMs: number('Legacy delay (ms)', 0, 3600000, 0), maxAttempts: number('Maximum attempts', 1, 1000, 1) },
+  set: { variable: string('Variable', '', true), value: field('primitive', 'Value', { default: '', required: true }), persist: bool('Persist') },
+  setVar: { variable: string('Variable', '', true), value: field('primitive', 'Value', { default: '', required: true }), persist: bool('Persist') },
+  clearVar: { variable: string('Variable', '', true) }, readLore: { select: selection, variable: string('Variable', '', true) },
+  if: { condition: condition('If condition') }, repeat: { times: number('Repeat count', 1, 100000, 1), while: condition('While condition'), maxIterations: number('Maximum iterations', 1, 100000, 1000) }
+}
+const conditionSchemas = {
+  online: { value: bool('Online', true) }, healthBelow: { value: number('Threshold', 0, 20, 8, true) }, hungerBelow: { value: number('Threshold', 0, 20, 14, true) },
+  hasItem: { name: string('Item name', '', true), count: number('Count', 1, 2304, 1, true) },
+  itemCount: { name: string('Item name', '', true), comparator, count: number('Count', 0, 1000000, 0, true) },
+  entityCount: { entityType: choice('Entity type', ['mob', 'player', 'any'], 'any'), name: string('Name'), radius: number('Radius', 0, 256, 16), comparator, count: number('Count', 0, 1000000, 1) },
+  windowOpen: { name: string('Window title') }, variableEquals: { name: string('Variable', '', true), value: field('primitive', 'Value', { default: '' }) }, not: { condition: condition('Condition') }
+}
+for (const [type, spec] of Object.entries(TRIGGER_TYPES)) spec.params = triggerSchemas[type] || {}
+for (const [type, spec] of Object.entries(STEP_TYPES)) spec.params = stepSchemas[type] || {}
+for (const [type, spec] of Object.entries(CONDITION_METADATA)) spec.params = conditionSchemas[type] || {}
+
 const RUN_STATUSES = Object.freeze(['started', 'step', 'stepFailed', 'skipped', 'completed', 'failed', 'cancelled', 'interrupted', 'stopped'])
 
 const ERROR_CODES = Object.freeze({
