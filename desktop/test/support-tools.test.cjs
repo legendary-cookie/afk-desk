@@ -19,3 +19,7 @@ test('bundle masks accounts and redacts secrets in settings and logs', () => {
   assert.match(bundle, /Acc•••/)
   assert.match(bundle, /\[redacted\]/)
 })
+test('bundle redacts authentication arguments throughout nested text', () => {
+  const bundle = makeBundle({ version: '1', os: '', accounts: [{ id: '1' }], settings: { macros: [{ message: '/ReG secret1 secret2' }] }, logs: { 1: { console: [{ message: 'sent: /LOGIN secret3' }], events: [{ message: '2FA secret4' }] } } })
+  for (const secret of ['secret1', 'secret2', 'secret3', 'secret4']) assert.ok(!bundle.includes(secret))
+})

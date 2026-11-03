@@ -312,6 +312,13 @@ function createFacade({ bots, notify = () => {}, getEdition = () => 'java', time
       throw new MacroActionError('OFFLINE', 'Account is not online.')
     }
     const session = sessionFor(id)
+    if (['rightClick', 'autoclick', 'selectHotbar', 'holdItem', 'useInventory'].includes(type)) {
+      while (session?.safetyInputDone) {
+        await session.safetyInputDone
+        throwIfAborted(ctx.signal)
+        assertSameSession(id, ctx)
+      }
+    }
     const call = { id, step, ctx, manager: managerFor(id), session, bot: session?.bot }
     try {
       const result = await handlers[type](call)
