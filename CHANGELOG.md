@@ -2,7 +2,7 @@
 
 For the complete desktop history from 0.1.0 onward, including source tags, installers, and comparisons, see [HISTORY.md](HISTORY.md).
 
-## Unreleased (desktop) — 2026-11-03
+## Desktop and Android 0.11.0-beta.2 — 2026-11-03
 
 ### Added
 
