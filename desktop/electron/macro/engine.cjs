@@ -984,13 +984,13 @@ class MacroEngine {
 
   _stopWhenMatches(ctx) {
     try {
-      const condition = list(ctx.macro.stopWhen).find((entry) => this._evaluate(ctx, entry, 0))
-      if (condition?.allAccounts) {
+      const conditions = list(ctx.macro.stopWhen).filter((entry) => this._evaluate(ctx, entry, 0))
+      if (conditions.some(condition => condition?.allAccounts)) {
         for (const run of this.runs.values()) {
           if (run !== ctx && run.macroId === ctx.macroId && !run.stopRequest) this._requestStop(run, 'stopped', 'stopWhen')
         }
       }
-      return Boolean(condition)
+      return conditions.length > 0
     } catch (_) {
       return false
     }

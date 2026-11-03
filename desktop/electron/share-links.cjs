@@ -1,5 +1,6 @@
 'use strict'
 const { gzipSync, gunzipSync } = require('node:zlib')
+const { TRIGGER_TYPES, STEP_TYPES, CONDITION_METADATA } = require('./macro/contract.cjs')
 
 const MAX_SIZE = 256 * 1024
 // Only connection and non-text behavior settings are portable. In particular,
@@ -24,7 +25,8 @@ function macroData(input, model) {
   function clean(value) {
     if (Array.isArray(value)) return value.map(clean)
     if (!value || typeof value !== 'object') return value
-    return Object.fromEntries(Object.entries(value).filter(([key]) => !/password|token|secret|webhook|account|username|uuid/i.test(key)).map(([key, val]) => [key, typeof val === 'string' && !['type', 'mode', 'concurrency', 'onError', 'comparator', 'match', 'source'].includes(key) ? '' : clean(val)]))
+    const schema = STEP_TYPES[value.type]?.params || TRIGGER_TYPES[value.type]?.params || CONDITION_METADATA[value.type]?.params || {}
+    return Object.fromEntries(Object.entries(value).filter(([key]) => !/password|token|secret|webhook|account|username|uuid/i.test(key)).map(([key, val]) => [key, typeof val === 'string' && !(schema[key]?.enum?.includes(val)) && !['type', 'mode', 'concurrency', 'onError', 'comparator', 'match', 'source'].includes(key) ? '' : clean(val)]))
   }
   const result = clean(macro)
   result.name = 'Shared macro'

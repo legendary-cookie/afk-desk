@@ -36,7 +36,7 @@ contextBridge.exposeInMainWorld('afkDesk', {
   runAutomation: (id, macroId) => ipcRenderer.invoke('macros:run', { accountId: id, macroId }),
   stopAutomation: (id) => ipcRenderer.invoke('macros:stop', { accountId: id }),
   macros: {
-    contract: (() => { const { TRIGGER_TYPES, STEP_TYPES, CONDITION_METADATA } = require('./macro/contract.cjs'); return { triggers: TRIGGER_TYPES, steps: STEP_TYPES, conditions: CONDITION_METADATA } })(),
+    contract: () => ipcRenderer.invoke('macros:contract'),
     list: () => ipcRenderer.invoke('macros:list'),
     save: (macro) => ipcRenderer.invoke('macros:save', macro),
     remove: (id) => ipcRenderer.invoke('macros:delete', id),

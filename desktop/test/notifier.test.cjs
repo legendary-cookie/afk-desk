@@ -706,3 +706,37 @@ test('image alerts use Discord multipart embeds and Telegram photos', async () =
   assert.ok(photos[0].body.get('photo'))
   notifier.dispose()
 })
+
+test('Discord titles redact secrets in JSON and multipart alerts', async () => {
+  const channel = makeDiscordChannel()
+  const secret = channel.webhookUrl.split('/').pop()
+  const requests = []
+  const notifier = createNotifier({ getChannels: () => [channel], fetchWithPolicy: async (_url, options) => { requests.push(options.init.body); return { status: 200, text: async () => '' } } })
+  notifier.notify({ kind: 'death', server: secret, message: 'first' })
+  await notifier.flush()
+  notifier.notify({ kind: 'death', server: secret, message: 'second', images: [{ name: 'a.png', data: Buffer.from('a') }] })
+  await notifier.flush()
+  const bodies = requests.map(body => typeof body === 'string' ? body : body.get('payload_json'))
+  assert.equal(bodies.length, 2)
+  for (const body of bodies) assert.doesNotMatch(body, new RegExp(secret))
+  notifier.dispose()
+})
+
+test('Telegram sends full batch text and resumes after a rate limited photo', async () => {
+  const requests = []
+  let photos = 0
+  const notifier = createNotifier({ getChannels: () => [makeTelegramChannel()], fetchWithPolicy: async (url, options) => {
+    requests.push({ url, body: options.init.body })
+    if (url.endsWith('/sendPhoto') && ++photos === 2) return { status: 429, headers: { get: () => '1' }, text: async () => '{}' }
+    return { status: 200, text: async () => '{"ok":true}' }
+  } })
+  for (let i = 0; i < 4; i++) notifier.notify({ kind: 'death', message: `event-${i} ${'x'.repeat(350)}`, images: i === 0 ? [{ name: 'a.png', data: Buffer.from('a') }, { name: 'b.png', data: Buffer.from('b') }] : [] })
+  await notifier.flush()
+  await notifier.flush()
+  const messages = requests.filter(r => r.url.endsWith('/sendMessage'))
+  assert.equal(messages.length, 1)
+  assert.match(JSON.parse(messages[0].body).text, /event-3/)
+  const sent = requests.filter(r => r.url.endsWith('/sendPhoto')).map(r => r.body.get('photo').name)
+  assert.deepEqual(sent, ['0-a.png', '1-b.png', '1-b.png'])
+  notifier.dispose()
+})

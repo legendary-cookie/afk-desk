@@ -91,12 +91,15 @@
 
   // Contract metadata is provided by the preload; the browser bridge can use
   // the local fallback definitions when the desktop contract is unavailable.
-  const contract = typeof window !== 'undefined' ? window.afkDesk?.macros?.contract : (typeof module === 'object' && module.exports ? (() => { const c = require('../electron/macro/contract.cjs'); return { triggers: c.TRIGGER_TYPES, steps: c.STEP_TYPES, conditions: c.CONDITION_METADATA } })() : null)
-  if (contract) {
+  const contract = typeof window !== 'undefined' ? null : (typeof module === 'object' && module.exports ? (() => { const c = require('../electron/macro/contract.cjs'); return { triggers: c.TRIGGER_TYPES, steps: c.STEP_TYPES, conditions: c.CONDITION_METADATA } })() : null)
+  function applyContract(contract) {
+    if (!contract) return
     for (const [type, meta] of Object.entries(contract.triggers)) if (TRIGGER_TYPES[type]) Object.assign(TRIGGER_TYPES[type], meta)
     for (const [type, meta] of Object.entries(contract.steps)) if (STEP_TYPES[type]) Object.assign(STEP_TYPES[type], meta)
     for (const item of CONDITION_TYPES) if (contract.conditions[item.value]) Object.assign(item, contract.conditions[item.value])
   }
+  applyContract(contract)
+  if (typeof window !== 'undefined') window.afkDesk?.macros?.contract?.().then(applyContract).catch(() => {})
   for (const { group, types } of STEP_GROUPS) {
     const category = ({ 'Inventory & GUI': 'Inventory', 'Flow control': 'Logic', Connection: 'Control' })[group] || group
     for (const type of types) if (!STEP_TYPES[type].category) STEP_TYPES[type].category = category

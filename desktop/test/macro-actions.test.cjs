@@ -965,7 +965,7 @@ test('readLore selects inventory slot or name and returns plain joined lines', a
 
 test('autoclick attacks the looked-at entity, uses items, and stops on abort', async () => {
   const timers = new ManualTimers()
-  const { facade, bot, ctx } = spySetup({ timers })
+  const { facade, bot, ctx, manager } = spySetup({ timers })
   const target = { id: 1 }
   bot.entityAtCursor = () => target
   bot.attack = (entity) => bot.calls.push(['attack', entity])
@@ -981,7 +981,27 @@ test('autoclick attacks the looked-at entity, uses items, and stops on abort', a
   assert.equal(timers.active().length, 0)
   const right = facade.autoclick('a', { button: 'right', cps: 1, durationSec: 1 }, ctx())
   await settle()
-  assert.deepEqual(bot.calls.at(-1), ['activateItem'])
+  assert.ok(manager.calls.some(call => call[0] === 'claimInput' && call[2] === 'rightClick'))
   timers.fire(1000)
   await right
+  assert.ok(manager.calls.some(call => call[0] === 'releaseInput' && call[2] === 'rightClick'))
+})
+
+test('facade normalizes current Mineflayer mob types for conditions', () => {
+  const bot = fakeBot()
+  bot.entities = { zombie: { type: 'hostile', name: 'zombie', position: { x: 1, y: 64, z: 0 } } }
+  const manager = spyManager({ bot, sessionId: 's' })
+  const facade = createFacade({ bots: manager })
+  assert.equal(facade.state('a').entities[0].type, 'mob')
+})
+
+test('right autoclick releases its owned item use when cancelled', async () => {
+  const timers = new ManualTimers()
+  const { facade, manager, ctx } = spySetup({ timers })
+  const controller = new AbortController()
+  const run = facade.autoclick('a', { button: 'right', cps: 2, durationSec: null }, ctx({ signal: controller.signal }))
+  await settle()
+  controller.abort()
+  await assert.rejects(run, { code: 'ABORTED' })
+  assert.ok(manager.calls.some(call => call[0] === 'releaseInput' && call[2] === 'rightClick'))
 })

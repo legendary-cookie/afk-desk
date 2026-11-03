@@ -458,6 +458,7 @@ const INPUTS = Object.freeze(['forward', 'back', 'left', 'right', 'jump', 'sprin
 // ---------------------------------------------------------------------------
 
 const IPC = Object.freeze({
+  contract: 'macros:contract',
   list: 'macros:list', // () => { macros, validation: {[macroId]: errors[]} }
   save: 'macros:save', // (macro) => macro
   remove: 'macros:delete', // (macroId) => void

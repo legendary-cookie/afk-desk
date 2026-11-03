@@ -33,3 +33,13 @@ test('decoder rejects malformed, unsupported and oversized data', () => {
   assert.throws(() => share.decode(link({ version: 2, data: {} })))
   assert.throws(() => share.decode(link({ version: 1, data: { x: 'x'.repeat(300000) } })))
 })
+
+test('macro shares retain validated structural choices while redacting text', () => {
+  const shared = share.macroData({ trigger: { type: 'manual' }, steps: [{ type: 'control', control: 'jump', action: 'release' }, { type: 'useInventory', select: { name: 'secret' }, click: 'drop' }, { type: 'autoclick', button: 'right', cps: 1, durationSec: 1 }] }, model)
+  const steps = model.normalizeMacro(shared).steps
+  assert.equal(steps[0].control, 'jump')
+  assert.equal(steps[0].action, 'release')
+  assert.equal(steps[1].click, 'drop')
+  assert.equal(steps[2].button, 'right')
+  assert.doesNotMatch(JSON.stringify(shared), /secret/)
+})

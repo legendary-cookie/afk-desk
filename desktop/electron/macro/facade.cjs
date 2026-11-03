@@ -2,6 +2,7 @@
 // Macro facade: the only code that talks to the bot managers on behalf of macros.
 // Every facade method is (accountId, step, ctx) => Promise. See contract.cjs.
 const { randomUUID } = require('node:crypto')
+const { entityType } = require('../minimap.cjs')
 const { MacroActionError, ERROR_CODES, STEP_TYPES, assertFacade } = require('./contract.cjs')
 const { buildTelemetry, lockedSlotSet, lockedGuiSlot, itemNameMatches, itemLoreMatches, itemTooltipDetails, windowTitleText } = require('../bot-manager.cjs')
 
@@ -57,7 +58,7 @@ function createFacade({ bots, notify = () => {}, getEdition = () => 'java', time
       inventoryFull: online && !hasFreeInventorySlot(inventory),
       inventory: inventory.map(({ name, count, slot }) => ({ name, count, slot })),
       windowOpen: Boolean(session?.bot?.currentWindow),
-      entities: session?.bot?.entity?.position ? Object.values(session.bot.entities || {}).filter((entity) => entity && entity !== session.bot.entity && entity.position).map((entity) => ({ type: entity.type, name: entity.name, username: entity.username, distance: Math.hypot(entity.position.x - session.bot.entity.position.x, entity.position.y - session.bot.entity.position.y, entity.position.z - session.bot.entity.position.z) })) : []
+      entities: session?.bot?.entity?.position ? Object.values(session.bot.entities || {}).filter((entity) => entity && entity !== session.bot.entity && entity.position).map((entity) => ({ type: entityType(entity), name: entity.name, username: entity.username, distance: Math.hypot(entity.position.x - session.bot.entity.position.x, entity.position.y - session.bot.entity.position.y, entity.position.z - session.bot.entity.position.z) })) : []
     }
   }
 
@@ -138,14 +139,16 @@ function createFacade({ bots, notify = () => {}, getEdition = () => 'java', time
       else throw invalid('Invalid control action.')
     },
 
-    async autoclick({ id, step, ctx, bot }) {
+    async autoclick({ id, step, ctx, bot, manager }) {
       const interval = 1000 / step.cps
       const duration = step.durationSec == null ? Infinity : step.durationSec * 1000
+      const owner = step.button === 'right' ? requireOwner(ctx) : null
+      try {
       for (let elapsed = 0; elapsed < duration; elapsed += interval) {
         throwIfAborted(ctx.signal)
         assertSameSession(id, ctx)
         if (ctx.checkStop?.()) throw new MacroActionError('ABORTED', 'Stop condition matched.')
-        if (step.button === 'right') bot.activateItem()
+        if (step.button === 'right') manager.claimInput(id, 'rightClick', owner)
         else {
           const target = bot.entityAtCursor?.(3)
           if (target) bot.attack(target)
@@ -153,6 +156,7 @@ function createFacade({ bots, notify = () => {}, getEdition = () => 'java', time
         }
         await sleep(timers, Math.min(interval, duration - elapsed), ctx.signal)
       }
+      } finally { if (owner) manager.releaseInput(id, 'rightClick', owner) }
     },
 
     async leftClick(call) {

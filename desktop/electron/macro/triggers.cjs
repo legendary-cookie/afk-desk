@@ -26,6 +26,7 @@
 //    Both match the shortest text that lets the rest of the pattern match.
 
 const { LIMITS, TRIGGER_TYPES, MacroActionError } = require('./contract.cjs')
+const { safeRegex } = require('./safe-regex.cjs')
 
 const NAME_RE = /^[A-Za-z_][A-Za-z0-9_]{0,31}$/
 const MAX_CAPTURES = 8
@@ -438,6 +439,7 @@ class TriggerMatcher {
       cooldownMs: typeof trigger.cooldownMs === 'number' && trigger.cooldownMs > 0 ? trigger.cooldownMs : 0
     }
     if (trigger.type === 'playerAppears') {
+      if (trigger.ignoreRegex && !safeRegex(trigger.ignoreRegex)) throw invalid('Invalid or unsafe ignore regex')
       entry.ignoreRegex = trigger.ignoreRegex ? new RegExp(trigger.ignoreRegex) : null
     } else if (trigger.type === 'chat') {
       entry.pattern = compileChatPattern(trigger.pattern, trigger.match === 'glob' ? 'glob' : 'contains')
@@ -521,7 +523,7 @@ class TriggerMatcher {
         return payload ? this._telemetry(accountId, state, payload, now, out) : out
       case 'playerAppears': {
         const username = payload && typeof payload.username === 'string' ? payload.username : ''
-        if (!username) return out
+        if (!username || username.length > 16) return out
         for (const entry of this._bucket(accountId, 'playerAppears') || []) {
           if (!entry.ignoreRegex || !entry.ignoreRegex.test(username)) this._push(out, entry, accountId, now, { player: username })
         }

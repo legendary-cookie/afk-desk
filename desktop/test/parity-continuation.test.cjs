@@ -55,3 +55,49 @@ test('entity count filters type, name and radius and compares totals', () => {
   assert.equal(engine._evaluate(ctx, { type: 'entityCount', entityType: 'any', radius: 5, comparator: '<=', count: 2 }, 0), true)
   assert.deepEqual(normalizeMacro({ stopWhen: [{ type: 'entityCount', entityType: 'mob', radius: 999, count: 2 }] }).stopWhen[0], { type: 'entityCount', entityType: 'mob', name: '', radius: 256, comparator: '>=', count: 2 })
 })
+
+test('global stop wins even when a local condition matches first', () => {
+  const engine = Object.create(MacroEngine.prototype)
+  const ctx = { macroId: 'm', macro: { stopWhen: [{ type: 'always' }, { type: 'always', allAccounts: true }] } }
+  const other = { macroId: 'm' }
+  engine.runs = new Map([['a', ctx], ['b', other]])
+  const stopped = []
+  engine._requestStop = run => stopped.push(run)
+  assert.equal(engine._stopWhenMatches(ctx), true)
+  assert.deepEqual(stopped, [other])
+})
+
+test('sandboxed preload imports only electron and canvas capture avoids page pixels', () => {
+  const fs = require('node:fs')
+  const preload = fs.readFileSync(require.resolve('../electron/preload.cjs'), 'utf8')
+  assert.deepEqual([...preload.matchAll(/\brequire\(['"]([^'"]+)['"]\)/g)].map(m => m[1]), ['electron'])
+  assert.match(preload, /ipcRenderer\.invoke\('macros:contract'\)/)
+  const main = fs.readFileSync(require.resolve('../electron/main.cjs'), 'utf8')
+  assert.doesNotMatch(main, /capturePage\(/)
+  assert.match(main, /toDataURL\('image\/png'\)/)
+})
+
+test('ignore regex rejects pathological patterns and long patterns', () => {
+  const { safeRegex } = require('../electron/macro/safe-regex.cjs')
+  for (const pattern of ['^(a|a|a|a|a)+$', '(a+)+$', '(a+)(b+)', 'a'.repeat(201)]) assert.equal(safeRegex(pattern), false)
+  assert.equal(safeRegex('^Friend.*$'), true)
+})
+
+test('alert captures require subscribers, coalesce per account and run at most two at a time', async () => {
+  const { AppCore } = require('../core/app-core.cjs')
+  const pending = []
+  let active = 0, max = 0, calls = 0, subscribed = false
+  const sent = []
+  const core = { store: { list: () => [] }, settingsStore: { get: () => ({ notifyAttachInventory: true }) }, bots: { inventory: () => [] }, notifier: { hasSubscribers: () => subscribed, notify: event => sent.push(event) }, alertCaptures: new Map(), alertCaptureActive: 0, alertCaptureQueue: [], platform: { captureAlertImages: () => { calls++; active++; max = Math.max(max, active); return new Promise(resolve => pending.push(() => { active--; resolve([]) })) } } }
+  const send = id => AppCore.prototype._send.call(core, { kind: 'death', accountId: id })
+  send('none'); await new Promise(setImmediate); assert.equal(calls, 0)
+  subscribed = true
+  send('a'); send('a'); send('b'); send('c')
+  await new Promise(setImmediate)
+  assert.equal(calls, 2); assert.equal(max, 2)
+  pending.shift()(); await new Promise(setImmediate)
+  assert.equal(calls, 3)
+  while (pending.length) pending.shift()()
+  await new Promise(setImmediate)
+  assert.equal(sent.length, 4)
+})

@@ -17,7 +17,7 @@ const { MacroEngine } = require('../electron/macro/engine.cjs')
 const { createFacade } = require('../electron/macro/facade.cjs')
 const { TriggerMatcher } = require('../electron/macro/triggers.cjs')
 const { createBotEventAdapter } = require('../electron/macro/bot-events.cjs')
-const { IPC, LIMITS } = require('../electron/macro/contract.cjs')
+const { IPC, LIMITS, TRIGGER_TYPES, STEP_TYPES, CONDITION_METADATA } = require('../electron/macro/contract.cjs')
 const { NotifySettings, classifyKickReason, crossedLowHealth } = require('../electron/notify/settings.cjs')
 const { fetchWithPolicy } = require('../electron/net-policy.cjs')
 const { resolveSystemAppData } = require('../electron/resource-pack.cjs')
@@ -138,6 +138,9 @@ class AppCore {
     this.macroLibrary = new MacroLibraryStore(userDataPath)
     this.notifySettings = new NotifySettings(this.settingsStore, secretBox)
     this.notifier = null
+    this.alertCaptures = new Map()
+    this.alertCaptureActive = 0
+    this.alertCaptureQueue = []
     this.botEventAdapter = null
     this.facade = null
     this.macroEngine = null
@@ -245,6 +248,7 @@ class AppCore {
     this.bots = this.botsApi = botsDomain
 
     this.macros = {
+      contract: () => ({ triggers: TRIGGER_TYPES, steps: STEP_TYPES, conditions: CONDITION_METADATA }),
       list: () => {
         const validation = {}
         for (const m of this.macroLibrary.list()) validation[m.id] = macroModel.validateMacro(m, this._macroOptions())
@@ -745,10 +749,24 @@ class AppCore {
       if (account) event.server = account.host || account.profileName || 'AFK Desk'
       const settings = this.settingsStore.get()
       if (!['playerAppears', 'lowHealth', 'death', 'inventoryFull'].includes(event.kind) || (!settings.notifyAttachPov && !settings.notifyAttachInventory)) return this.notifier?.notify(event)
-      Promise.resolve().then(() => this.platform.captureAlertImages?.(event.accountId, settings, this.bots.inventory(event.accountId))).then(images => {
-        event.images = images || []
-        this.notifier?.notify(event)
-      }).catch(() => this.notifier?.notify(event))
+      if (!this.notifier || (this.notifier.hasSubscribers && !this.notifier.hasSubscribers(event))) return
+      let capture = this.alertCaptures.get(event.accountId)
+      if (!capture) {
+        capture = new Promise(resolve => {
+          const run = () => {
+            this.alertCaptureActive++
+            Promise.resolve().then(() => this.platform.captureAlertImages?.(event.accountId, settings, this.bots.inventory(event.accountId))).catch(() => []).then(resolve).finally(() => {
+              this.alertCaptures.delete(event.accountId)
+              this.alertCaptureActive--
+              this.alertCaptureQueue.shift()?.()
+            })
+          }
+          if (this.alertCaptureActive < 2) run()
+          else this.alertCaptureQueue.push(run)
+        })
+        this.alertCaptures.set(event.accountId, capture)
+      }
+      capture.then(images => { event.images = images || []; this.notifier?.notify(event) })
     } catch { try { this.notifier?.notify(event) } catch {} }
   }
   _sendUi(channel, payload) { try { this.emitToUi(channel, payload) } catch {} }

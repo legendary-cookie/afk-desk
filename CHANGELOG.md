@@ -2,6 +2,28 @@
 
 For the complete desktop history from 0.1.0 onward, including source tags, installers, and comparisons, see [HISTORY.md](HISTORY.md).
 
+## Unreleased (desktop) — 2026-11-03
+
+### Added
+
+- Streamer mode: hides account names and emails everywhere in the app (settings and a header toggle).
+- Up/Down arrow history (last 50 messages per account) in the chat panel and the POV window.
+- "Next runs" list per account: upcoming timed messages, macros, auto-deposit checks and server-change retries.
+- Optional anti-AFK chat message with its own interval.
+- Macros: Reconnect step delay and max attempts; saved (persistent) variables and `clearVar`; item-count and mob/player-count conditions; `readLore`; `autoclick` (1–20 CPS); a regex ignore list on the "player appears" trigger; stop conditions that stop every account.
+- Macro editor: flow view with a searchable step palette grouped by category, settings forms built from the macro contract, and a raw JSON toggle.
+- Alerts: Discord and Telegram can attach a POV screenshot (while that POV is open) and an inventory image; the alert title is the server name.
+- Wall view: a grid of all online accounts with live thumbnails (capped) and status cards.
+- Minimap on the movement page (surface and cave views, nearby players and mobs, pathfinding goal) and a "Walking to x y z (N blocks)" line.
+- First-run tutorial, reopenable from Help.
+- Share links for server profiles and macros (secrets and account details are removed; preview before import).
+- Bulk skin and cape changes for several Microsoft accounts at once.
+
+### Known limits
+
+- The POV screenshot can't be taken while the POV view is closed (that option is disabled).
+- The regex safety check rejects some patterns that would actually be safe (more than one repetition operator).
+
 ## Desktop and Android 0.9.2 — 2026-08-24
 
 ### Fixed

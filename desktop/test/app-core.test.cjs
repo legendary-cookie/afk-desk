@@ -73,6 +73,7 @@ const ORIGINAL_IPC_CHANNELS = Object.freeze([
   'bot:world-action',
   'logs:list',
   'logs:clear',
+  'macros:contract',
   'macros:list',
   'macros:save',
   'macros:delete',

@@ -173,8 +173,8 @@ app.whenReady().then(async () => {
         const images = []
         if (settings.notifyAttachPov && mainWindow && !mainWindow.isDestroyed()) {
           try {
-            const rect = await mainWindow.webContents.executeJavaScript(`(() => { const d = document.getElementById('pov-dialog'); if (!d?.open) return null; const c = [...d.querySelectorAll('canvas[data-account-id]')].find(c => c.dataset.accountId === ${JSON.stringify(id)}); if (!c) return null; const r = c.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) }; })()`)
-            if (rect && rect.width > 0 && rect.height > 0) images.push({ name: 'pov.png', data: (await mainWindow.webContents.capturePage(rect)).toPNG() })
+            const data = await mainWindow.webContents.executeJavaScript(`(() => { const d = document.getElementById('pov-dialog'); if (!d?.open) return null; const c = [...d.querySelectorAll('canvas[data-account-id]')].find(c => c.dataset.accountId === ${JSON.stringify(id)}); return c?.toDataURL('image/png') || null; })()`)
+            if (typeof data === 'string' && data.startsWith('data:image/png;base64,')) images.push({ name: 'pov.png', data: Buffer.from(data.slice(22), 'base64') })
           } catch {}
         }
         if (settings.notifyAttachInventory) {
@@ -269,6 +269,7 @@ function registerIpc() {
   handle('bot:world-action', (_event, input) => core.bots.worldAction(input))
   handle('logs:list', (_event, input) => core.logs.list(input))
   handle('logs:clear', (_event, id) => core.logs.clear(id))
+  handle(MACRO_IPC.contract, () => core.macros.contract())
   handle(MACRO_IPC.list, () => core.macros.list())
   handle(MACRO_IPC.save, (_event, input) => core.macros.save(input))
   handle(MACRO_IPC.remove, (_event, id) => core.macros.remove(id))

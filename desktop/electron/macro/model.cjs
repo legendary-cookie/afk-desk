@@ -5,6 +5,7 @@
 
 const crypto = require('node:crypto')
 const { SCHEMA_VERSION, LIMITS, TRIGGER_TYPES, STEP_TYPES, CONDITION_TYPES } = require('./contract.cjs')
+const { safeRegex } = require('./safe-regex.cjs')
 
 const hasOwn = (object, key) => Object.prototype.hasOwnProperty.call(object, key)
 const isObj = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -514,7 +515,7 @@ function validateMacro(macro, options = {}) {
       }
       if (trigger.type === 'playerAppears') {
         if (typeof trigger.ignoreRegex !== 'string' || trigger.ignoreRegex.length > LIMITS.maxPatternLength) errors.push({ path: '/trigger/ignoreRegex', message: 'Enter a regex of at most 200 characters.' })
-        else try { new RegExp(trigger.ignoreRegex) } catch { errors.push({ path: '/trigger/ignoreRegex', message: 'Invalid regular expression.' }) }
+        else if (!safeRegex(trigger.ignoreRegex)) errors.push({ path: '/trigger/ignoreRegex', message: 'Invalid or unsafe regular expression.' })
       }
       if (trigger.type === 'timer') {
         if (!(Number.isFinite(trigger.intervalMs) && trigger.intervalMs >= 1000 && trigger.intervalMs <= 86400000)) errors.push({ path: '/trigger/intervalMs', message: 'Interval must be between 1 second and 24 hours.' })

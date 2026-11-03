@@ -760,3 +760,8 @@ test('playerAppears ignores matching usernames and rejects invalid regex', () =>
   matcher.setMacros([macro('bad', { type: 'playerAppears', ignoreRegex: '[' })], () => ['a1'])
   assert.equal(matcher.rejectedMacros().length, 1)
 })
+
+test('player appearance regex never evaluates overlong usernames', () => {
+  const { matcher } = setup([macro('p', { type: 'playerAppears', ignoreRegex: '^Friend' })])
+  assert.deepEqual(matcher.onEvent(ev('playerAppears', 'a1', { username: 'x'.repeat(17) })), [])
+})

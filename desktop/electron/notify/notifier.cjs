@@ -539,7 +539,7 @@ function createNotifier({
       if (validChannel.type === 'discord') {
         const urlObj = new URL(validChannel.webhookUrl)
         urlObj.searchParams.set('wait', 'false')
-        form.append('payload_json', JSON.stringify({ content: text, allowed_mentions: { parse: [] }, embeds: images.map(image => ({ title: String(title || 'AFK Desk').slice(0, 256), image: { url: `attachment://${image.name}` } })) }))
+        form.append('payload_json', JSON.stringify({ content: text, allowed_mentions: { parse: [] }, embeds: images.map(image => ({ title: sanitizeServerText(title || 'AFK Desk', 256), image: { url: `attachment://${image.name}` } })) }))
         images.forEach((image, i) => form.append(`files[${i}]`, new Blob([image.data], { type: 'image/png' }), image.name))
         return { url: urlObj.toString(), body: form }
       }
@@ -554,7 +554,7 @@ function createNotifier({
       const body = JSON.stringify({
         content: text,
         allowed_mentions: { parse: [] },
-        ...(title ? { embeds: [{ title: String(title).slice(0, 256) }] } : {})
+        ...(title ? { embeds: [{ title: sanitizeServerText(title, 256) }] } : {})
       })
       return { url: urlObj.toString(), body }
     }
@@ -688,7 +688,8 @@ function createNotifier({
     }
 
     const validChannel = validation.channel
-    const batch = state.pendingEvents.splice(0, state.pendingEvents.length)
+    const retry = state.pendingEvents[0]?._delivery
+    const batch = retry ? state.pendingEvents.shift().batch : state.pendingEvents.splice(0, state.pendingEvents.length)
     const maxChars = validChannel.type === 'discord' ? LIMITS.discordMaxChars : LIMITS.telegramMaxChars
     const text = formatBatchMessage(batch, validChannel.includeTimestamp, maxChars, safeNow)
 
@@ -696,14 +697,19 @@ function createNotifier({
     let sendPromise
     sendPromise = (async () => {
       try {
-        const images = batch.flatMap(event => Array.isArray(event.images) ? event.images : []).slice(0, 10).map((image, i) => ({ ...image, name: `${i}-${image.name}` }))
-        let result = await executeHttpSend(validChannel, text, validChannel.type === 'telegram' ? images.slice(0, 1) : images, batch[0]?.server)
-        if (result.ok && validChannel.type === 'telegram') {
-          for (const image of images.slice(1)) {
-            result = await executeHttpSend(validChannel, '', [image], batch[0]?.server)
-            if (!result.ok) break
+        const images = retry ? retry.images : batch.flatMap(event => Array.isArray(event.images) ? event.images : []).slice(0, 10).map((image, i) => ({ ...image, name: `${i}-${image.name}` }))
+        let textSent = retry?.textSent || false
+        let index = 0
+        let result
+        if (validChannel.type === 'telegram') {
+          result = textSent ? { ok: true } : await executeHttpSend(validChannel, text, [], batch[0]?.server)
+          if (result.ok) textSent = true
+          while (result.ok && index < images.length) {
+            result = await executeHttpSend(validChannel, '', [images[index]], batch[0]?.server)
+            if (result.ok) index++
           }
-        }
+        } else result = await executeHttpSend(validChannel, text, images, batch[0]?.server)
+        const delivery = { textSent, images: images.slice(index) }
         if (disposed) return
 
         const finishedAt = safeNow()
@@ -718,7 +724,7 @@ function createNotifier({
           const delayMs = result.retryAfterMs
           state.nextAllowedSendAt = finishedAt + delayMs
           // Prepend the batch back so the rate-limited events are sent after the retry delay
-          state.pendingEvents = batch.concat(state.pendingEvents)
+          state.pendingEvents = validChannel.type === 'telegram' ? [{ _delivery: delivery, batch }, ...state.pendingEvents] : batch.concat(state.pendingEvents)
           safeLog({
             level: 'warn',
             event: 'rate_limited',
@@ -952,6 +958,7 @@ function createNotifier({
 
   return {
     notify,
+    hasSubscribers: (event) => readCurrentChannels().some(ch => matchesChannelFilter(ch, event)),
     test,
     status,
     flush,
