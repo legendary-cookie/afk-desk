@@ -2560,7 +2560,7 @@ function drawPovHud(context, canvas, account) {
   const box = Math.max(24, Math.min(48, canvas.width / 12)), start = canvas.width / 2 - box * 4.5, bottom = canvas.height - box - 10
   context.font = `${Math.max(12, canvas.width / 48)}px monospace`; context.textAlign = 'left'
   context.fillStyle = '#080d12bb'; context.fillRect(start - 8, bottom - 29, box * 9 + 14, box + 36)
-  context.fillStyle = '#f76666'; context.fillText(`♥ ${health}/20`, start, bottom - 10)
+  context.fillStyle = '#f76666'; context.fillText(`♥ ${Math.round(Number(health) * 10) / 10 || health}/20`, start, bottom - 10)
   context.textAlign = 'right'; context.fillStyle = '#e6b55d'; context.fillText(`◆ ${food}/20`, start + box * 9 - 4, bottom - 10)
   const selected = Number(snapshot.quickBarSlot ?? telemetry.selectedHotbarSlot) || 0
   const inventory = telemetry.inventory || []
