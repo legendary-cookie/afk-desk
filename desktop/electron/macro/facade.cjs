@@ -3,7 +3,7 @@
 // Every facade method is (accountId, step, ctx) => Promise. See contract.cjs.
 const { randomUUID } = require('node:crypto')
 const { MacroActionError, ERROR_CODES, STEP_TYPES, assertFacade } = require('./contract.cjs')
-const { buildTelemetry, lockedSlotSet, lockedGuiSlot, itemNameMatches, itemLoreMatches, windowTitleText } = require('../bot-manager.cjs')
+const { buildTelemetry, lockedSlotSet, lockedGuiSlot, itemNameMatches, itemLoreMatches, itemTooltipDetails, windowTitleText } = require('../bot-manager.cjs')
 
 const ATTACK_INTERVAL_MS = 200
 const RECONNECT_POLL_MS = 25
@@ -56,7 +56,8 @@ function createFacade({ bots, notify = () => {}, getEdition = () => 'java', time
       food: bedrock ? session?.food : telemetry.food,
       inventoryFull: online && !hasFreeInventorySlot(inventory),
       inventory: inventory.map(({ name, count, slot }) => ({ name, count, slot })),
-      windowOpen: Boolean(session?.bot?.currentWindow)
+      windowOpen: Boolean(session?.bot?.currentWindow),
+      entities: session?.bot?.entity?.position ? Object.values(session.bot.entities || {}).filter((entity) => entity && entity !== session.bot.entity && entity.position).map((entity) => ({ type: entity.type, name: entity.name, username: entity.username, distance: Math.hypot(entity.position.x - session.bot.entity.position.x, entity.position.y - session.bot.entity.position.y, entity.position.z - session.bot.entity.position.z) })) : []
     }
   }
 
@@ -94,6 +95,12 @@ function createFacade({ bots, notify = () => {}, getEdition = () => 'java', time
   // ---- step handlers: (call) => result ----
 
   const handlers = {
+    readLore({ step, bot }) {
+      const slots = bot.inventory?.slots || []
+      const item = Number.isInteger(step.select?.slot) ? slots[step.select.slot] : slots.find((entry) => entry && itemNameMatches(entry, step.select?.name))
+      if (!item) throw notFound('Inventory item not found.')
+      return (itemTooltipDetails(item, bot.registry, bot.__afkDeskEnchantmentsById).lore || []).join('\n')
+    },
     chat({ id, step, manager }) {
       return manager.sendChat(id, step.message)
     },
@@ -129,6 +136,23 @@ function createFacade({ bots, notify = () => {}, getEdition = () => 'java', time
       if (step.action === 'hold') manager.claimInput(id, step.control, owner)
       else if (step.action === 'release') manager.releaseInput(id, step.control, owner)
       else throw invalid('Invalid control action.')
+    },
+
+    async autoclick({ id, step, ctx, bot }) {
+      const interval = 1000 / step.cps
+      const duration = step.durationSec == null ? Infinity : step.durationSec * 1000
+      for (let elapsed = 0; elapsed < duration; elapsed += interval) {
+        throwIfAborted(ctx.signal)
+        assertSameSession(id, ctx)
+        if (ctx.checkStop?.()) throw new MacroActionError('ABORTED', 'Stop condition matched.')
+        if (step.button === 'right') bot.activateItem()
+        else {
+          const target = bot.entityAtCursor?.(3)
+          if (target) bot.attack(target)
+          else bot.swingArm()
+        }
+        await sleep(timers, Math.min(interval, duration - elapsed), ctx.signal)
+      }
     },
 
     async leftClick(call) {
@@ -221,16 +245,18 @@ function createFacade({ bots, notify = () => {}, getEdition = () => 'java', time
       const previousSessionId = sessionIdFor(id)
       const giveUpAfterMs = Number.isFinite(step.giveUpAfterMs) ? step.giveUpAfterMs : RECONNECT_DEFAULT_GIVE_UP_MS
 
-      manager.disconnect(id)
-      await sleep(timers, step.delayMs || 0, ctx.signal)
-      const startedConnecting = !manager.sessions.has(id)
-      if (startedConnecting) manager.connect(account)
-      try {
-        await waitForNewSession(id, previousSessionId, giveUpAfterMs, ctx.signal)
-      } catch (error) {
-        // Do not leave the account half-connected because of a step that was cancelled.
-        if (startedConnecting && error.code === ERROR_CODES.ABORTED) manager.disconnect(id)
-        throw error
+      const attempts = Math.max(1, Math.min(1000, Math.floor(step.maxAttempts || 1)))
+      for (let attempt = 0; attempt < attempts; attempt += 1) {
+        manager.disconnect(id)
+        await sleep(timers, step.delaySec != null ? step.delaySec * 1000 : (step.delayMs ?? 0), ctx.signal)
+        try {
+          if (!manager.sessions.has(id)) manager.connect(account)
+          await waitForNewSession(id, previousSessionId, giveUpAfterMs, ctx.signal)
+          return
+        } catch (error) {
+          if (error.code === ERROR_CODES.ABORTED) manager.disconnect(id)
+          if (error.code === ERROR_CODES.ABORTED || attempt + 1 === attempts) throw error
+        }
       }
     }
   }

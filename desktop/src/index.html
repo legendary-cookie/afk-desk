@@ -52,6 +52,7 @@
               <h1 id="account-title">Account</h1>
             </div>
             <div class="topbar-actions">
+              <button id="streamer-quick-toggle" class="button secondary" type="button" aria-pressed="false">Streamer mode</button>
               <button id="open-command-center" class="button secondary command-center-trigger" type="button"><kbd>Ctrl K</kbd> Search / actions</button>
               <button id="display-menu-trigger" class="button secondary menu-trigger display-menu-trigger" type="button" popovertarget="display-menu">Display <span id="quick-scale-value">100%</span></button>
               <div id="display-menu" class="action-popover display-popover" popover>
@@ -267,6 +268,9 @@
           <label class="field"><span>Maximum delay (seconds)</span><input id="anti-afk-max-delay" type="number" min="2" max="3600" value="45" /></label>
           <label class="field"><span>Action duration (seconds)</span><input id="anti-afk-duration" type="number" min="0.1" max="10" step="0.05" value="0.25" /></label>
           <label class="field"><span>Look angle (degrees)</span><input id="anti-afk-look-degrees" type="number" min="5" max="180" value="12" /></label>
+          <label class="check-row"><input id="anti-afk-chat-enabled" type="checkbox" /> Send anti-AFK chat message</label>
+          <label class="field full"><span>Chat message</span><input id="anti-afk-chat-message" maxlength="256" /></label>
+          <label class="field full"><span>Chat interval (seconds)</span><input id="anti-afk-chat-interval" type="number" min="10" max="86400" value="300" /></label>
           <label class="field full"><span>Maximum walking distance (blocks)</span><input id="anti-afk-walk-distance" type="number" min="0.1" max="8" step="0.1" value="0.5" /><small>Short walking alternates forward and backward and is off by default.</small></label>
           <label class="toggle-row full">
             <input id="environmental-movement" type="checkbox" checked />
@@ -354,6 +358,7 @@
             <span class="toggle" aria-hidden="true"></span>
             <span><strong>Use Minecraft launcher resource pack cache</strong><small>Reuse verified packs from Minecraft, Modrinth, and CurseForge when available.</small></span>
           </label>
+          <label class="toggle-row"><input id="streamer-mode" type="checkbox" /><span class="toggle" aria-hidden="true"></span><span><strong>Streamer mode</strong><small>Hide account names and email addresses in the interface.</small></span></label>
           <label class="field settings-delay"><span>Delay between accounts (seconds)</span><input id="startup-connection-delay" type="number" min="1" max="300" value="3" /></label>
           <label class="field settings-delay"><span>Interface scale</span><input id="ui-scale" type="range" min="75" max="125" step="5" value="100" /><small><output id="ui-scale-value" for="ui-scale">100%</output> — smaller values fit more controls on screen.</small></label>
           <div class="form-section"><h3>POV performance</h3><p>Views are rendered only while the POV dashboard is open.</p></div>
@@ -736,6 +741,7 @@
           <button id="pov-pause" class="button secondary" type="button" aria-pressed="false">Pause</button>
         </div>
         <div id="pov-grid" class="pov-grid" aria-live="polite"></div>
+        <form id="pov-chat-form" class="chat-form"><input id="pov-chat-message" maxlength="256" autocomplete="off" placeholder="Message focused account" aria-label="POV chat message" /><button class="button secondary" type="submit">Send</button></form>
         <div class="beta-toolbar world-toolbar"><label>Radius <input id="pov-radius" type="number" min="2" max="12" value="6" /></label><label>X <input id="pov-x" type="number" step="1" /></label><label>Y <input id="pov-y" type="number" step="1" /></label><label>Z <input id="pov-z" type="number" step="1" /></label><button data-world-action="look-at" class="button secondary" type="button">Look</button><button data-world-action="walk-to" class="button secondary" type="button">Walk</button><button data-world-action="activate-block" class="button secondary" type="button">Use block</button><button data-world-action="dig-block" class="button danger" type="button">Dig</button><button data-world-action="attack-nearest" class="button danger" type="button">Attack nearest</button><button data-world-action="use-held" class="button secondary" type="button">Use held</button></div>
         <p id="pov-detail" class="dialog-copy">Click a perspective feed to focus it and capture the mouse.</p>
         <p class="pov-control-help"><kbd>WASD</kbd> move · <kbd>Space</kbd> jump · <kbd>Shift</kbd> sneak · <kbd>Ctrl</kbd> sprint · Mouse captured: left mouse dig, right mouse use/place · Without capture: hold left mouse and drag to look · <kbd>1–9</kbd> / wheel hotbar · <kbd>E</kbd> inventory · <kbd>Esc</kbd> release. Original lightweight textures; only loaded chunks are visible. Render distance: Settings → POV performance (16,000 blocks per feed maximum).</p>
@@ -749,8 +755,10 @@
     <script src="../assets/pov-renderer.js"></script>
     <script src="../assets/compatibility-capabilities.js"></script>
     <script src="../server/browser-bridge.js"></script>
+    <script src="streamer-mask.js"></script>
     <script src="macro-editor.js"></script>
     <script src="notifications-panel.js"></script>
+    <script src="chat-history.js"></script>
     <script src="renderer.js"></script>
   </body>
 </html>

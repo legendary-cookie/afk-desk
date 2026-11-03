@@ -24,6 +24,7 @@ class MultiEditionBotManager {
     if (typeof manager?.updateAccountConfig === 'function') return manager.updateAccountConfig(account)
   }
 
+  getUpcomingRuns(id) { return this.manager(id).getUpcomingRuns?.(id) || [] }
   disconnect(id) { return this.manager(id).disconnect(id) }
   manager(id) { return this[this.editions.get(id) || 'java'] }
 }

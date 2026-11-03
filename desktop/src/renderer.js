@@ -1,5 +1,7 @@
 const api = window.afkDesk
 const povMath = window.afkPovMath
+const displayAccount = (account) => window.afkStreamerMask.displayAccount(account, state.settings.streamerMode)
+const maskText = (text) => window.afkStreamerMask.maskText(text, state.accounts, state.settings.streamerMode)
 
 const KEY_CONTROLS = {
   KeyW: 'forward',
@@ -86,7 +88,7 @@ const state = {
   logs: new Map(),
   telemetry: new Map(),
   serverWindows: new Map(),
-  chatHistory: new Map(),
+  chatHistory: new window.ChatHistory(),
   chatSuggestions: [],
   chatSuggestionIndex: 0,
   chatCompletionRequest: 0,
@@ -101,7 +103,7 @@ const state = {
 const el = Object.fromEntries([
   'account-list', 'account-count', 'add-account', 'open-settings', 'toggle-sidebar', 'open-command-center', 'command-dialog', 'command-search', 'command-results', 'close-command-center',
   'quick-scale', 'quick-scale-number', 'reset-scale', 'quick-scale-value', 'quick-workspace-design', 'quick-color-theme', 'workspace-design', 'color-theme', 'display-menu', 'console-menu',
-  'macro-menu', 'settings-dialog', 'close-settings', 'start-with-windows', 'notifications-enabled', 'stagger-startup-connections', 'use-launcher-pack-cache', 'startup-connection-delay', 'save-settings', 'empty-state',
+  'streamer-quick-toggle', 'streamer-mode', 'macro-menu', 'settings-dialog', 'close-settings', 'start-with-windows', 'notifications-enabled', 'stagger-startup-connections', 'use-launcher-pack-cache', 'startup-connection-delay', 'save-settings', 'empty-state',
   'dashboard', 'account-title', 'app-version', 'settings-app-version', 'edit-account', 'open-logs', 'open-automations', 'open-pov', 'connection-button', 'status-banner',
   'status-name', 'status-detail', 'server-address', 'detail-username', 'detail-server', 'detail-version', 'detail-antiafk', 'detail-environment', 'detail-water', 'detail-health',
   'detail-hunger', 'detail-coordinates', 'detail-chest', 'detail-dimension', 'inventory-count', 'inventory-grid', 'auto-deposit-toggle', 'hold-selected', 'equip-destination', 'equip-selected',
@@ -111,7 +113,7 @@ const el = Object.fromEntries([
   'port', 'version', 'modded-fields', 'mod-loader', 'mod-handshake', 'client-brand', 'mod-list', 'mod-channels', 'connect-on-startup', 'proxy-mode',
   'proxy-enabled', 'proxy-fields', 'proxy-type', 'proxy-host', 'proxy-port', 'proxy-username', 'proxy-password', 'proxy-password-help', 'proxy-clear-password', 'share-proxy-pool',
   'proxy-label', 'proxy-max-sessions', 'alert-disconnect', 'alert-errors', 'alert-health', 'anti-afk', 'anti-afk-min-delay', 'anti-afk-max-delay', 'anti-afk-duration', 'anti-afk-look-degrees',
-  'anti-afk-walk-distance', 'anti-afk-jump', 'anti-afk-look', 'anti-afk-sneak', 'anti-afk-swing', 'anti-afk-walk', 'environmental-movement', 'auto-reconnect', 'auto-reconnect-delay', 'auto-reconnect-backoff',
+  'anti-afk-chat-enabled', 'anti-afk-chat-message', 'anti-afk-chat-interval', 'anti-afk-walk-distance', 'anti-afk-jump', 'anti-afk-look', 'anti-afk-sneak', 'anti-afk-swing', 'anti-afk-walk', 'environmental-movement', 'auto-reconnect', 'auto-reconnect-delay', 'auto-reconnect-backoff',
   'auto-reconnect-max-delay', 'auto-reconnect-rate-limit-delay', 'auto-reconnect-max', 'connect-timeout', 'reconnect-reset-delay', 'auto-deposit-setting', 'auto-deposit-range', 'auto-deposit-mode', 'auto-deposit-interval-wrap', 'auto-deposit-interval', 'auto-deposit-interval-unit', 'auto-deposit-full-threshold', 'auto-deposit-threshold-wrap', 'join-message', 'server-change-message', 'message-delay', 'server-change-retry-minutes',
   'form-error', 'delete-account', 'duplicate-profile', 'login-dialog', 'login-code', 'open-login-private', 'open-login', 'close-login', 'ui-scale', 'ui-scale-value',
   'pov-settings-refresh', 'pov-settings-fps', 'pov-settings-radius', 'pov-settings-render-distance', 'pov-settings-columns', 'pov-max-feeds', 'pov-settings-view-mode', 'pov-show-hud', 'column-resizer', 'inventory-resizer',
@@ -176,6 +178,12 @@ function bindEvents() {
     el['settings-dialog'].close()
   })
   el['save-settings'].addEventListener('click', saveSettings)
+  el['streamer-quick-toggle'].addEventListener('click', async () => {
+    try {
+      state.settings = await api.saveSettings({ ...state.settings, streamerMode: !state.settings.streamerMode })
+      refreshStreamerDisplay()
+    } catch (error) { toast(cleanError(error), 'error') }
+  })
   el['stagger-startup-connections'].addEventListener('change', syncStartupDelay)
   document.querySelector('[data-action="add"]').addEventListener('click', () => openAccountDialog())
   el['edit-account'].addEventListener('click', () => openAccountDialog(selectedAccount()))
@@ -206,8 +214,23 @@ function bindEvents() {
     el['proxy-port'].value = el['proxy-type'].value === 'http' ? 8080 : 1080
   })
   el['chat-form'].addEventListener('submit', sendChat)
+  const povChat = document.getElementById('pov-chat-message')
+  document.getElementById('pov-chat-form').addEventListener('submit', async (event) => {
+    event.preventDefault()
+    const id = povFocusId
+    const text = povChat.value.trim().slice(0, 256)
+    if (!id || !text) return
+    try { await api.sendChat(id, text); state.chatHistory.add(id, text); povChat.value = '' } catch (error) { toast(cleanError(error), 'error') }
+  })
+  povChat.addEventListener('input', () => { if (povFocusId) state.chatHistory.reset(povFocusId) })
+  povChat.addEventListener('keydown', (event) => {
+    if (!povFocusId || !['ArrowUp', 'ArrowDown'].includes(event.key)) return
+    event.preventDefault()
+    povChat.value = state.chatHistory.navigate(povFocusId, event.key === 'ArrowUp' ? 'up' : 'down', povChat.value)
+    povChat.setSelectionRange(povChat.value.length, povChat.value.length)
+  })
   el['chat-message'].addEventListener('keydown', handleChatKeyDown)
-  el['chat-message'].addEventListener('input', scheduleChatCompletion)
+  el['chat-message'].addEventListener('input', () => { if (state.selectedId) state.chatHistory.reset(state.selectedId); scheduleChatCompletion() })
   el['chat-message'].addEventListener('blur', () => setTimeout(closeChatSuggestions, 120))
   el['manage-macros'].addEventListener('click', openMacroEditor)
   el['add-macro'].addEventListener('click', () => addMacroRow())
@@ -285,7 +308,16 @@ function populateVersionOptions(versions) {
   el.version.replaceChildren(automatic, ...options)
 }
 
+function refreshStreamerDisplay() {
+  el['streamer-quick-toggle'].setAttribute('aria-pressed', String(state.settings.streamerMode === true))
+  el['streamer-mode'].checked = state.settings.streamerMode === true
+  render()
+  if (el['pov-dialog'].open) renderPovGrid()
+  if (el['logs-dialog'].open) void refreshPersistentLogs()
+}
+
 function render() {
+  el['streamer-quick-toggle'].setAttribute('aria-pressed', String(state.settings.streamerMode === true))
   renderAccountList()
   const account = selectedAccount()
   el['empty-state'].hidden = Boolean(account)
@@ -293,9 +325,9 @@ function render() {
   if (!account) { renderServerWindow(); return }
 
   const status = getStatus(account.id)
-  el['account-title'].textContent = account.profileName || account.label
+  el['account-title'].textContent = displayAccount(account)
   el['server-address'].textContent = `${account.host}:${account.port}`
-  el['detail-username'].textContent = account.username
+  el['detail-username'].textContent = state.settings.streamerMode ? displayAccount(account) : account.username
   el['detail-server'].textContent = `${account.host}:${account.port}`
   const resolvedVersion = state.resolvedVersions.get(account.id) || account.lastSuccessfulVersion
   el['detail-version'].textContent = account.edition === 'bedrock' ? `Bedrock ${resolvedVersion || 'auto'}` : account.version || (resolvedVersion ? `${resolvedVersion} (auto)` : 'Auto-detect')
@@ -327,14 +359,14 @@ function renderAccountList() {
     const copy = document.createElement('span')
     copy.className = 'account-copy'
     const title = document.createElement('strong')
-    title.textContent = account.profileName || account.label
+    title.textContent = displayAccount(account)
     const server = document.createElement('span')
     server.textContent = `${account.edition === 'bedrock' ? 'Bedrock · ' : ''}${account.host}`
     copy.append(title, server)
     const indicator = document.createElement('span')
     indicator.className = `mini-status ${status}`
     indicator.setAttribute('aria-label', status)
-    const accountLabel = `${account.profileName || account.label} (${status}) - ${account.host}`
+    const accountLabel = `${displayAccount(account)} (${status}) - ${account.host}`
     button.setAttribute('aria-label', accountLabel)
     button.title = accountLabel
     button.append(avatar, copy, indicator)
@@ -351,7 +383,30 @@ function renderAccountList() {
     const up = createOrderButton(account, 'up', index === 0)
     const down = createOrderButton(account, 'down', index === state.accounts.length - 1)
     controls.append(up, down)
-    row.append(button, controls)
+    const upcoming = document.createElement('details')
+    upcoming.className = 'upcoming-runs'
+    const summary = document.createElement('summary')
+    summary.textContent = 'Next runs'
+    const list = document.createElement('ul')
+    upcoming.append(summary, list)
+    let refreshTimer
+    const refresh = async () => {
+      if (!upcoming.open || !upcoming.isConnected) return
+      try {
+        const runs = await api.getUpcomingRuns(account.id)
+        if (!upcoming.open || !upcoming.isConnected) return
+        list.replaceChildren(...(runs.length ? runs.map((entry) => {
+          const item = document.createElement('li')
+          const seconds = Math.max(0, Math.ceil((entry.at - Date.now()) / 1000))
+          const relative = seconds < 60 ? `${seconds}s` : seconds < 3600 ? `${Math.ceil(seconds / 60)}m` : `${Math.ceil(seconds / 3600)}h`
+          item.textContent = `${entry.label} · in ${relative}`
+          return item
+        }) : [Object.assign(document.createElement('li'), { textContent: 'No scheduled runs' })]))
+      } catch { list.replaceChildren(Object.assign(document.createElement('li'), { textContent: 'Unable to load runs' })) }
+      if (upcoming.open && upcoming.isConnected) refreshTimer = setTimeout(refresh, 5000)
+    }
+    upcoming.addEventListener('toggle', () => { clearTimeout(refreshTimer); if (upcoming.open) void refresh() })
+    row.append(button, controls, upcoming)
     row.addEventListener('dragstart', (event) => {
       if (state.accounts.length < 2) return event.preventDefault()
       state.draggedAccountId = account.id
@@ -386,7 +441,7 @@ function createOrderButton(account, direction, disabled) {
   button.type = 'button'
   button.className = 'account-order-button'
   button.textContent = direction === 'up' ? '↑' : '↓'
-  button.title = `Move ${account.label} ${direction}`
+  button.title = `Move ${displayAccount(account)} ${direction}`
   button.setAttribute('aria-label', button.title)
   button.disabled = disabled
   button.draggable = false
@@ -435,7 +490,7 @@ function renderStatus({ status, detail }) {
   const active = online || status === 'connecting' || status === 'connected' || status === 'reconnecting'
   el['status-banner'].className = `status-banner ${['connected', 'reconnecting'].includes(status) ? 'connecting' : status}`
   el['status-name'].textContent = status
-  el['status-detail'].textContent = detail
+  el['status-detail'].textContent = maskText(detail)
   el['connection-button'].textContent = status === 'reconnecting' ? 'Cancel reconnect' : active ? 'Disconnect' : 'Connect'
   el['connection-button'].className = `button ${active ? 'secondary' : 'primary'}`
   el['chat-message'].disabled = !canInteract
@@ -828,6 +883,7 @@ function updateAutoDepositFields() {
 
 function openAccountDialog(account) {
   el['account-form'].reset()
+  for (const input of [el['profile-name'], el.label, el.username, el['proxy-username']]) input.type = state.settings.streamerMode ? 'password' : (input === el.username ? 'email' : 'text')
   el['form-error'].hidden = true
   el['account-id'].value = account?.id || ''
   el['identity-id'].value = account?.identityId || ''
@@ -863,6 +919,9 @@ function openAccountDialog(account) {
   syncProxyFields()
   syncEditionFields(false)
   syncModdedFields()
+  el['anti-afk-chat-enabled'].checked = account?.antiAfkChatEnabled === true
+  el['anti-afk-chat-message'].value = account?.antiAfkChatMessage ?? ''
+  el['anti-afk-chat-interval'].value = account?.antiAfkChatIntervalSec ?? 300
   el['anti-afk'].checked = account?.antiAfk !== false
   const legacyAntiAfkDelay = account?.antiAfkInterval || 45
   el['anti-afk-min-delay'].value = account?.antiAfkMinDelay ?? legacyAntiAfkDelay
@@ -946,6 +1005,9 @@ async function saveAccount(event) {
     minecraftUuid: existing?.minecraftUuid || '',
     skinUrl: existing?.skinUrl || '',
     antiAfk: el['anti-afk'].checked,
+    antiAfkChatEnabled: el['anti-afk-chat-enabled'].checked,
+    antiAfkChatMessage: el['anti-afk-chat-message'].value,
+    antiAfkChatIntervalSec: Number(el['anti-afk-chat-interval'].value),
     antiAfkMinDelay: Number(el['anti-afk-min-delay'].value),
     antiAfkMaxDelay: Number(el['anti-afk-max-delay'].value),
     antiAfkActionDuration: Number(el['anti-afk-duration'].value),
@@ -1065,9 +1127,9 @@ function renderChatSuggestions() {
     button.role = 'option'
     button.setAttribute('aria-selected', String(index === state.chatSuggestionIndex))
     const label = document.createElement('span')
-    label.textContent = suggestion.label || suggestion.value
+    label.textContent = maskText(suggestion.label || suggestion.value)
     const detail = document.createElement('small')
-    detail.textContent = suggestion.tooltip || suggestion.source || ''
+    detail.textContent = maskText(suggestion.tooltip || suggestion.source || '')
     button.append(label, detail)
     button.addEventListener('pointerdown', (event) => event.preventDefault())
     button.addEventListener('click', () => applyChatSuggestion(index))
@@ -1193,38 +1255,19 @@ function releaseAllManualInputs(accountId = null) {
 async function sendChatMessage(message) {
   const text = String(message || '').trim().slice(0, 256)
   if (!text || !state.selectedId) return
-  rememberChatMessage(state.selectedId, text)
+  const accountId = state.selectedId
   try {
-    await api.sendChat(state.selectedId, text)
+    await api.sendChat(accountId, text)
+    state.chatHistory.add(accountId, text)
     el['chat-message'].value = ''
     closeChatSuggestions()
   } catch (error) { toast(cleanError(error), 'error') }
 }
 
-function rememberChatMessage(accountId, message) {
-  const history = state.chatHistory.get(accountId) || { entries: [], index: 0, draft: '' }
-  if (history.entries.at(-1) !== message) history.entries = [...history.entries.slice(-99), message]
-  history.index = history.entries.length
-  history.draft = ''
-  state.chatHistory.set(accountId, history)
-}
-
 function navigateChatHistory(event) {
   if (!['ArrowUp', 'ArrowDown'].includes(event.key) || !state.selectedId) return
-  const history = state.chatHistory.get(state.selectedId)
-  if (!history?.entries.length) return
   event.preventDefault()
-  if (event.key === 'ArrowUp') {
-    if (history.index >= history.entries.length) history.draft = el['chat-message'].value
-    history.index = Math.max(0, history.index - 1)
-    el['chat-message'].value = history.entries[history.index]
-  } else if (history.index < history.entries.length - 1) {
-    history.index += 1
-    el['chat-message'].value = history.entries[history.index]
-  } else {
-    history.index = history.entries.length
-    el['chat-message'].value = history.draft
-  }
+  el['chat-message'].value = state.chatHistory.navigate(state.selectedId, event.key === 'ArrowUp' ? 'up' : 'down', el['chat-message'].value)
   el['chat-message'].setSelectionRange(el['chat-message'].value.length, el['chat-message'].value.length)
 }
 
@@ -1353,8 +1396,8 @@ function handleBotEvent({ type, id, payload }) {
       if (validSkinUrl(payload.skinUrl)) account.skinUrl = payload.skinUrl
       renderAccountList()
       if (id === state.selectedId) {
-        el['account-title'].textContent = account.profileName || account.label
-        el['detail-username'].textContent = account.username
+        el['account-title'].textContent = displayAccount(account)
+        el['detail-username'].textContent = state.settings.streamerMode ? displayAccount(account) : account.username
       }
     }
   }
@@ -1713,6 +1756,7 @@ async function openSettingsDialog() {
     state.settings = settings
     el['start-with-windows'].checked = settings.startWithWindows === true
     el['notifications-enabled'].checked = settings.notificationsEnabled === true
+    el['streamer-mode'].checked = settings.streamerMode === true
     el['stagger-startup-connections'].checked = settings.staggerStartupConnections !== false
     el['use-launcher-pack-cache'].checked = settings.useLauncherPackCache !== false
     el['startup-connection-delay'].value = settings.startupConnectionDelay || 3
@@ -1740,6 +1784,7 @@ async function saveSettings() {
       ...state.settings,
       startWithWindows: el['start-with-windows'].checked,
       notificationsEnabled: el['notifications-enabled'].checked,
+      streamerMode: el['streamer-mode'].checked,
       staggerStartupConnections: el['stagger-startup-connections'].checked,
       useLauncherPackCache: el['use-launcher-pack-cache'].checked,
       startupConnectionDelay: Number(el['startup-connection-delay'].value),
@@ -1758,6 +1803,7 @@ async function saveSettings() {
     applyUiScale(state.settings.uiScale)
     applyVisualDesign(state.settings.workspaceDesign, state.settings.colorTheme)
     el['settings-dialog'].close()
+    refreshStreamerDisplay()
     toast('Settings saved.')
   } catch (error) { toast(cleanError(error), 'error') }
 }
@@ -2012,7 +2058,7 @@ function commandItems() {
     { label: 'Edit selected profile', group: 'Account', keywords: 'server proxy settings', run: () => openAccountDialog(selectedAccount()) },
     { label: 'Add server profile', group: 'Account', keywords: 'duplicate account new', run: () => openAccountDialog() },
     ...['operations', 'community', 'command', 'hybrid', 'studio', 'telemetry'].map(design => ({ label: `Use ${design} workspace`, group: 'Display', keywords: 'layout design theme', run: () => saveVisualDesign(design, state.settings.colorTheme) })),
-    ...state.accounts.map(account => ({ label: `Switch to ${account.profileName || account.label || account.username}`, group: 'Profiles', keywords: `${account.host} ${account.edition || 'java'}`, run: () => { state.selectedId = account.id; render() } }))
+    ...state.accounts.map(account => ({ label: `Switch to ${displayAccount(account)}`, group: 'Profiles', keywords: `${account.host} ${account.edition || 'java'}`, run: () => { state.selectedId = account.id; render() } }))
   ]
   const query = el['command-search']?.value.trim().toLowerCase() || ''
   return query ? items.filter(item => `${item.label} ${item.group} ${item.keywords}`.toLowerCase().includes(query)) : items
@@ -2073,12 +2119,12 @@ function formatPersistentEvent(event) {
   const time = new Date(event.at || Date.now()).toLocaleString()
   const category = String(event.kind || event.type || 'event').toUpperCase().padEnd(10)
   const message = event.message || event.detail || event.error || event.status || JSON.stringify(Object.fromEntries(Object.entries(event).filter(([key]) => !['at', 'profileId', 'type', 'kind'].includes(key))))
-  return `${time}  ${category} ${String(message || '').replace(/\s+/g, ' ').slice(0, 2000)}`
+  return maskText(`${time}  ${category} ${String(message || '').replace(/\s+/g, ' ').slice(0, 2000)}`)
 }
 
 async function clearPersistentLogs() {
   const account = selectedAccount()
-  if (!account || !confirm(`Clear persistent history for ${account.profileName || account.label}?`)) return
+  if (!account || !confirm(`Clear persistent history for ${displayAccount(account)}?`)) return
   await api.clearLogs(account.id)
   await refreshPersistentLogs()
 }
@@ -2210,7 +2256,7 @@ function renderPovGrid() {
   const accounts = visiblePovAccounts(); el['pov-back-grid'].hidden = !povFocusId; el['pov-grid'].classList.toggle('focused', Boolean(povFocusId)); el['pov-grid'].style.setProperty('--pov-columns', String(Math.max(1, Math.min(accounts.length || 1, Number(el['pov-columns'].value) || 3))))
   el['pov-grid'].replaceChildren(...accounts.map((account) => {
     const card = document.createElement('article'); card.className = 'pov-card'
-    const header = document.createElement('header'); header.append(createPlayerHead(account, 'account-avatar')); const title = document.createElement('div'); const strong = document.createElement('strong'); strong.textContent = account.minecraftName || account.profileName || account.label; const small = document.createElement('small'); small.textContent = account.host; title.append(strong, small); const expand = document.createElement('button'); expand.type = 'button'; expand.className = 'icon-button pov-expand'; expand.textContent = povFocusId ? '↙' : '↗'; expand.title = povFocusId ? 'Return to grid' : 'Focus this feed'; expand.addEventListener('click', () => { povFocusId = povFocusId ? null : account.id; state.selectedId = account.id; render(); renderPovGrid(); startPovPolling() }); header.append(title, expand)
+    const header = document.createElement('header'); header.append(createPlayerHead(account, 'account-avatar')); const title = document.createElement('div'); const strong = document.createElement('strong'); strong.textContent = state.settings.streamerMode ? displayAccount(account) : (account.minecraftName || displayAccount(account)); const small = document.createElement('small'); small.textContent = account.host; title.append(strong, small); const expand = document.createElement('button'); expand.type = 'button'; expand.className = 'icon-button pov-expand'; expand.textContent = povFocusId ? '↙' : '↗'; expand.title = povFocusId ? 'Return to grid' : 'Focus this feed'; expand.addEventListener('click', () => { povFocusId = povFocusId ? null : account.id; state.selectedId = account.id; render(); renderPovGrid(); startPovPolling() }); header.append(title, expand)
     const canvas = document.createElement('canvas'); canvas.width = povFocusId ? 960 : 480; canvas.height = povFocusId ? 540 : 270; canvas.dataset.accountId = account.id; canvas.tabIndex = 0; canvas.setAttribute('aria-label', `${strong.textContent} POV. Click to focus, use WASD and Space to move, and move the mouse to look.`); canvas.addEventListener('click', selectPovTarget)
     canvas.addEventListener('mousedown', handlePovMouseDown)
     canvas.addEventListener('contextmenu', (event) => event.preventDefault())
@@ -2497,6 +2543,7 @@ function createPlayerHead(account, className) {
   const avatar = document.createElement('span')
   avatar.className = className
   avatar.setAttribute('aria-hidden', 'true')
+  if (state.settings.streamerMode) { avatar.textContent = '•'; return avatar }
   if (!validSkinUrl(account.skinUrl)) {
     avatar.textContent = account.minecraftName?.slice(0, 1).toUpperCase() || account.label.slice(0, 1).toUpperCase()
     return avatar
@@ -2518,6 +2565,11 @@ function validSkinUrl(value) {
 }
 
 function appendLogMessage(container, entry) {
+  if (state.settings.streamerMode) {
+    const message = Array.isArray(entry.segments) && entry.segments.length ? entry.segments.map(segment => segment.text || '').join('') : entry.message
+    container.textContent = maskText(`${entry.kind === 'sent' ? 'You: ' : ''}${message || ''}`)
+    return
+  }
   if (entry.kind === 'sent') {
     container.textContent = `You: ${entry.message}`
     return
@@ -2576,7 +2628,7 @@ async function activateChatClick(click, event = {}) {
 function toast(message, kind = '') {
   const item = document.createElement('div')
   item.className = `toast ${kind}`
-  item.textContent = message
+  item.textContent = maskText(message)
   el['toast-region'].append(item)
   setTimeout(() => item.remove(), 4000)
 }

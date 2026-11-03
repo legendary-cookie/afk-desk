@@ -195,6 +195,13 @@ class AppCore {
       worldAction: (idOrInput, action, target) => { const p = unpack(idOrInput, { action, target }); return this.botManager.worldAction(p.id, p.action, p.target) },
       autoDeposit: (idOrInput, enabled) => this._setAutoDeposit(unpack(idOrInput, { enabled })),
       setAutoDeposit: (idOrInput, enabled) => this._setAutoDeposit(unpack(idOrInput, { enabled })),
+      getUpcomingRuns: (id) => {
+        const runs = this.botManager.getUpcomingRuns?.(id) || []
+        for (const [macroId, timed] of this.macroEngine?.timed.get(id) || []) {
+          if (Number.isFinite(timed.at)) runs.push({ kind: 'macro', label: this.macroEngine.macros.get(macroId)?.macro.name || 'Macro', at: timed.at })
+        }
+        return runs.sort((a, b) => a.at - b.at)
+      },
       inventory: (id) => typeof this.botManager.inventory === 'function' ? this.botManager.inventory(id) : (this.runtime.get(id)?.telemetry?.inventory || this.facade?.state?.(id)?.inventory || [])
     }
     Object.defineProperties(botsDomain, {
@@ -378,6 +385,19 @@ class AppCore {
       emit: (e) => this.emitMacroRunEvent(e),
       getAccountState: this.facade.state,
       resolveTargets,
+      getPersistentVariables: (id) => {
+        const file = path.join(this.userDataPath, 'macro-variables.json')
+        try { const data = JSON.parse(fs.readFileSync(file, 'utf8')); return Object.hasOwn(data, id) ? data[id] : {} } catch (error) { if (error.code === 'ENOENT') return {}; throw error }
+      },
+      savePersistentVariables: (id, variables) => {
+        const file = path.join(this.userDataPath, 'macro-variables.json')
+        let data = {}
+        try { data = JSON.parse(fs.readFileSync(file, 'utf8')) } catch (error) { if (error.code !== 'ENOENT') throw error }
+        Object.defineProperty(data, id, { value: variables, enumerable: true, configurable: true, writable: true })
+        fs.mkdirSync(path.dirname(file), { recursive: true })
+        fs.writeFileSync(`${file}.tmp`, JSON.stringify(data, null, 2), 'utf8')
+        fs.renameSync(`${file}.tmp`, file)
+      },
       nextScheduleTime: macroTriggers.nextScheduleTime
     })
     this.macroEngine.setLibrary(this.macroLibrary.list())
@@ -788,7 +808,7 @@ function telemetryChanged(a, b) {
 }
 
 function antiAfkChanged(a, b) {
-  return ['antiAfk', 'antiAfkMinDelay', 'antiAfkMaxDelay', 'antiAfkActionDuration', 'antiAfkWalkDistance', 'antiAfkLookDegrees', 'antiAfkJump', 'antiAfkLook', 'antiAfkSneak', 'antiAfkSwing', 'antiAfkWalk'].some((k) => a?.[k] !== b?.[k])
+  return ['antiAfk', 'antiAfkMinDelay', 'antiAfkMaxDelay', 'antiAfkActionDuration', 'antiAfkWalkDistance', 'antiAfkLookDegrees', 'antiAfkJump', 'antiAfkLook', 'antiAfkSneak', 'antiAfkSwing', 'antiAfkWalk', 'antiAfkChatEnabled', 'antiAfkChatMessage', 'antiAfkChatIntervalSec'].some((k) => a?.[k] !== b?.[k])
 }
 
 function normalizeSlots(a) {
@@ -898,6 +918,9 @@ function validateAccount(input, existing, secretBox, normalizeSkinUrl = defaultN
     antiAfkActionDuration: bounded(input?.antiAfkActionDuration, 0.1, 10, 0.25),
     antiAfkWalkDistance: bounded(input?.antiAfkWalkDistance, 0.1, 8, 0.5),
     antiAfkLookDegrees: bounded(input?.antiAfkLookDegrees, 5, 180, 12),
+    antiAfkChatEnabled: (input?.antiAfkChatEnabled ?? existing?.antiAfkChatEnabled) === true,
+    antiAfkChatMessage: String(input?.antiAfkChatMessage ?? existing?.antiAfkChatMessage ?? '').slice(0, 256),
+    antiAfkChatIntervalSec: Math.round(bounded(input?.antiAfkChatIntervalSec ?? existing?.antiAfkChatIntervalSec, 10, 86400, 300)),
     antiAfkJump,
     antiAfkLook,
     antiAfkSneak,

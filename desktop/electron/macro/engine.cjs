@@ -261,6 +261,8 @@ class MacroEngine {
     resolveTargets = () => [],
     random = Math.random,
     nextScheduleTime = localNextScheduleTime,
+    getPersistentVariables = () => ({}),
+    savePersistentVariables = () => {},
     chatIntervalMs = LIMITS.defaultChatIntervalMs
   } = {}) {
     this.facade = assertFacade(facade)
@@ -276,6 +278,8 @@ class MacroEngine {
     this.random = typeof random === 'function' ? random : Math.random
     this.nextScheduleTime = typeof nextScheduleTime === 'function' ? nextScheduleTime : localNextScheduleTime
     this.chatIntervalMs = chatIntervalMs
+    this.getPersistentVariables = getPersistentVariables
+    this.savePersistentVariables = savePersistentVariables
 
     this.macros = new Map() // macroId → { macro, hash }
     this.targets = new Map() // accountId → Set<macroId> (enabled macros only)
@@ -510,6 +514,7 @@ class MacroEngine {
       fireAt = finiteOr(safe(() => this.nextScheduleTime(timed.trigger.at, now), NaN), NaN)
       if (!(fireAt > now)) return
     }
+    timed.at = fireAt
     timed.cancel = this.scheduler.at(fireAt, () => this._fireTimed(accountId, macroId, timed), accountId)
   }
 
@@ -587,7 +592,7 @@ class MacroEngine {
       signal: controller.signal,
       sessionId: typeof sessionId === 'string' && sessionId ? sessionId : null,
       changingSession: false,
-      variables: copyVariables(trigger.variables),
+      variables: Object.assign(copyVariables(this.getPersistentVariables(accountId)), copyVariables(trigger.variables)),
       stopRequest: null,
       facadeSteps: 0,
       maxRuntimeCancel: null,
@@ -669,7 +674,7 @@ class MacroEngine {
       const stepPath = path.concat(index)
       const type = step && typeof step === 'object' && typeof step.type === 'string' ? step.type : ''
       if (type === 'wait') await this._stepWait(ctx, step, stepPath)
-      else if (type === 'set') await this._stepSet(ctx, step, stepPath)
+      else if (type === 'set' || type === 'setVar' || type === 'clearVar') await this._stepSet(ctx, step, stepPath)
       else if (type === 'stop') await this._stepStop(ctx, stepPath)
       else if (type === 'if') await this._stepIf(ctx, step, stepPath, depth)
       else if (type === 'repeat') await this._stepRepeat(ctx, step, stepPath, depth)
@@ -705,12 +710,25 @@ class MacroEngine {
   }
 
   async _stepSet(ctx, step, stepPath) {
-    await this._gate(ctx, stepPath, 'set')
+    await this._gate(ctx, stepPath, step.type)
+    if (step.type === 'clearVar') {
+      delete ctx.variables[step.variable]
+      const saved = copyVariables(this.getPersistentVariables(ctx.accountId))
+      delete saved[step.variable]
+      this.savePersistentVariables(ctx.accountId, saved)
+      this._record(ctx, stepPath, step.type, true, 0)
+      return
+    }
     if (typeof step.variable === 'string' && step.variable) {
       const value = step.value
       ctx.variables[step.variable] = value === null || value === undefined || typeof value === 'object' ? '' : value
+      if (step.persist === true) {
+        const saved = copyVariables(this.getPersistentVariables(ctx.accountId))
+        saved[step.variable] = ctx.variables[step.variable]
+        this.savePersistentVariables(ctx.accountId, saved)
+      }
     }
-    this._record(ctx, stepPath, 'set', true, 0)
+    this._record(ctx, stepPath, step.type, true, 0)
   }
 
   async _stepStop(ctx, stepPath) {
@@ -761,13 +779,14 @@ class MacroEngine {
     if (type === 'chat') this._budget(ctx.accountId).lastChatAt = this.now()
 
     const args = this._stepArgs(ctx, step, type)
-    const opCtx = { signal: ctx.signal, owner: ctx.owner, sessionId: ctx.sessionId }
+    const opCtx = { signal: ctx.signal, owner: ctx.owner, sessionId: ctx.sessionId, checkStop: () => { if (!this._stopWhenMatches(ctx)) return false; this._requestStop(ctx, 'stopped', 'stopWhen'); return true } }
     const startedAt = this.now()
     const changing = SESSION_CHANGING_STEPS.has(type)
     let failure = null
     if (changing) ctx.changingSession = true
     try {
-      await this._awaitOp(ctx, () => this.facade[type](ctx.accountId, args, opCtx))
+      const result = await this._awaitOp(ctx, () => this.facade[type](ctx.accountId, args, opCtx))
+      if (type === 'readLore' && step.variable) ctx.variables[step.variable] = String(result ?? '')
     } catch (error) {
       const info = errorInfo(error)
       if (ctx.signal.aborted || info.code === ERROR_CODES.ABORTED) {
@@ -921,6 +940,33 @@ class MacroEngine {
         }
         return total >= needed
       }
+      case 'itemCount': {
+        const name = String(condition.name || '').toLowerCase()
+        if (!name) return false
+        const total = list(this._state(ctx.accountId).inventory).reduce((sum, item) => sum + (item && (String(item.name || '').toLowerCase() === name || String(item.type ?? item.id ?? '') === name) ? finiteOr(item.count, 0) : 0), 0)
+        const count = finiteOr(condition.count, 0)
+        switch (condition.comparator) {
+          case '==': return total === count
+          case '!=': return total !== count
+          case '<': return total < count
+          case '<=': return total <= count
+          case '>': return total > count
+          default: return total >= count
+        }
+      }
+      case 'entityCount': {
+        const name = String(condition.name || '').toLowerCase()
+        const total = list(this._state(ctx.accountId).entities).filter((entity) => entity && Number.isFinite(entity.distance) && entity.distance <= finiteOr(condition.radius, 16) && (condition.entityType === 'any' || !condition.entityType || (condition.entityType === 'player' ? entity.type === 'player' : entity.type === 'mob')) && (!name || String(entity.name || '').toLowerCase() === name || String(entity.username || '').toLowerCase() === name)).length
+        const count = finiteOr(condition.count, 0)
+        switch (condition.comparator) {
+          case '==': return total === count
+          case '!=': return total !== count
+          case '<': return total < count
+          case '<=': return total <= count
+          case '>': return total > count
+          default: return total >= count
+        }
+      }
       case 'inventoryFull': return flag(this._state(ctx.accountId).inventoryFull)
       case 'windowOpen': return flag(this._state(ctx.accountId).windowOpen)
       case 'variableEquals': {
@@ -938,7 +984,13 @@ class MacroEngine {
 
   _stopWhenMatches(ctx) {
     try {
-      return list(ctx.macro.stopWhen).some((condition) => this._evaluate(ctx, condition, 0))
+      const condition = list(ctx.macro.stopWhen).find((entry) => this._evaluate(ctx, entry, 0))
+      if (condition?.allAccounts) {
+        for (const run of this.runs.values()) {
+          if (run !== ctx && run.macroId === ctx.macroId && !run.stopRequest) this._requestStop(run, 'stopped', 'stopWhen')
+        }
+      }
+      return Boolean(condition)
     } catch (_) {
       return false
     }

@@ -309,6 +309,8 @@ test('every async facade method has a happy path in this file', () => {
   const covered = new Set(HAPPY_PATHS.map((entry) => entry.method))
   covered.add('notify')
   covered.add('reconnect')
+  covered.add('readLore')
+  covered.add('autoclick')
   assert.deepEqual(ASYNC_METHODS.filter((name) => !covered.has(name)), [])
 })
 
@@ -363,6 +365,7 @@ test('manager errors keep their contract code and others become INVALID', async 
 
 // A valid step for each method so a failure is never down to bad arguments.
 const STEPS = {
+  autoclick: { button: 'left', cps: 5, durationSec: 1 },
   chat: { message: 'hi' },
   notify: { message: 'note' },
   move: { control: 'forward', durationMs: 0 },
@@ -372,6 +375,7 @@ const STEPS = {
   rightClick: { action: 'once' },
   selectHotbar: { slot: 0 },
   holdItem: { name: 'dirt' },
+  readLore: { select: { slot: 9 }, variable: 'lore' },
   useInventory: { select: { slot: 20 }, click: 'left' },
   useGui: { select: { slot: 1 }, click: 'left' },
   closeGui: {},
@@ -925,6 +929,18 @@ test('reconnect works for a Bedrock account', async () => {
   assert.equal(facade.sessionId('a'), 's2')
 })
 
+test('reconnect retries failed attempts up to maxAttempts', async () => {
+  const { facade, manager, session, ctx, events } = reconnectSetup({ spawnAfterMs: null })
+  let attempts = 0
+  manager.connect = () => {
+    events.push('connect')
+    if (++attempts === 2) manager.sessions.set('a', { ...session, sessionId: 's2', bot: fakeBot() })
+  }
+  await facade.reconnect('a', { delaySec: 0, maxAttempts: 2, giveUpAfterMs: 10 }, ctx())
+  assert.equal(attempts, 2)
+  assert.deepEqual(events, ['disconnect', 'connect', 'disconnect', 'connect'])
+})
+
 test('reconnect needs an account configuration', async () => {
   const { facade, manager, session, ctx } = reconnectSetup()
   manager.reconnects.clear()
@@ -937,4 +953,35 @@ test('disconnect goes through the manager manual disconnect so auto-reconnect st
   await facade.disconnect('a', {}, ctx())
   assert.equal(manager.sessions.has('a'), false)
   assert.equal(manager.reconnects.has('a'), false)
+})
+
+test('readLore selects inventory slot or name and returns plain joined lines', async (t) => {
+  const { bot, facade, ctx } = realSetup(t)
+  bot.inventory.slots[9] = item(9, 'book', { customLore: ['{"text":"First"}', '{"text":"Second"}'] })
+  assert.equal(await facade.readLore('a', { select: { slot: 9 }, variable: 'lore' }, ctx()), 'First\nSecond')
+  assert.equal(await facade.readLore('a', { select: { name: 'book' }, variable: 'lore' }, ctx()), 'First\nSecond')
+  await assert.rejects(facade.readLore('a', { select: { slot: 10 } }, ctx()), { code: 'NOT_FOUND' })
+})
+
+test('autoclick attacks the looked-at entity, uses items, and stops on abort', async () => {
+  const timers = new ManualTimers()
+  const { facade, bot, ctx } = spySetup({ timers })
+  const target = { id: 1 }
+  bot.entityAtCursor = () => target
+  bot.attack = (entity) => bot.calls.push(['attack', entity])
+  const controller = new AbortController()
+  const run = facade.autoclick('a', { button: 'left', cps: 10, durationSec: null }, ctx({ signal: controller.signal }))
+  await settle()
+  assert.deepEqual(bot.calls[0], ['attack', target])
+  timers.fire(100)
+  await settle()
+  assert.equal(bot.calls.length, 2)
+  controller.abort()
+  await assert.rejects(run, { code: 'ABORTED' })
+  assert.equal(timers.active().length, 0)
+  const right = facade.autoclick('a', { button: 'right', cps: 1, durationSec: 1 }, ctx())
+  await settle()
+  assert.deepEqual(bot.calls.at(-1), ['activateItem'])
+  timers.fire(1000)
+  await right
 })

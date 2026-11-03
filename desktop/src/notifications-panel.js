@@ -302,7 +302,7 @@
         input.value = acc.id
         input.checked = set.has(acc.id)
         const text = document.createElement('span')
-        text.textContent = acc.profileName || acc.label || acc.username
+        text.textContent = window.afkStreamerMask.displayAccount(acc, state.settings.streamerMode)
         label.append(input, text)
         return label
       }))

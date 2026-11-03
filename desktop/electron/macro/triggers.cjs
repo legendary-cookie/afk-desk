@@ -437,7 +437,9 @@ class TriggerMatcher {
       type: trigger.type,
       cooldownMs: typeof trigger.cooldownMs === 'number' && trigger.cooldownMs > 0 ? trigger.cooldownMs : 0
     }
-    if (trigger.type === 'chat') {
+    if (trigger.type === 'playerAppears') {
+      entry.ignoreRegex = trigger.ignoreRegex ? new RegExp(trigger.ignoreRegex) : null
+    } else if (trigger.type === 'chat') {
       entry.pattern = compileChatPattern(trigger.pattern, trigger.match === 'glob' ? 'glob' : 'contains')
       const sources = Array.isArray(trigger.sources) ? trigger.sources.filter((s) => ALL_SOURCES.includes(s)) : []
       entry.sources = new Set(sources.length ? sources : ALL_SOURCES)
@@ -517,6 +519,14 @@ class TriggerMatcher {
       }
       case 'telemetry':
         return payload ? this._telemetry(accountId, state, payload, now, out) : out
+      case 'playerAppears': {
+        const username = payload && typeof payload.username === 'string' ? payload.username : ''
+        if (!username) return out
+        for (const entry of this._bucket(accountId, 'playerAppears') || []) {
+          if (!entry.ignoreRegex || !entry.ignoreRegex.test(username)) this._push(out, entry, accountId, now, { player: username })
+        }
+        return out
+      }
       case 'death':
         for (const entry of this._bucket(accountId, 'death') || []) this._push(out, entry, accountId, now, {})
         return out

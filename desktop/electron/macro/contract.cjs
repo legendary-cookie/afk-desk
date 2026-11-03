@@ -73,6 +73,7 @@ const LIMITS = Object.freeze({
 
 const TRIGGER_TYPES = Object.freeze({
   manual: { editions: ['java', 'bedrock'] },
+  playerAppears: { editions: ['java'] },
   join: { editions: ['java', 'bedrock'] },
   worldChange: { editions: ['java'] },
   timer: { editions: ['java', 'bedrock'] },
@@ -94,6 +95,7 @@ const STEP_TYPES = Object.freeze({
   move: { editions: ['java'] },
   look: { editions: ['java'] },
   control: { editions: ['java'] }, // sneak/jump/sprint hold|release
+  autoclick: { editions: ['java'] },
   leftClick: { editions: ['java'] }, // once|hold|release
   rightClick: { editions: ['java'] }, // once|hold|release
   selectHotbar: { editions: ['java'] },
@@ -107,6 +109,9 @@ const STEP_TYPES = Object.freeze({
   deposit: { editions: ['java'] },
   disconnect: { editions: ['java', 'bedrock'] },
   reconnect: { editions: ['java', 'bedrock'] },
+  setVar: { editions: ['java', 'bedrock'] },
+  clearVar: { editions: ['java', 'bedrock'] },
+  readLore: { editions: ['java'] },
   set: { editions: ['java', 'bedrock'] },
   if: { editions: ['java', 'bedrock'] },
   repeat: { editions: ['java', 'bedrock'] },
@@ -114,9 +119,9 @@ const STEP_TYPES = Object.freeze({
 })
 
 // Steps executed by the engine itself; all others go through the facade.
-const ENGINE_STEP_TYPES = Object.freeze(['wait', 'set', 'if', 'repeat', 'stop'])
+const ENGINE_STEP_TYPES = Object.freeze(['wait', 'set', 'setVar', 'clearVar', 'if', 'repeat', 'stop'])
 
-const CONDITION_TYPES = Object.freeze(['always', 'online', 'healthBelow', 'hungerBelow', 'hasItem', 'inventoryFull', 'windowOpen', 'variableEquals', 'not'])
+const CONDITION_TYPES = Object.freeze(['always', 'online', 'healthBelow', 'hungerBelow', 'hasItem', 'itemCount', 'entityCount', 'inventoryFull', 'windowOpen', 'variableEquals', 'not'])
 
 const RUN_STATUSES = Object.freeze(['started', 'step', 'stepFailed', 'skipped', 'completed', 'failed', 'cancelled', 'interrupted', 'stopped'])
 
@@ -174,6 +179,7 @@ class MacroActionError extends Error {
  * @property {'contains'|'glob'} [match]     chat
  * @property {('chat'|'system'|'actionBar')[]} [sources] chat
  * @property {number} [below]                healthBelow 0..20 / hungerBelow 0..20
+ * @property {string} [ignoreRegex]          playerAppears: JavaScript regex for usernames to skip
  * @property {string} [title]                windowOpen: optional contains-match on title
  *
  * @typedef {Object} Condition
@@ -202,8 +208,11 @@ class MacroActionError extends Error {
  *   dropAll     { filter? }                         (name contains; empty = all unlocked)
  *   deposit     { select: { slot } | { name }, count }
  *   disconnect  {}
- *   reconnect   { delayMs? }
- *   set         { variable, value }
+ *   reconnect   { delaySec?: 0..3600 (default 5), maxAttempts?: 1..1000 (default 1) }
+ *   set         { variable, value, persist?: boolean }
+ *   setVar      { variable, value, persist?: boolean }
+ *   clearVar    { variable } (also removes the persisted value)
+ *   readLore    { select: { slot } | { name }, variable } (inventory lore joined by newlines)
  *   if          { condition, then: Step[], else: Step[] }
  *   repeat      { times } | { while: Condition, maxIterations? } with { steps: Step[] }
  *   stop        {}
@@ -217,7 +226,7 @@ class MacroActionError extends Error {
 
 /**
  * @typedef {Object} BotEvent
- * @property {'connected'|'spawn'|'respawn'|'login'|'serverSwitch'|'chat'|'telemetry'|'death'|'disconnected'|'windowOpen'|'windowClose'|'sentChat'} type
+ * @property {'connected'|'spawn'|'respawn'|'login'|'serverSwitch'|'chat'|'telemetry'|'death'|'disconnected'|'windowOpen'|'windowClose'|'sentChat'|'playerAppears'} type
  * @property {string} accountId
  * @property {string} sessionId     changes on every new connection (TCP session)
  * @property {number} at            epoch ms
@@ -228,6 +237,7 @@ class MacroActionError extends Error {
  *   respawn/login/serverSwitch: { dimension?, world?, backend? }
  *   disconnected:{ reason: string, manual: boolean }
  *   windowOpen:  { title }
+ *   playerAppears: { username }
  */
 
 // ---------------------------------------------------------------------------
@@ -323,10 +333,12 @@ const FACADE_METHODS = Object.freeze([
   'move', // { control, durationMs } | { control, distance }
   'look', // { mode, yaw, pitch, target, x, y, z, entity }
   'control', // { control, action }                 uses input ownership
+  'autoclick', // { button, cps, durationSec }
   'leftClick', // { action, only }                     hold uses input ownership
   'rightClick', // { action }
   'selectHotbar', // { slot }
   'holdItem', // { name }
+  'readLore', // { select, variable } -> plain text
   'useInventory', // { select, click }
   'useGui', // { select, click }
   'closeGui', // {}

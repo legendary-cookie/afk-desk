@@ -130,7 +130,7 @@ Phase 1 includes all **P1** rows. `J` = Java, `B` = Bedrock.
 | deposit | `depositSlot` / existing auto-deposit | J | P1 |
 | set / if / else / repeat (times or while condition) / stop | engine | J, B | P1 |
 | runMacro | engine. Nested-run depth ≤4, cycle detection at save time | J, B | P2 |
-| disconnect / reconnect | `disconnect` / `connect`. A macro-initiated disconnect suppresses auto-reconnect | J, B | P1 |
+| disconnect / reconnect | `disconnect` / `connect`. A macro-initiated disconnect suppresses auto-reconnect. Reconnect accepts `delaySec` (0–3600, default 5) and `maxAttempts` (1–1000, default 1); older `delayMs` values remain supported. | J, B | P1 |
 | breakBlock (at coordinates), placeBlock, attack, fish, autoEat toggle, trade, sign | various | J | P2–P3 |
 
 **Item locks** (an existing AFK Desk feature) are a safety rule. A macro never drops, deposits, moves or clicks away a locked slot, whatever the step says. Enforcement lives in the facade, before any packet is sent:
@@ -242,3 +242,17 @@ Integration is serial at each stage boundary: merge, then the full suite, then N
 - A beta.9 profile migrates and rolls back cleanly.
 - The desktop suite passes; independent review findings are fixed.
 - Idle CPU with 10 connected accounts and 3 timer macros each is measured and recorded before and after.
+
+### Variables, lore, and player appearances
+
+`set` and `setVar` accept `persist: true` to save a primitive value per account in `<userData>/macro-variables.json`. Saved values are loaded at the start of each run, before trigger variables; `clearVar` removes the variable from the current run and the account's saved values. The file uses the app's atomic temporary-file-and-rename storage pattern. Persistent values are shared by that account's macros, not exported with macros.
+
+`readLore` selects an inventory item by slot or name and puts its plain-text lore lines, joined with newline characters, into the named run variable. A missing item fails the step; an item without lore produces an empty string. It is available for Java accounts.
+
+The Java `playerAppears` trigger fires when another player entity spawns and exposes its username as `{player}`. Its optional `ignoreRegex` is a JavaScript regular expression tested against usernames; invalid expressions produce a validation error. Expressions should be kept simple because they run on the event loop.
+
+### Nearby entities and autoclick
+
+The `entityCount` condition counts loaded entities within `radius` blocks of the account (excluding itself). Set `entityType` to `mob`, `player`, or `any`, optionally supply an exact case-insensitive entity name or player username, and compare the count using `==`, `!=`, `<`, `<=`, `>`, or `>=`. It can be used in branches, loops, and stop conditions. Entity information is available for Java accounts.
+
+The Java `autoclick` action clicks left or right at 1–20 clicks per second. Left clicks attack an entity under the crosshair or swing the arm; right clicks activate the held item. Set a duration of 1–3600 seconds, or choose 0 in the editor to run until stopped. Stop conditions are checked during the action. A stop condition's “Stop this macro on all accounts” checkbox stops other active runs of the same macro when that condition matches.

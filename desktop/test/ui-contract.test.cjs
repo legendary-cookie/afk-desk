@@ -533,3 +533,12 @@ test('renderer element-id list has no holes and every id exists in index.html', 
   const missing = [...body.matchAll(/'([\w-]+)'/g)].map((m) => m[1]).filter((id) => !html.includes(`id="${id}"`))
   assert.deepEqual(missing, [])
 })
+
+test('upcoming runs are exposed over IPC and shown per account', () => {
+  const read = (file) => fs.readFileSync(path.join(__dirname, '..', file), 'utf8')
+  assert.match(read('electron/main.cjs'), /bot:upcoming-runs.*core\.bots\.getUpcomingRuns/)
+  assert.match(read('electron/preload.cjs'), /getUpcomingRuns:.*bot:upcoming-runs/)
+  const renderer = read('src/renderer.js')
+  assert.match(renderer, /summary\.textContent = 'Next runs'/)
+  assert.match(renderer, /api\.getUpcomingRuns\(account\.id\)/)
+})

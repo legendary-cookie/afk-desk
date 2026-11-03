@@ -24,6 +24,7 @@ const validators = {
   },
   look: (step) => (LOOK_MODES.includes(step.mode) ? ok : 'Invalid look mode.'),
   control: (step) => (HOLD_CONTROLS.includes(step.control) && ['hold', 'release'].includes(step.action) ? ok : 'Invalid control action.'),
+  autoclick: (step) => (['left', 'right'].includes(step.button) && Number.isFinite(step.cps) && step.cps >= 1 && step.cps <= 20 && (step.durationSec == null || (Number.isFinite(step.durationSec) && step.durationSec >= 1 && step.durationSec <= 3600)) ? ok : 'Invalid autoclick settings.'),
   leftClick(step) {
     const onlyOk = step.only == null || ['blocks', 'entities'].includes(step.only)
     return CLICK_ACTIONS.includes(step.action) && onlyOk ? ok : 'Invalid left click action.'
@@ -31,6 +32,7 @@ const validators = {
   rightClick: (step) => (CLICK_ACTIONS.includes(step.action) ? ok : 'Invalid click action.'),
   selectHotbar: (step) => (Number.isInteger(step.slot) && step.slot >= 0 && step.slot <= 8 ? ok : 'slot must be 0..8.'),
   holdItem: (step) => (isText(step.name) ? ok : 'name is required.'),
+  readLore: (step) => (step.select && isText(step.variable) && (Number.isInteger(step.select.slot) || isText(step.select.name)) ? ok : 'select and variable are required.'),
   useInventory: validateClick,
   useGui: validateClick,
   waitForWindow: (step) => (isNonNegative(step.giveUpAfterMs) ? ok : 'giveUpAfterMs is required.'),
@@ -39,6 +41,8 @@ const validators = {
   dropAll: (step) => (step.filter == null || typeof step.filter === 'string' ? ok : 'filter must be text.'),
   reconnect(step) {
     if (step.delayMs != null && !isNonNegative(step.delayMs)) return 'delayMs must be nonnegative.'
+    if (step.delaySec != null && (!isNonNegative(step.delaySec) || step.delaySec > 3600)) return 'delaySec must be 0..3600.'
+    if (step.maxAttempts != null && (!Number.isInteger(step.maxAttempts) || step.maxAttempts < 1 || step.maxAttempts > 1000)) return 'maxAttempts must be 1..1000.'
     if (step.giveUpAfterMs != null && !isNonNegative(step.giveUpAfterMs)) return 'giveUpAfterMs must be nonnegative.'
     return ok
   }

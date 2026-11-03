@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('afkDesk', {
   deleteAccount: (id) => ipcRenderer.invoke('accounts:delete', id),
   reorderAccounts: (orderedIds) => ipcRenderer.invoke('accounts:reorder', orderedIds),
   duplicateProfile: (id) => ipcRenderer.invoke('accounts:duplicate-profile', id),
+  getUpcomingRuns: (id) => ipcRenderer.invoke('bot:upcoming-runs', id),
   connect: (id) => ipcRenderer.invoke('bot:connect', id),
   disconnect: (id) => ipcRenderer.invoke('bot:disconnect', id),
   sendChat: (id, message) => ipcRenderer.invoke('bot:chat', { id, message }),

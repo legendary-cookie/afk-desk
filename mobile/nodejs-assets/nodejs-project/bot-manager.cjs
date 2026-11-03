@@ -483,9 +483,10 @@ class BotManager {
       if (this.sessions.get(id) !== session) return
       if (kind === 'join' && message !== session.account.joinMessage) return
       if (kind === 'serverChange' && message !== session.account.serverChangeMessage) return
+      if (kind === 'antiAfk' && (session.account.antiAfk === false || !session.account.antiAfkChatEnabled || message !== session.account.antiAfkChatMessage)) return
       try {
         this.sendChat(id, String(message).slice(0, 256))
-        if (kind !== 'manual' && Number(session.account.serverChangeRetryMinutes ?? 30) > 0) this.startMessageConfirmation(id, session, String(message).slice(0, 256))
+        if ((kind === 'join' || kind === 'serverChange') && Number(session.account.serverChangeRetryMinutes ?? 30) > 0) this.startMessageConfirmation(id, session, String(message).slice(0, 256))
       }
       catch (error) { this.emit('log', id, { kind: 'error', message: `Automatic message failed: ${error.message}`, at: Date.now() }) }
     }, delay)
@@ -500,6 +501,8 @@ class BotManager {
     const message = session.pendingMessageConfirmation?.message || session.serverChangeRetryMessage
     if ((message && message !== account.joinMessage && message !== account.serverChangeMessage) || account.serverChangeRetryMinutes === 0) this.clearServerChangeRetry(session)
     session.account = { ...session.account, ...account }
+    if (session.bot.entity && session.account.antiAfk !== false) this.enableAntiAfk(account.id, session.account.antiAfkInterval)
+    else if (session.antiAfkChatTimer) { clearInterval(session.antiAfkChatTimer); session.antiAfkChatTimer = null }
     return true
   }
 
@@ -566,6 +569,14 @@ class BotManager {
     if (!session) return
     if (session.antiAfkTimer) clearInterval(session.antiAfkTimer)
     if (session.jumpTimer) clearTimeout(session.jumpTimer)
+    if (session.antiAfkChatTimer) clearInterval(session.antiAfkChatTimer)
+    session.antiAfkChatTimer = null
+    if (session.account.antiAfkChatEnabled && session.account.antiAfkChatMessage) {
+      const chatInterval = Math.max(10, Math.min(Number(session.account.antiAfkChatIntervalSec) || 300, 86400)) * 1000
+      session.antiAfkChatTimer = setInterval(() => {
+        if (this.sessions.get(id) === session) this.scheduleMessage(id, session.account.antiAfkChatMessage, 0, 'antiAfk')
+      }, chatInterval)
+    }
     const interval = Math.max(15, Math.min(Number(seconds) || 45, 3600)) * 1000
     session.antiAfkTimer = setInterval(() => {
       const bot = session.bot
@@ -592,6 +603,7 @@ class BotManager {
     session.activeDepositContainer = null
     if (session.antiAfkTimer) clearInterval(session.antiAfkTimer)
     if (session.jumpTimer) clearTimeout(session.jumpTimer)
+    if (session.antiAfkChatTimer) clearInterval(session.antiAfkChatTimer)
     if (session.telemetryTimer) clearInterval(session.telemetryTimer)
     if (session.containerScanTimer) clearInterval(session.containerScanTimer)
     for (const timer of session.messageTimers || []) clearTimeout(timer)

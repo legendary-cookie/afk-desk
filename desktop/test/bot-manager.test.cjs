@@ -1925,3 +1925,45 @@ test('allowPrivatePackHosts from the account config is passed to the pack loader
   await new Promise((resolve) => setImmediate(resolve))
   assert.deepEqual(harness.getLoaded()[2], { allowPrivateHosts: true, useLauncherPackCache: true })
 })
+
+test('anti-AFK chat uses its own interval and cancels when disabled', () => {
+  const timers = []
+  const cleared = []
+  const manager = new BotManager({ profilesPath: '/tmp/profiles', emit: () => {}, scheduleAntiAfkTimer: (fn, ms) => { const timer = { fn, ms }; timers.push(timer); return timer }, clearAntiAfkTimer: (timer) => cleared.push(timer) })
+  const account = { id: 'chat-afk', antiAfk: true, antiAfkChatEnabled: true, antiAfkChatMessage: '/ping', antiAfkChatIntervalSec: 10 }
+  const session = { account, bot: { entity: {} }, antiAfkActionTimers: new Set(), inputClaims: new Map(), inputActionTimers: new Map() }
+  manager.sessions.set(account.id, session)
+  const sent = []
+  manager.scheduleMessage = (...args) => sent.push(args)
+  manager.enableAntiAfk(account.id, account)
+  const chatTimer = timers.find((timer) => timer.ms === 10000)
+  assert.ok(chatTimer)
+  chatTimer.fn()
+  assert.deepEqual(sent[0], [account.id, '/ping', 0, { kind: 'antiAfk' }])
+  const next = session.antiAfkChatTimer
+  manager.setAntiAfk(account.id, { ...account, antiAfk: false })
+  assert.ok(cleared.includes(next))
+  assert.equal(session.antiAfkChatTimer, null)
+})
+
+test('upcoming runs report pending session deadlines in order and omit cancelled work', () => {
+  const manager = new BotManager({ profilesPath: '/tmp/profiles', emit: () => {} })
+  assert.deepEqual(manager.getUpcomingRuns('missing'), [])
+  const session = {
+    account: { autoDepositToChest: true, autoDepositMode: 'interval', autoDepositInterval: 10 },
+    joinedAt: 1000, lastDepositAt: 0, chestScanTimer: 1, nextChestScanAt: 6000,
+    antiAfkChatTimer: 2, antiAfkChatAt: 20000,
+    serverChangeRetryTimer: 3, serverChangeRetryAt: 12000,
+    upcomingMessages: new Map([[1, { kind: 'timed-message', label: 'Join message', at: 9000 }]])
+  }
+  manager.sessions.set('a', session)
+  assert.deepEqual(manager.getUpcomingRuns('a'), [
+    { kind: 'timed-message', label: 'Join message', at: 9000 },
+    { kind: 'auto-deposit', label: 'Auto-deposit check', at: 11000 },
+    { kind: 'server-change-retry', label: 'Server change retry', at: 12000 },
+    { kind: 'timed-message', label: 'Anti-AFK message', at: 20000 }
+  ])
+  session.upcomingMessages.clear(); session.serverChangeRetryTimer = null; session.antiAfkChatTimer = null
+  session.account.autoDepositToChest = false
+  assert.deepEqual(manager.getUpcomingRuns('a'), [])
+})

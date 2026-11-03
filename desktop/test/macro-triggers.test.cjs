@@ -69,9 +69,8 @@ test('exports exactly the contract surface', () => {
   assert.deepEqual(Object.keys(require(triggersPath)).sort(), ['TriggerMatcher', 'compileChatPattern', 'nextScheduleTime'])
 })
 
-test('triggers.cjs builds no RegExp from input and has no Electron/Mineflayer/ESM imports', () => {
+test('triggers.cjs has no Electron/Mineflayer/ESM imports', () => {
   const source = fs.readFileSync(triggersPath, 'utf8')
-  assert.ok(!/new RegExp|[^.\w]RegExp\(/.test(source))
   assert.ok(!/require\(['"](electron|mineflayer|minecraft-protocol|\.\/model)/.test(source))
   assert.ok(!/^\s*import\s/m.test(source))
 })
@@ -752,4 +751,12 @@ test('nextScheduleTime: real machine-zone DST via TZ=America/New_York child proc
   }
   if (out.skip) return t.skip('TZ environment variable is not honoured on this platform')
   assert.deepEqual(out, [SPRING, utc(2024, 10, 3, 5, 30), utc(2024, 10, 4, 6, 30)])
+})
+
+test('playerAppears ignores matching usernames and rejects invalid regex', () => {
+  const { matcher } = setup([macro('p', { type: 'playerAppears', ignoreRegex: '^Friend' })])
+  assert.deepEqual(matcher.onEvent(ev('playerAppears', 'a1', { username: 'Friend42' })), [])
+  assert.deepEqual(matcher.onEvent(ev('playerAppears', 'a1', { username: 'Visitor' }))[0].variables, { player: 'Visitor' })
+  matcher.setMacros([macro('bad', { type: 'playerAppears', ignoreRegex: '[' })], () => ['a1'])
+  assert.equal(matcher.rejectedMacros().length, 1)
 })

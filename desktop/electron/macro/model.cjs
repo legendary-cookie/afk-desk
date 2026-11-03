@@ -76,6 +76,8 @@ function normalizeCondition(input, depth = 0) {
     case 'healthBelow': return { type, value: bounded(input.value, 0, 20, 8) }
     case 'hungerBelow': return { type, value: bounded(input.value, 0, 20, 14) }
     case 'hasItem': return { type, name: str(input.name, MAX_NAME_FIELD), count: int(input.count, 1, 2304, 1) }
+    case 'itemCount': return { type, name: str(input.name, MAX_NAME_FIELD), comparator: oneOf(input.comparator, ['==', '!=', '<', '<=', '>', '>='], '>='), count: int(input.count, 0, 1000000, 0) }
+    case 'entityCount': return { type, entityType: oneOf(input.entityType, ['mob', 'player', 'any'], 'any'), name: str(input.name, MAX_NAME_FIELD).trim(), radius: bounded(input.radius, 0, 256, 16), comparator: oneOf(input.comparator, ['==', '!=', '<', '<=', '>', '>='], '>='), count: int(input.count, 0, 1000000, 1) }
     case 'windowOpen': {
       const name = str(input.name, MAX_NAME_FIELD)
       return name ? { type, name } : { type }
@@ -149,6 +151,7 @@ function normalizeStep(raw, depth, ctx) {
       return { type, mode, yaw: bounded(raw.yaw, -TWO_PI, TWO_PI, 0), pitch: bounded(raw.pitch, -HALF_PI, HALF_PI, 0) }
     }
     case 'control': return { type, control: oneOf(raw.control, HOLD_CONTROLS, 'sneak'), action: oneOf(raw.action, ['hold', 'release'], 'hold') }
+    case 'autoclick': return { type, button: oneOf(raw.button, ['left', 'right'], 'left'), cps: bounded(raw.cps, 1, 20, 5), durationSec: raw.durationSec == null ? null : bounded(raw.durationSec, 1, 3600, 10) }
     case 'leftClick': {
       const out = { type, action: oneOf(raw.action, ['once', 'hold', 'release'], 'once') }
       const only = oneOf(raw.only, ['blocks', 'entities'], '')
@@ -174,8 +177,17 @@ function normalizeStep(raw, depth, ctx) {
       return filter ? { type, filter } : { type }
     }
     case 'disconnect': return { type }
-    case 'reconnect': return Number.isFinite(num(raw.delayMs)) ? { type, delayMs: int(raw.delayMs, 0, 3600000, 0) } : { type }
-    case 'set': return { type, variable: variableName(raw.variable), value: primitive(raw.value) }
+    case 'reconnect': {
+      const step = raw.delaySec == null && Number.isFinite(num(raw.delayMs))
+        ? { type, delayMs: int(raw.delayMs, 0, 3600000, 0) }
+        : { type, delaySec: bounded(raw.delaySec, 0, 3600, 5) }
+      if (raw.maxAttempts != null) step.maxAttempts = int(raw.maxAttempts, 1, 1000, 1)
+      return step
+    }
+    case 'set':
+    case 'setVar': return { type, variable: variableName(raw.variable), value: primitive(raw.value), ...(raw.persist === true ? { persist: true } : {}) }
+    case 'clearVar': return { type, variable: variableName(raw.variable) }
+    case 'readLore': return { type, select: normalizeSelect(raw.select, false), variable: variableName(raw.variable) }
     case 'if': return {
       type,
       condition: normalizeCondition(raw.condition, 0),
@@ -219,6 +231,7 @@ function normalizeTrigger(input) {
       out.jitterMs = int(raw.jitterMs, 0, Math.floor(out.intervalMs / 2), 0)
       break
     }
+    case 'playerAppears': out.ignoreRegex = str(raw.ignoreRegex, MAX_PATTERN_HARD); break
     case 'schedule': out.at = str(raw.at, 16).trim(); break
     case 'chat': {
       out.match = oneOf(raw.match, ['contains', 'glob'], 'contains')
@@ -281,7 +294,7 @@ function normalizeMacro(input) {
       enabled: raw.enabled !== false,
       targets: normalizeTargets(raw.targets),
       trigger: normalizeTrigger(raw.trigger),
-      stopWhen: Array.isArray(raw.stopWhen) ? raw.stopWhen.slice(0, 16).map((c) => normalizeCondition(c, 0)) : [],
+      stopWhen: Array.isArray(raw.stopWhen) ? raw.stopWhen.slice(0, 16).map((c) => ({ ...normalizeCondition(c, 0), ...(c?.allAccounts === true ? { allAccounts: true } : {}) })) : [],
       concurrency: oneOf(raw.concurrency, ['skip', 'override'], 'skip'),
       onError: oneOf(raw.onError, ['continue', 'stop'], 'continue'),
       defaultDelayMs: int(raw.defaultDelayMs, 0, 60000, LIMITS.defaultDelayMs),
@@ -411,6 +424,11 @@ function validateSteps(steps, path, depth, ctx) {
           if (!(step.minMs >= 0 && step.maxMs >= step.minMs)) errors.push({ path: `${here}/maxMs`, message: 'Maximum wait must be at least the minimum.' })
         } else if (!(Number.isFinite(step.ms) && step.ms >= 0)) errors.push({ path: `${here}/ms`, message: 'Enter a wait time in milliseconds.' })
         break
+      case 'autoclick':
+        if (!['left', 'right'].includes(step.button)) errors.push({ path: `${here}/button`, message: 'Choose a click button.' })
+        if (!(Number.isFinite(step.cps) && step.cps >= 1 && step.cps <= 20)) errors.push({ path: `${here}/cps`, message: 'Clicks per second must be between 1 and 20.' })
+        if (step.durationSec != null && !(Number.isFinite(step.durationSec) && step.durationSec >= 1 && step.durationSec <= 3600)) errors.push({ path: `${here}/durationSec`, message: 'Duration must be between 1 and 3600 seconds.' })
+        break
       case 'move':
         if (!MOVE_CONTROLS.includes(step.control)) errors.push({ path: `${here}/control`, message: 'Choose a direction.' })
         if (!(Number.isFinite(step.durationMs) || Number.isFinite(step.distance))) errors.push({ path: `${here}/durationMs`, message: 'Enter a duration or a distance.' })
@@ -432,6 +450,11 @@ function validateSteps(steps, path, depth, ctx) {
       case 'deposit':
         validateSelect(step.select, `${here}/select`, errors, false)
         break
+      case 'readLore':
+        validateSelect(step.select, `${here}/select`, errors, false)
+        // fall through
+      case 'setVar':
+      case 'clearVar':
       case 'set':
         if (!String(step.variable || '').trim()) errors.push({ path: `${here}/variable`, message: 'Enter a variable name.' })
         break
@@ -488,6 +511,10 @@ function validateMacro(macro, options = {}) {
       }
       if (trigger.cooldownMs !== undefined && !(Number.isFinite(trigger.cooldownMs) && trigger.cooldownMs >= 0 && trigger.cooldownMs <= 86400000)) {
         errors.push({ path: '/trigger/cooldownMs', message: 'Cooldown must be between 0 and 24 hours.' })
+      }
+      if (trigger.type === 'playerAppears') {
+        if (typeof trigger.ignoreRegex !== 'string' || trigger.ignoreRegex.length > LIMITS.maxPatternLength) errors.push({ path: '/trigger/ignoreRegex', message: 'Enter a regex of at most 200 characters.' })
+        else try { new RegExp(trigger.ignoreRegex) } catch { errors.push({ path: '/trigger/ignoreRegex', message: 'Invalid regular expression.' }) }
       }
       if (trigger.type === 'timer') {
         if (!(Number.isFinite(trigger.intervalMs) && trigger.intervalMs >= 1000 && trigger.intervalMs <= 86400000)) errors.push({ path: '/trigger/intervalMs', message: 'Interval must be between 1 second and 24 hours.' })
@@ -762,7 +789,7 @@ function stepsToV1(steps, depth) {
       case 'notify':
         if (step.desktop === false || step.webhook === true) return V1_NOT_REPRESENTABLE
         v1 = v1Step({ type: 'notify', message: step.message }); break
-      case 'set': v1 = v1Step({ type: 'set', variable: step.variable, value: step.value }); break
+      case 'set': if (step.persist) return V1_NOT_REPRESENTABLE; v1 = v1Step({ type: 'set', variable: step.variable, value: step.value }); break
       case 'if': {
         const condition = conditionToV1(step.condition)
         const thenSteps = stepsToV1(step.then, depth + 1)

@@ -26,12 +26,28 @@ test('account normalization defaults and bounds deposit and server-message retry
   assert.equal(validateAccount({ ...base, autoDepositMode: undefined }, { autoDepositMode: 'interval' }, null).autoDepositMode, 'interval')
 })
 
+test('anti-AFK chat settings have defaults, bounds and survive partial updates', () => {
+  const base = { id: 'settings', username: 'fixture@example.com', host: 'localhost' }
+  const defaults = validateAccount(base, null, null)
+  assert.equal(defaults.antiAfkChatEnabled, false)
+  assert.equal(defaults.antiAfkChatMessage, '')
+  assert.equal(defaults.antiAfkChatIntervalSec, 300)
+  const saved = validateAccount({ ...base, antiAfkChatEnabled: true, antiAfkChatMessage: 'x'.repeat(300), antiAfkChatIntervalSec: 1 }, null, null)
+  assert.equal(saved.antiAfkChatMessage.length, 256)
+  assert.equal(saved.antiAfkChatIntervalSec, 10)
+  const restored = validateAccount(base, saved, null)
+  assert.equal(restored.antiAfkChatEnabled, true)
+  assert.equal(restored.antiAfkChatMessage, saved.antiAfkChatMessage)
+  assert.equal(validateAccount({ ...base, antiAfkChatIntervalSec: 999999 }, null, null).antiAfkChatIntervalSec, 86400)
+})
+
 const ORIGINAL_IPC_CHANNELS = Object.freeze([
   'accounts:list',
   'accounts:save',
   'accounts:delete',
   'accounts:duplicate-profile',
   'accounts:reorder',
+  'bot:upcoming-runs',
   'bot:connect',
   'bot:disconnect',
   'bot:chat',
@@ -284,4 +300,23 @@ test('AppCore bots.respondForm validates formId and response payloads and delega
     assert.throws(() => core.bots.respondForm(bad), /Invalid|profile/i, JSON.stringify(bad))
   }
   assert.equal(formCalls.length, 3)
+})
+
+test('macro variables survive app restarts and stay separate by account', async (t) => {
+  const { AppCore } = require('../core/app-core.cjs')
+  const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'macro-variables-'))
+  t.after(() => fs.rmSync(userDataPath, { recursive: true, force: true }))
+  const bots = { sessions: new Map(), disconnect() {} }
+  const first = new AppCore({ userDataPath, bots })
+  await first.start()
+  first.macroEngine.savePersistentVariables('a', { count: 42 })
+  first.macroEngine.savePersistentVariables('b', { count: 7 })
+  await first.shutdown()
+  const second = new AppCore({ userDataPath, bots })
+  await second.start()
+  assert.deepEqual(second.macroEngine.getPersistentVariables('a'), { count: 42 })
+  assert.deepEqual(second.macroEngine.getPersistentVariables('b'), { count: 7 })
+  second.macroEngine.savePersistentVariables('a', {})
+  assert.deepEqual(second.macroEngine.getPersistentVariables('b'), { count: 7 })
+  await second.shutdown()
 })

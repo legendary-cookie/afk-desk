@@ -222,6 +222,7 @@ function registerIpc() {
   handle('accounts:delete', (_event, id) => core.accounts.delete(id))
   handle('accounts:duplicate-profile', (_event, id) => core.accounts.duplicate(id))
   handle('accounts:reorder', (_event, orderedIds) => core.accounts.reorder(orderedIds))
+  handle('bot:upcoming-runs', (_event, id) => core.bots.getUpcomingRuns(id))
   handle('bot:connect', (_event, id) => core.bots.connect(id))
   handle('bot:disconnect', (_event, id) => core.bots.disconnect(id))
   handle('bot:chat', (_event, input) => core.bots.chat(input))

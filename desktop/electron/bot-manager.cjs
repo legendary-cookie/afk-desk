@@ -241,7 +241,8 @@ class BotManager {
       if (!session.telemetryTimer) session.telemetryTimer = setInterval(emitTelemetry, 2000)
       if (!session.chestScanTimer) {
         void this.refreshChest(account.id)
-        session.chestScanTimer = setInterval(() => { void this.refreshChest(account.id) }, CHEST_SCAN_INTERVAL)
+        session.nextChestScanAt = Date.now() + CHEST_SCAN_INTERVAL
+        session.chestScanTimer = setInterval(() => { session.nextChestScanAt = Date.now() + CHEST_SCAN_INTERVAL; void this.refreshChest(account.id) }, CHEST_SCAN_INTERVAL)
       }
       if (firstReady && account.antiAfk !== false) this.enableAntiAfk(account.id, account)
       if (firstReady && account.joinMessage && !session.joinMessageSent) {
@@ -304,6 +305,7 @@ class BotManager {
       emitIdentity()
     })
     const markWorldReady = () => { session.worldReadyAt ||= Date.now() }
+    bot.on('entitySpawn', (entity) => { if (entity?.type === 'player' && entity.username && entity.username !== bot.username) this.emit('playerAppears', account.id, { username: entity.username }) })
     bot.on('playerJoined', (player) => { if (player?.username === bot.username) { markWorldReady(); emitIdentity() } })
     bot.on('playerUpdated', (player) => { if (player?.username === bot.username) { markWorldReady(); emitIdentity() } })
     bot.on('health', () => { markWorldReady(); emitTelemetry() })
@@ -1185,6 +1187,21 @@ class BotManager {
     this.emit('telemetry', id, snapshot)
   }
 
+  getUpcomingRuns(id) {
+    const session = this.sessions.get(id)
+    if (!session) return []
+    const runs = [...(session.upcomingMessages?.values() || [])]
+    if (session.antiAfkChatTimer && session.antiAfkChatAt) runs.push({ kind: 'timed-message', label: 'Anti-AFK message', at: session.antiAfkChatAt })
+    if (session.serverChangeRetryTimer && session.serverChangeRetryAt) runs.push({ kind: 'server-change-retry', label: 'Server change retry', at: session.serverChangeRetryAt })
+    const account = session.account
+    if (session.chestScanTimer && account.autoDepositToChest && ['interval', 'intervalOrFull'].includes(account.autoDepositMode)) {
+      const due = (session.lastDepositAt || session.joinedAt) + clampNumber(account.autoDepositInterval, 1, 86400, 300) * 1000
+      const nextScan = session.nextChestScanAt
+      if (Number.isFinite(nextScan)) runs.push({ kind: 'auto-deposit', label: 'Auto-deposit check', at: nextScan + Math.max(0, Math.ceil((due - nextScan) / CHEST_SCAN_INTERVAL)) * CHEST_SCAN_INTERVAL })
+    }
+    return runs.sort((a, b) => a.at - b.at)
+  }
+
   scheduleMessage(id, message, delaySeconds = 2, { kind = 'manual', retry = false } = {}) {
     const session = this.sessions.get(id)
     if (!session) return
@@ -1199,9 +1216,12 @@ class BotManager {
     const schedule = (callback, wait) => {
       const timer = setTimeout(() => {
         session.messageTimers.delete(timer)
+        session.upcomingMessages?.delete(timer)
         callback()
       }, wait)
       session.messageTimers.add(timer)
+      if (!session.upcomingMessages) session.upcomingMessages = new Map()
+      session.upcomingMessages.set(timer, { kind: 'timed-message', label: kind === 'join' ? 'Join message' : kind === 'serverChange' ? 'Server change message' : kind === 'antiAfk' ? 'Anti-AFK message' : 'Scheduled message', at: Date.now() + wait })
     }
     const send = () => {
       if (!this.sessions.has(id)) return
@@ -1230,9 +1250,10 @@ class BotManager {
       if (!this.sessions.has(id)) return
       if (kind === 'join' && message !== session.account.joinMessage) return
       if (kind === 'serverChange' && message !== session.account.serverChangeMessage) return
+      if (kind === 'antiAfk' && (session.account.antiAfk === false || !session.account.antiAfkChatEnabled || message !== session.account.antiAfkChatMessage)) return
       try {
         this.sendChat(id, String(message).slice(0, 256))
-        if (kind !== 'manual' && session.account.serverChangeRetryMinutes > 0) this.startMessageConfirmation(id, session, String(message).slice(0, 256))
+        if ((kind === 'join' || kind === 'serverChange') && session.account.serverChangeRetryMinutes > 0) this.startMessageConfirmation(id, session, String(message).slice(0, 256))
       }
       catch (error) { this.emit('log', id, { kind: 'error', message: `Automatic message failed: ${error.message}`, at: Date.now() }) }
     }
@@ -1271,6 +1292,7 @@ class BotManager {
     const attempt = ++session.serverChangeRetryAttempts + 1
     const seconds = SERVER_CHANGE_RETRY_DELAYS[Math.min(session.serverChangeRetryAttempts - 1, SERVER_CHANGE_RETRY_DELAYS.length - 1)]
     this.emit('log', id, { kind: 'info', message: `Server not ready, retrying ${pending.message} in ${seconds}s (attempt ${attempt})`, at: Date.now() })
+    session.serverChangeRetryAt = Date.now() + seconds * 1000
     session.serverChangeRetryTimer = this.scheduleNetworkTimer(() => {
       session.serverChangeRetryTimer = null
       if (this.sessions.get(id) !== session || !session.account.serverChangeRetryMinutes || Date.now() - pending.startedAt >= session.account.serverChangeRetryMinutes * 60_000 || (pending.message !== session.account.joinMessage && pending.message !== session.account.serverChangeMessage)) return this.clearServerChangeRetry(id, session)
@@ -1305,6 +1327,19 @@ class BotManager {
     for (const timer of session.antiAfkActionTimers) this.clearAntiAfkTimer(timer)
     session.antiAfkActionTimers.clear()
     session.antiAfkSettings = normalizeAntiAfkSettings(input)
+    if (session.antiAfkChatTimer) this.clearAntiAfkTimer(session.antiAfkChatTimer)
+    session.antiAfkChatTimer = null
+    const scheduleChat = () => {
+      if (this.sessions.get(id) !== session || !session.account.antiAfkChatEnabled || !session.account.antiAfkChatMessage) return
+      session.antiAfkChatAt = Date.now() + clampNumber(session.account.antiAfkChatIntervalSec, 10, 86400, 300) * 1000
+      session.antiAfkChatTimer = this.scheduleAntiAfkTimer(() => {
+        session.antiAfkChatTimer = null
+        if (this.sessions.get(id) !== session) return
+        this.scheduleMessage(id, session.account.antiAfkChatMessage, 0, { kind: 'antiAfk' })
+        scheduleChat()
+      }, clampNumber(session.account.antiAfkChatIntervalSec, 10, 86400, 300) * 1000)
+    }
+    scheduleChat()
     this.scheduleAntiAfk(id)
   }
 
@@ -1465,6 +1500,8 @@ class BotManager {
     if (session.antiAfkTimer) this.clearAntiAfkTimer(session.antiAfkTimer)
     for (const timer of session.antiAfkActionTimers) this.clearAntiAfkTimer(timer)
     session.antiAfkActionTimers.clear()
+    if (session.antiAfkChatTimer) this.clearAntiAfkTimer(session.antiAfkChatTimer)
+    session.antiAfkChatTimer = null
     this.releaseOwner(id, 'antiAfk')
     session.antiAfkTimer = null
     if (account.antiAfk !== false && session.bot.entity) this.enableAntiAfk(id, account)
@@ -1491,6 +1528,7 @@ class BotManager {
     for (const timer of session.inputActionTimers.values()) this.clearAntiAfkTimer(timer)
     session.inputActionTimers.clear()
     if (session.antiAfkTimer) this.clearAntiAfkTimer(session.antiAfkTimer)
+    if (session.antiAfkChatTimer) this.clearAntiAfkTimer(session.antiAfkChatTimer)
     if (session.telemetryTimer) clearInterval(session.telemetryTimer)
     if (session.chestScanTimer) clearInterval(session.chestScanTimer)
     if (session.connectionTimer) this.clearNetworkTimer(session.connectionTimer)
@@ -2510,4 +2548,4 @@ function rejectResourcePack(bot, first, second, hash) {
   } catch {}
 }
 
-module.exports = { BotManager, lockedSlotSet, shouldAutoDeposit, itemNameMatches, itemLoreMatches, windowTitleText, windowTitleMatches, lockedGuiSlot, normalizeLoginCode, extractText, parseMinecraftFormatting, parseInteractiveChat, normalizeSkinUrl, findNearestChest, buildTelemetry, buildWindowSnapshot, normalizeLockedSlots, describeNetworkError, reconnectDelaySeconds, reconnectFloorSeconds, jitterReconnectDelay, normalizeAntiAfkSettings, inspectFluidCurrent, recordFluidCorrection, installMovementPacketCompatibility, installModernPlayerInputCompatibility }
+module.exports = { itemTooltipDetails, BotManager, lockedSlotSet, shouldAutoDeposit, itemNameMatches, itemLoreMatches, windowTitleText, windowTitleMatches, lockedGuiSlot, normalizeLoginCode, extractText, parseMinecraftFormatting, parseInteractiveChat, normalizeSkinUrl, findNearestChest, buildTelemetry, buildWindowSnapshot, normalizeLockedSlots, describeNetworkError, reconnectDelaySeconds, reconnectFloorSeconds, jitterReconnectDelay, normalizeAntiAfkSettings, inspectFluidCurrent, recordFluidCorrection, installMovementPacketCompatibility, installModernPlayerInputCompatibility }

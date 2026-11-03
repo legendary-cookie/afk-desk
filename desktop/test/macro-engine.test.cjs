@@ -851,3 +851,30 @@ test('no unhandled promise rejections occurred', async () => {
   await new Promise((resolve) => setImmediate(resolve))
   assert.deepEqual(unhandled, [])
 })
+
+test('timed macro records its actual next deadline and removes it on disconnect', async () => {
+  const h = setup({ macros: [macro('scheduled', { trigger: { type: 'timer', intervalMs: 10000, jitterMs: 0 } })] })
+  h.online('a')
+  assert.equal(h.engine.timed.get('a').get('scheduled').at, h.clock.now() + 10000)
+  await h.clock.advance(10000)
+  assert.equal(h.engine.timed.get('a').get('scheduled').at, h.clock.now() + 10000)
+  h.offline('a')
+  assert.equal(h.engine.timed.has('a'), false)
+})
+
+test('persistent variables are account scoped, restored and cleared; lore becomes a variable', async () => {
+  const saved = new Map()
+  const steps = [{ type: 'setVar', variable: 'x', value: 'saved', persist: true }, { type: 'readLore', select: { slot: 9 }, variable: 'lore' }, { type: 'chat', message: '{x}: {lore}' }]
+  const h = setup({ accounts: ['a', 'b'], macros: [macro('m', { steps })], getPersistentVariables: (id) => saved.get(id) || {}, savePersistentVariables: (id, value) => saved.set(id, { ...value }) })
+  h.fake.handlers.readLore = () => 'first\nsecond'
+  h.online('a'); h.online('b')
+  await h.engine.run('a', 'm')
+  assert.deepEqual(saved.get('a'), { x: 'saved' })
+  assert.equal(saved.has('b'), false)
+  assert.equal(h.fake.stepCalls('chat')[0].args.message, 'saved: first\nsecond')
+  h.engine.setLibrary([macro('next', { steps: [{ type: 'notify', message: '{x}' }, { type: 'clearVar', variable: 'x' }] })])
+  await h.engine.run('a', 'next')
+  assert.equal(h.fake.stepCalls('notify')[0].args.message, 'saved')
+  assert.deepEqual(saved.get('a'), {})
+  await h.engine.shutdown()
+})

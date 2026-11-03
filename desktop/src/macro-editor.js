@@ -3,6 +3,7 @@
 ;(function initMacroEditorGlobal() {
   const TRIGGER_TYPES = Object.freeze({
     manual: { label: 'Manual (Run now)', editions: ['java', 'bedrock'] },
+    playerAppears: { label: 'Player appears', editions: ['java'] },
     join: { label: 'On server join', editions: ['java', 'bedrock'] },
     worldChange: { label: 'On world / server change', editions: ['java'] },
     timer: { label: 'Timer interval', editions: ['java', 'bedrock'] },
@@ -28,15 +29,15 @@
     },
     {
       group: 'Clicking',
-      types: ['leftClick', 'rightClick']
+      types: ['leftClick', 'rightClick', 'autoclick']
     },
     {
       group: 'Inventory & GUI',
-      types: ['selectHotbar', 'holdItem', 'useInventory', 'useGui', 'closeGui', 'waitForWindow', 'drop', 'dropAll', 'deposit']
+      types: ['selectHotbar', 'holdItem', 'useInventory', 'useGui', 'closeGui', 'waitForWindow', 'readLore', 'drop', 'dropAll', 'deposit']
     },
     {
       group: 'Flow control',
-      types: ['wait', 'set', 'if', 'repeat', 'stop']
+      types: ['wait', 'set', 'setVar', 'clearVar', 'if', 'repeat', 'stop']
     },
     {
       group: 'Connection',
@@ -51,6 +52,7 @@
     move: { label: 'Move (walk)', editions: ['java'], defaultStep: () => ({ type: 'move', control: 'forward', durationMs: 500 }) },
     look: { label: 'Look / rotate', editions: ['java'], defaultStep: () => ({ type: 'look', mode: 'relative', yaw: 0.45, pitch: 0 }) },
     control: { label: 'Sneak / jump / sprint', editions: ['java'], defaultStep: () => ({ type: 'control', control: 'sneak', action: 'hold' }) },
+    autoclick: { label: 'Autoclick', editions: ['java'], defaultStep: () => ({ type: 'autoclick', button: 'left', cps: 5, durationSec: 10 }) },
     leftClick: { label: 'Left click', editions: ['java'], defaultStep: () => ({ type: 'leftClick', action: 'once' }) },
     rightClick: { label: 'Right click', editions: ['java'], defaultStep: () => ({ type: 'rightClick', action: 'once' }) },
     selectHotbar: { label: 'Select hotbar slot', editions: ['java'], defaultStep: () => ({ type: 'selectHotbar', slot: 0 }) },
@@ -63,7 +65,10 @@
     dropAll: { label: 'Drop all matching items', editions: ['java'], defaultStep: () => ({ type: 'dropAll', filter: '' }) },
     deposit: { label: 'Deposit item', editions: ['java'], defaultStep: () => ({ type: 'deposit', select: { slot: 36 }, count: 64 }) },
     disconnect: { label: 'Disconnect account', editions: ['java', 'bedrock'], defaultStep: () => ({ type: 'disconnect' }) },
-    reconnect: { label: 'Reconnect account', editions: ['java', 'bedrock'], defaultStep: () => ({ type: 'reconnect', delayMs: 5000 }) },
+    reconnect: { label: 'Reconnect account', editions: ['java', 'bedrock'], defaultStep: () => ({ type: 'reconnect', delaySec: 5 }) },
+    readLore: { label: 'Read item lore', editions: ['java'], defaultStep: () => ({ type: 'readLore', select: { slot: 9 }, variable: 'lore' }) },
+    setVar: { label: 'Set variable (persistent option)', editions: ['java', 'bedrock'], defaultStep: () => ({ type: 'setVar', variable: 'state', value: 'ready' }) },
+    clearVar: { label: 'Clear variable', editions: ['java', 'bedrock'], defaultStep: () => ({ type: 'clearVar', variable: 'state' }) },
     set: { label: 'Set variable', editions: ['java', 'bedrock'], defaultStep: () => ({ type: 'set', variable: 'state', value: 'ready' }) },
     if: { label: 'If / Else branch', editions: ['java', 'bedrock'], defaultStep: () => ({ type: 'if', condition: { type: 'healthBelow', value: 10 }, then: [{ type: 'chat', message: '/heal' }], else: [] }) },
     repeat: { label: 'Repeat loop', editions: ['java', 'bedrock'], defaultStep: () => ({ type: 'repeat', times: 3, steps: [{ type: 'wait', ms: 1000 }] }) },
@@ -76,6 +81,8 @@
     { value: 'healthBelow', label: 'Health below' },
     { value: 'hungerBelow', label: 'Hunger below' },
     { value: 'hasItem', label: 'Has inventory item' },
+    { value: 'itemCount', label: 'Inventory item count' },
+    { value: 'entityCount', label: 'Nearby entity count' },
     { value: 'inventoryFull', label: 'Inventory is full' },
     { value: 'windowOpen', label: 'Server window is open' },
     { value: 'variableEquals', label: 'Variable equals' },
@@ -327,6 +334,7 @@
 
   function createMacroEditor(ctx) {
     const { api, state, el, toast, cleanError } = ctx
+    const maskText = (value) => window.afkStreamerMask.maskText(value, state.accounts, state.settings.streamerMode)
 
     let macros = []
     let validationMap = {}
@@ -641,7 +649,7 @@
       const options = (state.accounts || []).map((account) => {
         const opt = document.createElement('option')
         opt.value = account.id
-        opt.textContent = `${account.profileName || account.label || account.username}${account.edition === 'bedrock' ? ' (Bedrock)' : ''}`
+        opt.textContent = `${window.afkStreamerMask.displayAccount(account, state.settings.streamerMode)}${account.edition === 'bedrock' ? ' (Bedrock)' : ''}`
         return opt
       })
       if (!options.length) {
@@ -712,7 +720,7 @@
       if (!ids.length) return 'No accounts'
       const names = ids.map((id) => {
         const acc = (state.accounts || []).find((a) => a.id === id)
-        return acc ? (acc.profileName || acc.label || acc.id) : id
+        return acc ? window.afkStreamerMask.displayAccount(acc, state.settings.streamerMode) : id
       })
       return names.length <= 2 ? names.join(', ') : `${names.slice(0, 2).join(', ')} +${names.length - 2}`
     }
@@ -1115,7 +1123,9 @@
         container.append(warn)
       }
 
-      if (type === 'timer') {
+      if (type === 'playerAppears') {
+        container.append(createLabeledText('Ignore usernames matching regex', trigger.ignoreRegex || '', 'Optional regular expression', 200, (val) => { pushHistory(); trigger.ignoreRegex = val }, 'macro-trigger-ignore-regex'))
+      } else if (type === 'timer') {
         const intervalSec = Math.max(1, Math.round((trigger.intervalMs ?? 60000) / 1000))
         const jitterSec = Math.max(0, Math.round((trigger.jitterMs ?? 0) / 1000))
         container.append(
@@ -1206,6 +1216,31 @@
             'macro-trigger-below'
           )
         )
+      } else if (type === 'entityCount') {
+        const kind = document.createElement('select')
+        kind.setAttribute('aria-label', 'Entity type')
+        for (const value of ['any', 'mob', 'player']) kind.add(new Option(value, value))
+        kind.value = cond.entityType || 'any'
+        kind.addEventListener('change', () => onChange({ ...cond, entityType: kind.value }))
+        const name = document.createElement('input')
+        name.placeholder = 'Optional entity name'
+        name.setAttribute('aria-label', 'Entity name')
+        name.value = cond.name || ''
+        name.addEventListener('change', () => onChange({ ...cond, name: name.value.trim() }))
+        const radius = document.createElement('input')
+        radius.type = 'number'; radius.min = '0'; radius.max = '256'; radius.value = String(cond.radius ?? 16)
+        radius.setAttribute('aria-label', 'Entity radius')
+        radius.addEventListener('change', () => onChange({ ...cond, radius: Number(radius.value) }))
+        const comparison = document.createElement('select')
+        comparison.setAttribute('aria-label', 'Entity count comparison')
+        for (const op of ['==', '!=', '<', '<=', '>', '>=']) comparison.add(new Option(op, op))
+        comparison.value = cond.comparator || '>='
+        comparison.addEventListener('change', () => onChange({ ...cond, comparator: comparison.value }))
+        const count = document.createElement('input')
+        count.type = 'number'; count.min = '0'; count.value = String(cond.count ?? 1)
+        count.setAttribute('aria-label', 'Entity count')
+        count.addEventListener('change', () => onChange({ ...cond, count: Number(count.value) }))
+        wrap.append(kind, name, radius, comparison, count)
       } else if (type === 'windowOpen') {
         container.append(
           createLabeledText(
@@ -1251,7 +1286,7 @@
               renderSteps()
             })
             const text = document.createElement('span')
-            text.textContent = `${acc.profileName || acc.label || acc.username} (${acc.edition === 'bedrock' ? 'Bedrock' : 'Java'})`
+            text.textContent = `${window.afkStreamerMask.displayAccount(acc, state.settings.streamerMode)} (${acc.edition === 'bedrock' ? 'Bedrock' : 'Java'})`
             row.append(input, text)
             return row
           }))
@@ -1304,7 +1339,7 @@
         row.append(
           createConditionEditor(cond, (updated) => {
             pushHistory()
-            draft.stopWhen[index] = updated
+            draft.stopWhen[index] = { ...updated, ...(cond.allAccounts ? { allAccounts: true } : {}) }
             renderStopConditions()
           }),
           createIconButton('×', 'Remove stop condition', () => {
@@ -1313,6 +1348,14 @@
             renderStopConditions()
           })
         )
+        const scopeLabel = document.createElement('label')
+        const scope = document.createElement('input')
+        scope.type = 'checkbox'
+        scope.checked = cond.allAccounts === true
+        scope.setAttribute('aria-label', 'Stop this macro on all accounts')
+        scope.addEventListener('change', () => { pushHistory(); if (scope.checked) cond.allAccounts = true; else delete cond.allAccounts })
+        scopeLabel.append(scope, document.createTextNode(' Stop this macro on all accounts'))
+        row.append(scopeLabel)
         return row
       }))
     }
@@ -1336,6 +1379,8 @@
         else if (nextType === 'healthBelow') onChange({ type: 'healthBelow', value: 8 })
         else if (nextType === 'hungerBelow') onChange({ type: 'hungerBelow', value: 14 })
         else if (nextType === 'hasItem') onChange({ type: 'hasItem', name: 'cobblestone', count: 1 })
+        else if (nextType === 'itemCount') onChange({ type: 'itemCount', name: 'cobblestone', comparator: '>=', count: 1 })
+        else if (nextType === 'entityCount') onChange({ type: 'entityCount', entityType: 'any', name: '', radius: 16, comparator: '>=', count: 1 })
         else if (nextType === 'windowOpen') onChange({ type: 'windowOpen', name: '' })
         else if (nextType === 'variableEquals') onChange({ type: 'variableEquals', name: 'state', value: 'ready' })
         else if (nextType === 'not') onChange({ type: 'not', condition: { type: 'online', value: true } })
@@ -1365,20 +1410,28 @@
         input.setAttribute('aria-label', 'Threshold value (0-20)')
         input.addEventListener('change', () => onChange({ type, value: Math.max(0, Math.min(20, Number(input.value) || 0)) }))
         wrap.append(input)
-      } else if (type === 'hasItem') {
+      } else if (type === 'hasItem' || type === 'itemCount') {
         const nameInput = document.createElement('input')
         nameInput.placeholder = 'Item name (e.g. diamond)'
         nameInput.value = cond.name || ''
         nameInput.setAttribute('aria-label', 'Condition item name')
-        nameInput.addEventListener('change', () => onChange({ ...cond, type: 'hasItem', name: nameInput.value.trim() }))
+        nameInput.addEventListener('change', () => onChange({ ...cond, type, name: nameInput.value.trim() }))
         const countInput = document.createElement('input')
         countInput.type = 'number'
-        countInput.min = '1'
+        countInput.min = type === 'itemCount' ? '0' : '1'
         countInput.max = '2304'
         countInput.value = String(cond.count ?? 1)
         countInput.setAttribute('aria-label', 'Minimum item count')
-        countInput.addEventListener('change', () => onChange({ ...cond, type: 'hasItem', count: Math.max(1, Number(countInput.value) || 1) }))
+        countInput.addEventListener('change', () => onChange({ ...cond, type, count: Math.max(type === 'itemCount' ? 0 : 1, Number(countInput.value) || 0) }))
         wrap.append(nameInput, countInput)
+        if (type === 'itemCount') {
+          const comparator = document.createElement('select')
+          comparator.setAttribute('aria-label', 'Item count comparison')
+          for (const op of ['==', '!=', '<', '<=', '>', '>=']) comparator.add(new Option(op, op))
+          comparator.value = cond.comparator || '>='
+          comparator.addEventListener('change', () => onChange({ ...cond, comparator: comparator.value }))
+          wrap.append(comparator)
+        }
       } else if (type === 'windowOpen') {
         const titleInput = document.createElement('input')
         titleInput.placeholder = 'Optional title match'
@@ -1676,7 +1729,7 @@
         } else if (isFailedHere) {
           const failBadge = document.createElement('span')
           failBadge.className = 'macro-status-chip failed'
-          failBadge.textContent = `Step failed: ${live.error?.message || 'error'}`
+          failBadge.textContent = maskText(`Step failed: ${live.error?.message || 'error'}`)
           left.append(failBadge)
         }
 
@@ -2007,6 +2060,12 @@
             'step-control-action'
           )
         )
+      } else if (type === 'autoclick') {
+        body.append(
+          createLabeledSelect('Button', [{ value: 'left', label: 'Left' }, { value: 'right', label: 'Right' }], step.button || 'left', (val) => { pushHistory(); step.button = val }, 'step-autoclick-button'),
+          createLabeledNumber('Clicks per second', step.cps ?? 5, 1, 20, 1, (val) => { pushHistory(); step.cps = Math.max(1, Math.min(20, val)) }, 'step-autoclick-cps'),
+          createLabeledNumber('Duration seconds (0 = until stopped)', step.durationSec ?? 0, 0, 3600, 1, (val) => { pushHistory(); step.durationSec = val <= 0 ? null : Math.max(1, Math.min(3600, val)) }, 'step-autoclick-duration')
+        )
       } else if (type === 'leftClick') {
         body.append(
           createLabeledSelect(
@@ -2112,12 +2171,21 @@
         )
       } else if (type === 'reconnect') {
         body.append(
-          createLabeledNumber('Reconnect delay (ms)', step.delayMs ?? 0, 0, 3600000, 500, (val) => {
+          createLabeledNumber('Reconnect delay (seconds)', step.delaySec ?? ((step.delayMs ?? 5000) / 1000), 0, 3600, 1, (val) => {
             pushHistory()
-            step.delayMs = Math.max(0, Math.round(val))
-          }, 'step-reconnect-delay')
+            step.delaySec = Math.max(0, Math.min(3600, val))
+            delete step.delayMs
+          }, 'step-reconnect-delay'),
+          createLabeledNumber('Maximum attempts', step.maxAttempts ?? 1, 1, 1000, 1, (val) => {
+            pushHistory()
+            step.maxAttempts = Math.max(1, Math.min(1000, Math.round(val)))
+          }, 'step-reconnect-attempts')
         )
-      } else if (type === 'set') {
+      } else if (type === 'readLore') {
+        body.append(...createSlotOrItemSelector(step, false), createLabeledText('Variable name', step.variable ?? '', 'lore', 40, (val) => { pushHistory(); step.variable = val.replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 40) }, 'step-lore-variable'))
+      } else if (type === 'clearVar') {
+        body.append(createLabeledText('Variable name', step.variable ?? '', 'state', 40, (val) => { pushHistory(); step.variable = val.replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 40) }, 'step-clear-variable'))
+      } else if (type === 'set' || type === 'setVar') {
         body.append(
           createLabeledText('Variable name', step.variable ?? '', 'e.g. target', 40, (val) => {
             pushHistory()
@@ -2126,7 +2194,8 @@
           createLabeledText('Value', String(step.value ?? ''), 'Value', 256, (val) => {
             pushHistory()
             step.value = val
-          }, 'step-set-value')
+          }, 'step-set-value'),
+          createCheckboxField('Persist across runs', step.persist === true, (checked) => { pushHistory(); step.persist = checked })
         )
       } else if (type === 'if') {
         const condWrap = document.createElement('div')
@@ -2579,7 +2648,7 @@
           if (rec.error?.message) {
             const errLine = document.createElement('div')
             errLine.className = 'macro-inline-error'
-            errLine.textContent = `${rec.error.code ? `[${rec.error.code}] ` : ''}${rec.error.message}`
+            errLine.textContent = maskText(`${rec.error.code ? `[${rec.error.code}] ` : ''}${rec.error.message}`)
             card.append(errLine)
           }
 
@@ -2589,7 +2658,7 @@
             for (const f of failedSteps) {
               const li = document.createElement('li')
               const pathLabel = Array.isArray(f.path) ? `#${f.path.map((n) => n + 1).join('.')}` : ''
-              li.textContent = `Step ${pathLabel} (${f.type}): ${f.error || 'Failed'}`
+              li.textContent = maskText(`Step ${pathLabel} (${f.type}): ${f.error || 'Failed'}`)
               failList.append(li)
             }
             card.append(failList)

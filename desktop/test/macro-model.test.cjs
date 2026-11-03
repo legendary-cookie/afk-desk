@@ -105,7 +105,6 @@ test('every contract trigger, step and condition type survives normalization; un
   for (const type of Object.keys(STEP_TYPES)) assert.equal(normalizeMacro({ steps: [{ type }] }).steps[0]?.type, type, type)
   for (const type of CONDITION_TYPES) assert.equal(normalizeMacro({ stopWhen: [{ type }] }).stopWhen[0].type, type, type)
   assert.equal(normalizeMacro({ trigger: { type: 'toString' } }).trigger.type, 'manual')
-  assert.equal(normalizeMacro({ trigger: { type: 'playerAppears' } }).trigger.type, 'manual')
   assert.equal(normalizeMacro({ stopWhen: [{ type: 'playerAppears' }] }).stopWhen[0].type, 'always')
 })
 
@@ -657,4 +656,13 @@ test('export then import round-trips content (minus ids, secrets and unknown acc
     assert.deepEqual(imported.trigger, original.trigger)
     assert.deepEqual(imported.origin, {})
   })
+})
+
+test('variable, lore and player regex shapes validate', () => {
+  const m = validMacro({ trigger: { type: 'playerAppears', ignoreRegex: '[' }, steps: [{ type: 'setVar', variable: 'x', value: 3, persist: true }, { type: 'clearVar', variable: 'x' }, { type: 'readLore', select: { name: 'book' }, variable: 'lore' }] })
+  assert.equal(m.steps[0].persist, true)
+  assert.deepEqual(m.steps[2].select, { name: 'book' })
+  assert.ok(validateMacro(m, { accountIds, editionOf }).some((error) => error.path === '/trigger/ignoreRegex'))
+  m.trigger.ignoreRegex = '^friend$'
+  assert.deepEqual(validateMacro(m, { accountIds, editionOf }), [])
 })

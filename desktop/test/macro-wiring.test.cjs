@@ -24,6 +24,7 @@ test('bot event adapter maps real BotManager payloads and deduplicates first spa
   const telemetry = adapt('telemetry', 'a', { health: 5, food: 18, dimension: 'overworld', inventory: [{ slot: 9, name: 'stone', count: 64 }] })[0]
   assert.equal(telemetry.payload.inventorySignature, '9:stone:64')
   assert.equal(telemetry.payload.inventoryFull, false)
+  assert.equal(adapt('playerAppears', 'a', { username: 'Visitor' })[0].payload.username, 'Visitor')
   assert.equal(adapt('window', 'a', { title: '§bChest' })[0].payload.title, 'Chest')
   assert.equal(adapt('status', 'a', { status: 'offline', detail: 'Disconnected: kicked' })[0].payload.reason, 'Disconnected: kicked')
   sid = 'java-session-2'
@@ -34,7 +35,7 @@ test('macro engine run and stop round trip with fake bot manager and forwards Ru
   const events = [], calls = [], session = { sessionId: 'fake', bot: { entity: {} }, account: { lockedInventorySlots: [] }, inputClaims: new Map() }
   const manager = { sessions: new Map([['a', session]]), sendChat: async (_id, text) => calls.push(text), releaseOwner() {} }
   const facade = { sessionId: () => 'fake', state: () => ({ online: true, sessionId: 'fake', edition: 'java' }), chat: (id, step, ctx) => manager.sendChat(id, step.message, ctx), releaseOwner() {} }
-  for (const method of ['notify','move','look','control','leftClick','rightClick','selectHotbar','holdItem','useInventory','useGui','closeGui','waitForWindow','drop','dropAll','deposit','disconnect','reconnect']) facade[method] = async () => {}
+  for (const method of ['notify','move','look','control','leftClick','rightClick','selectHotbar','holdItem','readLore','autoclick','useInventory','useGui','closeGui','waitForWindow','drop','dropAll','deposit','disconnect','reconnect']) facade[method] = async () => {}
   const engine = new MacroEngine({ facade, matcher: new TriggerMatcher({ now: () => Date.now() }), emit: (event) => events.push(event), resolveTargets: () => ['a'], now: Date.now })
   engine.setLibrary([{ id: 'm', name: 'Chat', enabled: true, targets: { mode: 'accounts', accountIds: ['a'] }, trigger: { type: 'manual' }, steps: [{ type: 'chat', message: 'hello' }], defaultDelayMs: 0, onError: 'continue', concurrency: 'skip' }])
   const result = await engine.run('a', 'm')

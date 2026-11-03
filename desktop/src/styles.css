@@ -309,6 +309,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .count { display: grid; place-items: center; min-width: 20px; height: 20px; padding: 0 6px; background: var(--surface-raised); border-radius: 10px; font-size: 10px; }
 .account-list { display: flex; flex: 1; flex-direction: column; gap: 4px; overflow: auto; }
 .account-row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 22px; align-items: center; border-radius: var(--radius-sm); cursor: grab; }
+.upcoming-runs { grid-column: 1 / -1; padding: 0 9px 5px; color: var(--muted); font-size: 11px; }
+.upcoming-runs summary { cursor: pointer; }
+.upcoming-runs ul { margin: 4px 0 0; padding-left: 16px; }
+.upcoming-runs li { overflow-wrap: anywhere; }
+.sidebar-collapsed .upcoming-runs { display: none; }
 .account-row:active { cursor: grabbing; }
 .account-row.dragging { opacity: .42; }
 .account-row.drag-over::before, .account-row.drag-over.drop-after::after { content: ""; position: absolute; z-index: 2; right: 4px; left: 4px; height: 2px; background: var(--accent); border-radius: 2px; }
