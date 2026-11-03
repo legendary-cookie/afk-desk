@@ -16,6 +16,7 @@
 // droppedSteps.
 
 const { LIMITS, ENGINE_STEP_TYPES, FACADE_METHODS, ERROR_CODES, MacroActionError, assertFacade } = require('./contract.cjs')
+const { runGraph, triggerMacro } = require('./graph-interpreter.cjs')
 
 const MAX_TIMEOUT_MS = 2147483647
 const MAX_WAIT_MS = 86400000
@@ -338,7 +339,7 @@ class MacroEngine {
       }
     }
     try {
-      this.matcher.setMacros([...next.values()].map((entry) => entry.macro), (macro) => this._targetsOf(macro))
+      this.matcher.setMacros([...next.values()].map((entry) => triggerMacro(entry.macro)), (macro) => this._targetsOf(macro))
     } catch (error) {
       this._emitEngineError(null, error)
     }
@@ -601,7 +602,7 @@ class MacroEngine {
     }
     this.runs.set(accountId, ctx)
     this._emit({ runId, macroId: macro.id, accountId, status: 'started', trigger: trigger.triggerType, ...(trigger.reason ? { reason: trigger.reason } : {}) })
-    const maxRuntimeMs = finiteOr(macro.maxRuntimeMs, null)
+    const maxRuntimeMs = finiteOr(macro.maxRuntimeMs, macro.version === 3 ? 300000 : null)
     if (maxRuntimeMs !== null && maxRuntimeMs > 0) {
       ctx.maxRuntimeCancel = this.scheduler.after(maxRuntimeMs, () => this._requestStop(ctx, 'stopped', 'maxRuntime'))
     }
@@ -612,7 +613,8 @@ class MacroEngine {
   async _execute(ctx) {
     let end
     try {
-      await this._runSteps(ctx, list(ctx.macro.steps), [], 0)
+      if (ctx.macro.version === 3) await runGraph(this, ctx)
+      else await this._runSteps(ctx, list(ctx.macro.steps), [], 0)
       end = { status: 'completed' }
     } catch (error) {
       if (error instanceof RunEnd) end = error
