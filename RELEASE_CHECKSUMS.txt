@@ -64,5 +64,5 @@ b38b2182c8a824516b3a8a39735738fcfa6b92e4176fb8d4ae3570fc83e76d76  AFK-Desk-Mobil
 
 # Desktop and Android 0.11.0-beta.2
 
-6f6d3f1d7ba0c48ade9077d115a983aa15d3ef88f94a5da79b4a88ffb9d0995e  AFK-Desk-Setup-0.11.0-beta.2.exe
+65d36776c8783cb730e85128f673c8cacb0905e37cdd9c94fb6282e400cb4b1b  AFK-Desk-Setup-0.11.0-beta.2.exe
 f6a0474e4ed9e971b1d41f8eb9c994230ee870df66ef0bb834db201f7e15c044  AFK-Desk-Android-0.11.0-beta.2.apk
