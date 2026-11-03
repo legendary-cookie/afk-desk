@@ -54,6 +54,7 @@
       </aside>
 
       <main id="main-content" class="main-content">
+          <div id="update-banner" class="status-banner" role="status" hidden><span id="update-message"></span> <button id="update-open" class="button secondary" type="button">Open release</button> <button id="update-dismiss" class="icon-button" type="button" aria-label="Dismiss update">×</button></div>
         <section id="empty-state" class="empty-state" aria-labelledby="empty-title">
           <div class="empty-illustration" aria-hidden="true">
             <span></span><span></span><span></span>
@@ -364,7 +365,7 @@
           <button id="close-settings" class="icon-button" type="button" aria-label="Close settings">×</button>
         </header>
         <div class="settings-body">
-          <div class="settings-tools"><button id="bulk-appearance-open" class="button secondary" type="button">Bulk skins and capes…</button> <button id="open-help-tour" class="button secondary" type="button">Take the tour again</button></div>
+          <div class="settings-tools"><button id="check-updates" class="button secondary" type="button">Check for updates</button> <button id="export-logs" class="button secondary" type="button">Export logs</button> <button id="bulk-appearance-open" class="button secondary" type="button">Bulk skins and capes…</button> <button id="open-help-tour" class="button secondary" type="button">Take the tour again</button></div>
           <label class="toggle-row">
             <input id="start-with-windows" type="checkbox" />
             <span class="toggle" aria-hidden="true"></span>
@@ -388,6 +389,7 @@
             <span class="toggle" aria-hidden="true"></span>
             <span><strong>Use Minecraft launcher resource pack cache</strong><small>Reuse verified packs from Minecraft, Modrinth, and CurseForge when available.</small></span>
           </label>
+          <label class="toggle-row"><input id="update-check-enabled" type="checkbox" checked /><span class="toggle" aria-hidden="true"></span><span><strong>Check for updates on startup</strong><small>Checks at most once every 12 hours.</small></span></label>
           <label class="toggle-row"><input id="streamer-mode" type="checkbox" /><span class="toggle" aria-hidden="true"></span><span><strong>Streamer mode</strong><small>Hide account names and email addresses in the interface.</small></span></label>
           <label class="field settings-delay"><span>Delay between accounts (seconds)</span><input id="startup-connection-delay" type="number" min="1" max="300" value="3" /></label>
           <label class="field settings-delay"><span>Interface scale</span><input id="ui-scale" type="range" min="50" max="125" step="5" value="100" /><small><output id="ui-scale-value" for="ui-scale">100%</output> — smaller values fit more controls on screen.</small></label>

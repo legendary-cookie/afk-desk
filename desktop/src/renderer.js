@@ -106,7 +106,7 @@ const state = {
 const el = Object.fromEntries([
   'account-list', 'account-count', 'add-account', 'import-profile-share', 'share-profile', 'open-settings', 'toggle-sidebar', 'open-command-center', 'command-dialog', 'command-search', 'command-results', 'close-command-center',
   'quick-scale', 'quick-scale-number', 'reset-scale', 'quick-scale-value', 'quick-workspace-design', 'quick-color-theme', 'workspace-design', 'color-theme', 'display-menu', 'console-menu',
-  'streamer-quick-toggle', 'streamer-mode', 'macro-menu', 'settings-dialog', 'close-settings', 'start-with-windows', 'notifications-enabled', 'notify-attach-pov', 'notify-attach-inventory', 'notify-pov-offscreen', 'stagger-startup-connections', 'use-launcher-pack-cache', 'startup-connection-delay', 'save-settings', 'empty-state',
+  'update-banner', 'update-message', 'update-open', 'update-dismiss', 'check-updates', 'export-logs', 'update-check-enabled', 'streamer-quick-toggle', 'streamer-mode', 'macro-menu', 'settings-dialog', 'close-settings', 'start-with-windows', 'notifications-enabled', 'notify-attach-pov', 'notify-attach-inventory', 'notify-pov-offscreen', 'stagger-startup-connections', 'use-launcher-pack-cache', 'startup-connection-delay', 'save-settings', 'empty-state',
   'dashboard', 'account-title', 'app-version', 'settings-app-version', 'edit-account', 'open-logs', 'open-automations', 'open-pov', 'connection-button', 'status-banner',
   'status-name', 'status-detail', 'server-address', 'detail-username', 'detail-server', 'detail-version', 'detail-antiafk', 'detail-environment', 'detail-water', 'detail-health',
   'detail-hunger', 'detail-coordinates', 'detail-chest', 'detail-dimension', 'inventory-count', 'inventory-grid', 'auto-deposit-toggle', 'hold-selected', 'equip-destination', 'equip-selected',
@@ -143,6 +143,7 @@ async function init() {
   const [accounts, settings, appVersion, versions] = await Promise.all([api.listAccounts(), api.getSettings(), api.getAppVersion(), api.getSupportedVersions()])
   state.accounts = accounts
   state.settings = settings
+  void api.checkUpdates().then(showUpdate).catch(() => {})
   state.supportedVersions = versions
   populateVersionOptions(versions)
   el['app-version'].textContent = `v${appVersion}`
@@ -208,6 +209,10 @@ function bindEvents() {
     el['settings-dialog'].close()
   })
   el['save-settings'].addEventListener('click', saveSettings)
+  el['check-updates'].addEventListener('click', async () => { const release = await api.checkUpdates(true).catch(() => null); showUpdate(release); if (release) el['settings-dialog'].close() })
+  el['export-logs'].addEventListener('click', async () => { try { if (await api.exportLogs()) toast('Logs exported') } catch (error) { toast(cleanError(error), 'error') } })
+  el['update-open'].addEventListener('click', () => { void api.openUpdate() })
+  el['update-dismiss'].addEventListener('click', () => { el['update-banner'].hidden = true })
   el['streamer-quick-toggle'].addEventListener('click', async () => {
     try {
       state.settings = await api.saveSettings({ ...state.settings, streamerMode: !state.settings.streamerMode })
@@ -1794,6 +1799,12 @@ async function closeServerWindow() {
   catch (error) { toast(cleanError(error), 'error') }
 }
 
+function showUpdate(release) {
+  if (!release) return
+  el['update-message'].textContent = `AFK Desk ${release.version} is available.`
+  el['update-banner'].hidden = false
+}
+
 async function openSettingsDialog() {
   try {
     const settings = await api.getSettings()
@@ -1803,6 +1814,7 @@ async function openSettingsDialog() {
     el['notify-attach-pov'].checked = settings.notifyAttachPov === true
     el['notify-attach-inventory'].checked = settings.notifyAttachInventory === true
     el['notify-pov-offscreen'].checked = settings.notifyPovOffscreen === true
+    el['update-check-enabled'].checked = settings.updateCheckEnabled !== false
     el['streamer-mode'].checked = settings.streamerMode === true
     el['stagger-startup-connections'].checked = settings.staggerStartupConnections !== false
     el['use-launcher-pack-cache'].checked = settings.useLauncherPackCache !== false
@@ -1837,6 +1849,7 @@ async function saveSettings() {
       notifyAttachInventory: el['notify-attach-inventory'].checked,
       notifyPovOffscreen: el['notify-pov-offscreen'].checked,
       streamerMode: el['streamer-mode'].checked,
+      updateCheckEnabled: el['update-check-enabled'].checked,
       staggerStartupConnections: el['stagger-startup-connections'].checked,
       useLauncherPackCache: el['use-launcher-pack-cache'].checked,
       startupConnectionDelay: Number(el['startup-connection-delay'].value),
