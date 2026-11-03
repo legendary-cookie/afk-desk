@@ -323,6 +323,17 @@
           <label class="field full"><span>Auto-deposit trigger</span><select id="auto-deposit-mode"><option value="immediate">Whenever a chest is in range</option><option value="interval">On an interval</option><option value="inventoryFull">When inventory is full</option><option value="intervalOrFull">On an interval or when full</option></select></label>
           <div class="field full" id="auto-deposit-interval-wrap"><span>Deposit interval</span><div class="settings-visual-grid"><input id="auto-deposit-interval" type="number" min="1" max="86400" value="300" /><select id="auto-deposit-interval-unit"><option value="1">Seconds</option><option value="60">Minutes</option><option value="3600">Hours</option></select></div><small>Stored as seconds. The interval starts when you join or after a successful deposit.</small></div>
           <label class="field full" id="auto-deposit-threshold-wrap"><span>Free slots remaining to count as full</span><input id="auto-deposit-full-threshold" type="number" min="0" max="35" value="0" /><small>Counts unlocked main-inventory slots only; armor and offhand are ignored. 0 means every unlocked main slot is occupied.</small></label>
+          <div class="form-section full"><h3>Safety</h3><p>Safety actions are off by default. Online hours use this device's local time.</p></div>
+          <label class="check-row"><input id="safety-eat" type="checkbox" /> Auto-eat</label>
+          <label class="field"><span>Eat at food level</span><input id="safety-food" type="number" min="0" max="20" value="14" /></label>
+          <label class="check-row"><input id="safety-totem" type="checkbox" /> Equip a totem at low health</label>
+          <label class="check-row"><input id="safety-disconnect" type="checkbox" /> Disconnect at low health</label>
+          <label class="field"><span>Low-health threshold</span><input id="safety-health" type="number" min="0" max="20" value="6" /></label>
+          <label class="field"><span>Reconnect cooldown (minutes)</span><input id="safety-cooldown" type="number" min="1" max="1440" value="10" /></label>
+          <label class="check-row full"><input id="safety-schedule" type="checkbox" /> Limit online hours</label>
+          <label class="field"><span>Start</span><input id="safety-start" type="time" value="00:00" /></label>
+          <label class="field"><span>End</span><input id="safety-end" type="time" value="00:00" /><small>Equal times mean all day. Overnight windows start on the selected day.</small></label>
+          <div class="action-grid full" role="group" aria-label="Online weekdays"><label class="check-row"><input id="safety-day-0" type="checkbox" /> Sun</label><label class="check-row"><input id="safety-day-1" type="checkbox" /> Mon</label><label class="check-row"><input id="safety-day-2" type="checkbox" /> Tue</label><label class="check-row"><input id="safety-day-3" type="checkbox" /> Wed</label><label class="check-row"><input id="safety-day-4" type="checkbox" /> Thu</label><label class="check-row"><input id="safety-day-5" type="checkbox" /> Fri</label><label class="check-row"><input id="safety-day-6" type="checkbox" /> Sat</label></div>
           <div class="form-section full">
             <h3>Automatic messages</h3>
             <p>Send a chat message or command when this account joins or changes server/world.</p>

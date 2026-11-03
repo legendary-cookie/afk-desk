@@ -325,3 +325,19 @@ test('macro variables survive app restarts and stay separate by account', async 
   assert.deepEqual(second.macroEngine.getPersistentVariables('b'), { count: 7 })
   await second.shutdown()
 })
+
+test('account safety settings default off, clamp values and survive partial updates', () => {
+  const base = { id: 'safety', username: 'fixture@example.com', host: 'localhost' }
+  const defaults = validateAccount(base, null, null)
+  assert.equal(defaults.autoEat, false)
+  assert.equal(defaults.autoEatThreshold, 14)
+  assert.equal(defaults.lowHealthThreshold, 6)
+  assert.equal(defaults.lowHealthCooldownMinutes, 10)
+  assert.equal(defaults.scheduleEnabled, false)
+  const saved = validateAccount({ ...base, autoEat: true, autoEatThreshold: 99, scheduleEnabled: true, scheduleStart: '22:00', scheduleEnd: '02:00', scheduleDays: [1, 1, 8] }, null, null)
+  assert.equal(saved.autoEatThreshold, 20)
+  assert.deepEqual(saved.scheduleDays, [1])
+  const restored = validateAccount(base, saved, null)
+  assert.equal(restored.autoEat, true)
+  assert.equal(restored.scheduleStart, '22:00')
+})
