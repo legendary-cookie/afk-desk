@@ -16,6 +16,8 @@ const { BotManager, normalizeSkinUrl } = require('./bot-manager.cjs')
 const { BedrockBotManager } = require('./bedrock-bot-manager.cjs')
 const { MultiEditionBotManager } = require('./multi-edition-manager.cjs')
 const { inventoryLayout } = require('./notify/inventory-image.cjs')
+const { createOffscreenPov } = require('./offscreen-pov.cjs')
+const { snapshotRadius } = require('../assets/pov-math.js')
 const documentPath = path.join(__dirname, '..', 'src', 'index.html')
 const documentUrl = pathToFileURL(documentPath).href
 
@@ -23,6 +25,17 @@ let mainWindow
 let core
 let embeddedServer = null
 let storageErrorShown = false
+const offscreenPov = createOffscreenPov({
+  createWindow: () => {
+    const win = new BrowserWindow({ show: false, width: 640, height: 360, webPreferences: {
+      offscreen: true, preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true
+    } })
+    restrictWindow(win)
+    return win
+  },
+  snapshot: (id, radius) => core.bots.worldSnapshot(id, radius),
+  radius: snapshotRadius
+})
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -177,6 +190,10 @@ app.whenReady().then(async () => {
             if (typeof data === 'string' && data.startsWith('data:image/png;base64,')) images.push({ name: 'pov.png', data: Buffer.from(data.slice(22), 'base64') })
           } catch {}
         }
+        if (settings.notifyAttachPov && settings.notifyPovOffscreen && !images.length) {
+          const data = await offscreenPov.request(id, settings)
+          if (typeof data === 'string' && data.startsWith('data:image/png;base64,')) images.push({ name: 'pov.png', data: Buffer.from(data.slice(22), 'base64') })
+        }
         if (settings.notifyAttachInventory) {
           let win
           try {
@@ -232,6 +249,7 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  offscreenPov.close()
   void embeddedServer?.stop()
   void core?.shutdown()
 })
