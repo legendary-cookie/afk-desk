@@ -1,3 +1,4 @@
+const { isWithinSchedule, deferSafety, installSafety } = require('./safety.cjs')
 const path = require('node:path')
 const { profilePath } = require('./profile-path.cjs')
 const { applyProtocolFixes } = require('./protocol-fixes.cjs')
@@ -48,6 +49,12 @@ class BotManager {
     reconnectState.manual = false
     reconnectState.account = account
     this.reconnects.set(account.id, reconnectState)
+    if (Date.now() < (reconnectState.cooldownUntil || 0) || !isWithinSchedule(account)) {
+      reconnectState.safetyPause ||= 'schedule'
+      deferSafety(this, account, reconnectState)
+      return { id: account.id }
+    }
+    reconnectState.safetyPause = false
 
     const selectedVersion = normalizeVersionSelection(account.version)
     let session
@@ -81,6 +88,7 @@ class BotManager {
       serverChangeRetryAttempts: 0, serverChangeRetryStartedAt: 0, serverChangeRetryMessage: '', lastDimension: null
     }
     this.sessions.set(account.id, session)
+    installSafety(this, account, session, reconnectState)
     this.status(account.id, 'connecting', reconnecting ? `Reconnect attempt ${reconnectState.attempts}…` : `Connecting to ${account.host}…`)
     this.armConnectionWatchdog(account.id, session, loginCodeRequested ? DEVICE_LOGIN_TIMEOUT_MS : CONNECTION_TIMEOUT_MS)
 
@@ -241,7 +249,9 @@ class BotManager {
     bot.on('end', (reason) => {
       if (this.sessions.get(account.id) !== session) return
       this.clearSession(account.id)
-      if (account.autoReconnect !== false && !reconnectState.manual) {
+      if (reconnectState.safetyPause && !reconnectState.manual && (reconnectState.safetyPause !== 'health' || (reconnectState.account || account).autoReconnect !== false)) {
+        deferSafety(this, reconnectState.account || account, reconnectState)
+      } else if (account.autoReconnect !== false && !reconnectState.manual) {
         this.scheduleReconnect(account, session.lastKickReason || reason)
       } else {
         this.reconnects.delete(account.id)
@@ -588,6 +598,7 @@ class BotManager {
   }
 
   clearSession(id) {
+    if (this.sessions.get(id)?.safetyTimer) clearInterval(this.sessions.get(id).safetyTimer)
     const session = this.sessions.get(id)
     if (session) this.clearTimers(session)
     this.sessions.delete(id)

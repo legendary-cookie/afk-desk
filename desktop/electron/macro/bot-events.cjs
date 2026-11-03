@@ -38,6 +38,7 @@ function createBotEventAdapter({ sessionId = () => null, isManualDisconnect = ()
     if (type === 'window') return [make('windowOpen', { title: stripFormatting(payload.title || payload.name || '') })]
     if (type === 'log' && payload.kind === 'error' && /kicked:/i.test(payload.message || '')) return []
     if (type === 'playerAppears') return [make('playerAppears', { username: String(payload.username || '') })]
+    if (type === 'safety-disconnect') return [make('safety-disconnect', payload)]
     if (type === 'death') return [make('death')]
     if (type === 'respawn' || type === 'login' || type === 'serverSwitch') return [make(type, { dimension: payload.dimension, world: payload.world, backend: payload.backend })]
     return []

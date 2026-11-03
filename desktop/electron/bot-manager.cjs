@@ -1,3 +1,4 @@
+const { isWithinSchedule, deferSafety, installSafety } = require('./safety.cjs')
 const path = require('node:path')
 const { sampleGrid, goalPosition, entityType, PALETTE } = require('./minimap.cjs')
 const { randomUUID } = require('node:crypto')
@@ -98,6 +99,12 @@ class BotManager {
     reconnectState.manual = false
     reconnectState.account = account
     this.reconnects.set(account.id, reconnectState)
+    if (Date.now() < (reconnectState.cooldownUntil || 0) || !isWithinSchedule(account)) {
+      reconnectState.safetyPause ||= 'schedule'
+      deferSafety(this, account, reconnectState)
+      return { id: account.id }
+    }
+    reconnectState.safetyPause = false
 
     const explicitVersion = normalizeVersionSelection(account.version)
     // Auto must negotiate against the current server. A previously successful
@@ -186,6 +193,7 @@ class BotManager {
     })
     bot.physicsEnabled = account.environmentalMovement !== false
     this.sessions.set(account.id, session)
+    installSafety(this, account, session, reconnectState)
     for (const event of ['blockUpdate', 'chunkColumnLoad', 'chunkColumnUnload', 'respawn']) {
       bot.on(event, () => this.invalidateWorldSnapshot(account.id, session))
     }
@@ -431,7 +439,9 @@ class BotManager {
       this.clearSession(account.id, session)
       // Use the latest saved config, not the one captured at connect time (see updateAccountConfig).
       const currentAccount = reconnectState.account || account
-      if (currentAccount.autoReconnect !== false && !reconnectState.manual) {
+      if (reconnectState.safetyPause && !reconnectState.manual && (reconnectState.safetyPause !== 'health' || (reconnectState.account || account).autoReconnect !== false)) {
+        deferSafety(this, currentAccount, reconnectState)
+      } else if (currentAccount.autoReconnect !== false && !reconnectState.manual) {
         this.scheduleReconnect(currentAccount, session.lastKickReason || session.lastNetworkReason || reason)
       } else {
         this.reconnects.delete(account.id)
@@ -476,7 +486,7 @@ class BotManager {
       if ((pendingMessage && pendingMessage !== account.joinMessage && pendingMessage !== account.serverChangeMessage) || account.serverChangeRetryMinutes === 0) this.clearServerChangeRetry(account.id, session)
       session.account = { ...session.account, ...account }
     }
-    if (account.autoReconnect === false) {
+    if (account.autoReconnect === false && !state.safetyPause) {
       if (state.timer) this.clearReconnectTimer(state.timer)
       state.timer = null
       if (!this.sessions.has(account.id)) {
@@ -1528,6 +1538,7 @@ class BotManager {
   clearSession(id, expectedSession) {
     const session = this.sessions.get(id)
     if (expectedSession && session !== expectedSession) return
+    if (session?.safetyTimer) clearInterval(session.safetyTimer)
     this.sessions.delete(id)
     if (session) this.clearTimers(session)
   }

@@ -104,6 +104,7 @@ const state = {
 }
 
 const el = Object.fromEntries([
+  'safety-eat', 'safety-food', 'safety-totem', 'safety-disconnect', 'safety-health', 'safety-cooldown', 'safety-schedule', 'safety-start', 'safety-end', 'safety-day-0', 'safety-day-1', 'safety-day-2', 'safety-day-3', 'safety-day-4', 'safety-day-5', 'safety-day-6',
   'account-list', 'account-count', 'add-account', 'import-profile-share', 'share-profile', 'open-settings', 'toggle-sidebar', 'open-command-center', 'command-dialog', 'command-search', 'command-results', 'close-command-center',
   'quick-scale', 'quick-scale-number', 'reset-scale', 'quick-scale-value', 'quick-workspace-design', 'quick-color-theme', 'workspace-design', 'color-theme', 'display-menu', 'console-menu',
   'streamer-quick-toggle', 'streamer-mode', 'macro-menu', 'settings-dialog', 'close-settings', 'start-with-windows', 'notifications-enabled', 'notify-attach-pov', 'notify-attach-inventory', 'notify-pov-offscreen', 'stagger-startup-connections', 'use-launcher-pack-cache', 'startup-connection-delay', 'save-settings', 'empty-state',
@@ -978,6 +979,16 @@ function openAccountDialog(account, importing = false) {
   el['anti-afk-swing'].checked = account?.antiAfkSwing === true
   el['anti-afk-walk'].checked = account?.antiAfkWalk === true
   el['environmental-movement'].checked = account?.environmentalMovement !== false
+  el['safety-eat'].checked = account?.autoEat === true
+  el['safety-food'].value = account?.autoEatThreshold ?? 14
+  el['safety-totem'].checked = account?.lowHealthTotem === true
+  el['safety-disconnect'].checked = account?.lowHealthDisconnect === true
+  el['safety-health'].value = account?.lowHealthThreshold ?? 6
+  el['safety-cooldown'].value = account?.lowHealthCooldownMinutes ?? 10
+  el['safety-schedule'].checked = account?.scheduleEnabled === true
+  el['safety-start'].value = account?.scheduleStart ?? '00:00'
+  el['safety-end'].value = account?.scheduleEnd ?? '00:00'
+  for (let day = 0; day < 7; day++) el[`safety-day-${day}`].checked = (account?.scheduleDays ?? [0, 1, 2, 3, 4, 5, 6]).includes(day)
   el['auto-reconnect'].checked = account?.autoReconnect !== false
   el['auto-reconnect-delay'].value = account?.autoReconnectDelay || 5
   el['auto-reconnect-backoff'].value = account?.autoReconnectBackoffMultiplier ?? 2
@@ -1063,6 +1074,16 @@ async function saveAccount(event) {
     antiAfkSwing: el['anti-afk-swing'].checked,
     antiAfkWalk: el['anti-afk-walk'].checked,
     environmentalMovement: el['environmental-movement'].checked,
+    autoEat: el['safety-eat'].checked,
+    autoEatThreshold: Number(el['safety-food'].value),
+    lowHealthTotem: el['safety-totem'].checked,
+    lowHealthDisconnect: el['safety-disconnect'].checked,
+    lowHealthThreshold: Number(el['safety-health'].value),
+    lowHealthCooldownMinutes: Number(el['safety-cooldown'].value),
+    scheduleEnabled: el['safety-schedule'].checked,
+    scheduleStart: el['safety-start'].value,
+    scheduleEnd: el['safety-end'].value,
+    scheduleDays: Array.from({ length: 7 }, (_, day) => day).filter(day => el[`safety-day-${day}`].checked),
     autoReconnect: el['auto-reconnect'].checked,
     autoReconnectDelay: Number(el['auto-reconnect-delay'].value),
     autoReconnectBackoffMultiplier: Number(el['auto-reconnect-backoff'].value),

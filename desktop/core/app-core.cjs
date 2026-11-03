@@ -792,6 +792,7 @@ class AppCore {
       this.healthEdges.set(account.id, h)
       this.previousInventoryFull.set(account.id, p.inventoryFull === true)
     }
+    if (event.type === 'safety-disconnect') this._send({ kind: 'lowHealth', accountId: account.id, accountName: name, message: `${name} disconnected for low health.`, payload: event.payload, at: event.at })
     if (event.type === 'death') this._send({ kind: 'death', accountId: account.id, accountName: name, message: `${name} died.`, at: event.at })
   }
 
@@ -1004,6 +1005,16 @@ function validateAccount(input, existing, secretBox, normalizeSkinUrl = defaultN
     autoDepositMode: ['immediate', 'interval', 'inventoryFull', 'intervalOrFull'].includes(input?.autoDepositMode ?? existing?.autoDepositMode) ? (input?.autoDepositMode ?? existing?.autoDepositMode) : 'immediate',
     autoDepositInterval: Math.round(bounded(input?.autoDepositInterval ?? existing?.autoDepositInterval, 1, 86400, 300)),
     autoDepositFullThreshold: Math.round(bounded(input?.autoDepositFullThreshold ?? existing?.autoDepositFullThreshold, 0, 35, 0)),
+    autoEat: (input?.autoEat ?? existing?.autoEat) === true,
+    autoEatThreshold: bounded(input?.autoEatThreshold ?? existing?.autoEatThreshold, 0, 20, 14),
+    lowHealthTotem: (input?.lowHealthTotem ?? existing?.lowHealthTotem) === true,
+    lowHealthDisconnect: (input?.lowHealthDisconnect ?? existing?.lowHealthDisconnect) === true,
+    lowHealthThreshold: bounded(input?.lowHealthThreshold ?? existing?.lowHealthThreshold, 0, 20, 6),
+    lowHealthCooldownMinutes: bounded(input?.lowHealthCooldownMinutes ?? existing?.lowHealthCooldownMinutes, 1, 1440, 10),
+    scheduleEnabled: (input?.scheduleEnabled ?? existing?.scheduleEnabled) === true,
+    scheduleStart: /^([01]\d|2[0-3]):[0-5]\d$/.test(input?.scheduleStart ?? existing?.scheduleStart) ? (input?.scheduleStart ?? existing?.scheduleStart) : '00:00',
+    scheduleEnd: /^([01]\d|2[0-3]):[0-5]\d$/.test(input?.scheduleEnd ?? existing?.scheduleEnd) ? (input?.scheduleEnd ?? existing?.scheduleEnd) : '00:00',
+    scheduleDays: Array.isArray(input?.scheduleDays ?? existing?.scheduleDays) ? [...new Set((input?.scheduleDays ?? existing?.scheduleDays).filter(day => Number.isInteger(day) && day >= 0 && day <= 6))] : [0, 1, 2, 3, 4, 5, 6],
     lockedInventorySlots: normalizeSlots(input?.lockedInventorySlots ?? existing?.lockedInventorySlots),
     proxy: validateProxy(input?.proxy, existing?.proxy, secretBox),
     proxyMode: ['direct', 'manual', 'smart'].includes(input?.proxyMode) ? input.proxyMode : (input?.proxy?.enabled ? 'manual' : 'direct'),
