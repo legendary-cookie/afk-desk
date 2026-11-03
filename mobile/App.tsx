@@ -7,11 +7,15 @@ import {loadAccounts, saveAccounts} from './account-storage';
 import {syncForegroundSessions} from './foreground-service';
 import {openExternalUrl, openMicrosoftSignIn} from './external-links';
 import nodejs from 'nodejs-mobile-react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+// Version shown in the header comes from package.json so it can't go stale.
+const APP_VERSION: string = require('./package.json').version;
+const {maskNames, addRecent} = require('./mobile-ui-logic.cjs');
 
 type ProxyConfig = {enabled: boolean; type: 'socks5' | 'http'; host: string; port: string; username: string; password: string};
 type Account = {
   id: string; username: string; minecraftName?: string; host: string; port: string; version: string; skinUrl?: string;
-  antiAfk: boolean; antiAfkInterval: string; autoReconnect: boolean; autoReconnectDelay: string;
+  antiAfk: boolean; antiAfkInterval: string; antiAfkChatEnabled: boolean; antiAfkChatMessage: string; antiAfkChatIntervalSec: string; autoReconnect: boolean; autoReconnectDelay: string;
   autoReconnectMaxAttempts: string; connectOnStartup: boolean; joinMessage: string;
   serverChangeMessage: string; messageDelay: string; autoDepositToChest: boolean;
   autoDepositRange: string; autoDepositMode: 'immediate' | 'interval' | 'inventoryFull' | 'intervalOrFull';
@@ -31,7 +35,7 @@ const SUPPORTED_GAME_VERSIONS = ['1.21.11', '1.21.9', '1.21.8', '1.21.6', '1.21.
 const EMPTY_PROXY: ProxyConfig = {enabled: false, type: 'socks5', host: '', port: '1080', username: '', password: ''};
 const blankAccount = (): Account => ({
   id: `${Date.now()}-${Math.random().toString(16).slice(2)}`, username: '', host: '', port: '25565', version: '',
-  antiAfk: true, antiAfkInterval: '45', autoReconnect: true, autoReconnectDelay: '5', autoReconnectMaxAttempts: '0',
+  antiAfk: true, antiAfkInterval: '45', antiAfkChatEnabled: false, antiAfkChatMessage: '', antiAfkChatIntervalSec: '300', autoReconnect: true, autoReconnectDelay: '5', autoReconnectMaxAttempts: '0',
   connectOnStartup: false, joinMessage: '', serverChangeMessage: '', messageDelay: '6',
   autoDepositToChest: false, autoDepositRange: '5', autoDepositMode: 'immediate', autoDepositInterval: '300',
   autoDepositFullThreshold: '0', serverChangeRetryMinutes: '30', proxy: {...EMPTY_PROXY},
@@ -39,6 +43,8 @@ const blankAccount = (): Account => ({
 
 const normalizeAccount = (account: Partial<Account>): Account => ({
   ...blankAccount(), ...account,
+  antiAfkChatEnabled: account.antiAfkChatEnabled === true,
+  antiAfkChatIntervalSec: String(Math.max(10, Math.min(Math.round(Number(account.antiAfkChatIntervalSec) || 300), 86400))),
   autoDepositToChest: account.autoDepositToChest === true,
   autoDepositRange: String(Math.max(1, Math.min(Math.round(Number(account.autoDepositRange) || 5), 16))),
   autoDepositMode: ['immediate', 'interval', 'inventoryFull', 'intervalOrFull'].includes(account.autoDepositMode as string) ? account.autoDepositMode! : 'immediate',
@@ -74,6 +80,12 @@ function App(): React.JSX.Element {
   const [editing, setEditing] = useState<Account | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [chat, setChat] = useState('');
+  const [recent, setRecent] = useState<Record<string, string[]>>({});
+  const [recentOpen, setRecentOpen] = useState(false);
+  const [streamerMode, setStreamerMode] = useState(false);
+  const mask = (text: string) => maskNames(text, accounts, streamerMode) as string;
+  useEffect(() => { AsyncStorage.getItem('afkdesk.mobile.streamerMode').then(value => setStreamerMode(value === 'true')).catch(() => Alert.alert('Storage error', 'Privacy setting could not be loaded.')); }, []);
+  const changeStreamerMode = (value: boolean) => { setStreamerMode(value); AsyncStorage.setItem('afkdesk.mobile.streamerMode', String(value)).catch(() => Alert.alert('Storage error', 'Privacy setting could not be saved.')); };
   const [chatSuggestions, setChatSuggestions] = useState<ChatSuggestion[]>([]);
   const [followLatest, setFollowLatest] = useState(true);
   const [loginCode, setLoginCode] = useState<{code: string; verificationUri?: string} | null>(null);
@@ -150,6 +162,7 @@ function App(): React.JSX.Element {
   useEffect(() => {
     setFollowLatest(true);
     setChatSuggestions([]);
+    setRecentOpen(false);
   }, [selectedId]);
 
   useEffect(() => {
@@ -206,7 +219,7 @@ function App(): React.JSX.Element {
     if (!selected || !value) return;
     setChat('');
     setChatSuggestions([]);
-    try { await engineCommand({action: 'chat', accountId: selected.id, value}); }
+    try { await engineCommand({action: 'chat', accountId: selected.id, value}); setRecent(old => ({...old, [selected.id]: addRecent(old[selected.id] || [], value)})); }
     catch (error: any) { Alert.alert('Cannot send', error.message); }
   };
   const action = (name: string, value?: string) => selected && engineCommand({action: name, accountId: selected.id, value}).catch((error: Error) => Alert.alert('Control unavailable', error.message));
@@ -259,7 +272,7 @@ function App(): React.JSX.Element {
   return <SafeAreaView style={styles.safe}>
     <StatusBar barStyle="light-content" backgroundColor="#090c10" />
     <View style={styles.header}>
-      <View><Text style={styles.brand}>AFK Desk 0.9.2</Text><Text style={styles.muted}>{engineReady ? 'On-device Minecraft client' : 'Starting engine…'}</Text></View>
+      <View><Text style={styles.brand}>AFK Desk {APP_VERSION}</Text><Text style={styles.muted}>{engineReady ? 'On-device Minecraft client' : 'Starting engine…'}</Text></View>
       <Pressable style={styles.smallButton} onPress={() => setSettingsOpen(true)}><Text style={styles.buttonText}>Settings</Text></Pressable>
     </View>
 
@@ -267,8 +280,8 @@ function App(): React.JSX.Element {
       <FlatList horizontal data={accounts} keyExtractor={item => item.id} contentContainerStyle={styles.accountStripContent}
         renderItem={({item, index}) => <View style={[styles.accountCard, item.id === selected?.id && styles.accountCardSelected]}>
           <Pressable style={styles.accountSelect} onPress={() => setSelectedId(item.id)}>
-            {item.skinUrl ? <Image source={{uri: item.skinUrl}} style={styles.avatar} /> : <View style={styles.avatarFallback}><Text style={styles.avatarLetter}>{item.username.slice(0, 1).toUpperCase()}</Text></View>}
-            <View style={styles.accountCopy}><Text numberOfLines={1} style={styles.accountName}>{item.minecraftName || item.username}</Text><Text numberOfLines={1} style={styles.muted}>{item.host}</Text></View>
+            {!streamerMode && item.skinUrl ? <Image source={{uri: item.skinUrl}} style={styles.avatar} /> : <View style={styles.avatarFallback}><Text style={styles.avatarLetter}>{streamerMode ? '•' : item.username.slice(0, 1).toUpperCase()}</Text></View>}
+            <View style={styles.accountCopy}><Text numberOfLines={1} style={styles.accountName}>{streamerMode ? `Account ${index + 1}` : item.minecraftName || item.username}</Text><Text numberOfLines={1} style={styles.muted}>{mask(item.host)}</Text></View>
             <View style={[styles.dot, (sessions[item.id]?.status === 'online') && styles.dotOnline]} />
           </Pressable>
           <View style={styles.orderRow}>
@@ -281,13 +294,13 @@ function App(): React.JSX.Element {
 
     {!selected ? <View style={styles.empty}><Text style={styles.title}>Add your first account</Text><Text style={styles.muted}>Microsoft sign-in opens in your browser and returns here.</Text><Pressable style={styles.primary} onPress={() => setEditing(blankAccount())}><Text style={styles.primaryText}>Add account</Text></Pressable></View> :
     <ScrollView style={styles.page} contentContainerStyle={styles.pageContent} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
-      <View style={styles.titleRow}><View style={styles.flex}><Text style={styles.title}>{selected.minecraftName || selected.username}</Text><Text style={styles.status}>{session?.status} · {session?.detail}</Text></View>
+      <View style={styles.titleRow}><View style={styles.flex}><Text style={styles.title}>{streamerMode ? `Account ${accounts.findIndex(item => item.id === selected.id) + 1}` : selected.minecraftName || selected.username}</Text><Text style={styles.status}>{session?.status} · {mask(session?.detail || '')}</Text></View>
         <Pressable style={styles.smallButton} onPress={() => setEditing({...selected, proxy: {...selected.proxy}})}><Text style={styles.buttonText}>Edit</Text></Pressable>
         {session?.status === 'offline' ? <Pressable style={styles.primarySmall} onPress={connect}><Text style={styles.primaryText}>Connect</Text></Pressable> : <Pressable style={styles.dangerSmall} onPress={disconnect}><Text style={styles.dangerText}>Disconnect</Text></Pressable>}
       </View>
 
       <View style={styles.console}>
-        <View style={styles.panelHeader}><Text style={styles.panelTitle}>Console</Text><View style={styles.consoleHeaderActions}>{!followLatest && <Pressable style={styles.followButton} onPress={() => setFollowLatest(true)}><Text style={styles.link}>Follow latest</Text></Pressable>}<Text style={styles.muted}>{selected.host}:{selected.port}</Text></View></View>
+        <View style={styles.panelHeader}><Text style={styles.panelTitle}>Console</Text><View style={styles.consoleHeaderActions}>{!followLatest && <Pressable style={styles.followButton} onPress={() => setFollowLatest(true)}><Text style={styles.link}>Follow latest</Text></Pressable>}<Text style={styles.muted}>{mask(selected.host)}:{selected.port}</Text></View></View>
         <ScrollView ref={logListRef} style={styles.logList} nestedScrollEnabled
           onContentSizeChange={() => { if (followLatest) logListRef.current?.scrollToEnd({animated: false}); }}
           onScroll={({nativeEvent}) => {
@@ -295,11 +308,12 @@ function App(): React.JSX.Element {
             setFollowLatest(distance < 32);
           }} scrollEventThrottle={80}>
           {session?.logs.length ? session.logs.map(item => <View key={item.id} style={styles.logLine}><Text style={styles.time}>{new Date(item.at).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}</Text>
-            <Text style={[styles.logText, item.kind === 'error' && styles.error, item.kind === 'sent' && styles.sent]}>{item.segments?.length ? item.segments.map((segment, i) => <Text key={i} accessibilityRole={segment.click ? 'link' : undefined} onPress={segment.click ? () => activateChatClick(segment.click) : undefined} onLongPress={segment.click ? () => Share.share({message: segment.click!.value}) : undefined} style={{color: segment.color, fontWeight: segment.bold ? '800' : undefined, fontStyle: segment.italic ? 'italic' : undefined, textDecorationLine: segment.click || segment.underlined ? 'underline' : segment.strikethrough ? 'line-through' : undefined}}>{segment.text}</Text>) : item.message}</Text>
+            <Text style={[styles.logText, item.kind === 'error' && styles.error, item.kind === 'sent' && styles.sent]}>{!streamerMode && item.segments?.length ? item.segments.map((segment, i) => <Text key={i} accessibilityRole={segment.click ? 'link' : undefined} onPress={segment.click ? () => activateChatClick(segment.click) : undefined} onLongPress={segment.click ? () => Share.share({message: segment.click!.value}) : undefined} style={{color: segment.color, fontWeight: segment.bold ? '800' : undefined, fontStyle: segment.italic ? 'italic' : undefined, textDecorationLine: segment.click || segment.underlined ? 'underline' : segment.strikethrough ? 'line-through' : undefined}}>{segment.text}</Text>) : mask(item.message)}</Text>
           </View>) : <Text style={styles.emptyLog}>Messages will appear here.</Text>}
         </ScrollView>
         {chatSuggestions.length > 0 && <ScrollView horizontal keyboardShouldPersistTaps="handled" contentContainerStyle={styles.chatSuggestions}>{chatSuggestions.map((suggestion, index) => <Pressable key={`${suggestion.value}-${index}`} style={styles.chatSuggestion} onPress={() => {setChat(suggestion.value); setChatSuggestions([]);}}><Text numberOfLines={1} style={styles.chatSuggestionText}>{suggestion.label || suggestion.value}</Text>{Boolean(suggestion.tooltip) && <Text numberOfLines={1} style={styles.muted}>{suggestion.tooltip}</Text>}</Pressable>)}</ScrollView>}
-        <View style={styles.chatRow}><TextInput value={chat} onChangeText={setChat} onSubmitEditing={sendChat} placeholder="Message or /command" placeholderTextColor="#626d7b" style={styles.chatInput} /><Pressable style={styles.send} onPress={sendChat}><Text style={styles.buttonText}>Send</Text></Pressable></View>
+        {recentOpen && <ScrollView style={{maxHeight: 150}} keyboardShouldPersistTaps="handled">{(recent[selected.id] || []).length ? (recent[selected.id] || []).map(message => <Pressable key={message} style={styles.chatSuggestion} onPress={() => { setChat(message); setRecentOpen(false); }}><Text numberOfLines={1} style={styles.chatSuggestionText}>{mask(message)}</Text></Pressable>) : <Text style={styles.emptyLog}>No recent messages.</Text>}</ScrollView>}
+        <View style={styles.chatRow}><Pressable accessibilityLabel="Recent messages" style={styles.send} onPress={() => setRecentOpen(!recentOpen)}><Text style={styles.buttonText}>Recent</Text></Pressable><TextInput value={chat} onChangeText={setChat} onSubmitEditing={sendChat} placeholder="Message or /command" placeholderTextColor="#626d7b" style={styles.chatInput} /><Pressable style={styles.send} onPress={sendChat}><Text style={styles.buttonText}>Send</Text></Pressable></View>
       </View>
 
       <View style={styles.statsRow}>
@@ -320,11 +334,11 @@ function App(): React.JSX.Element {
       </View>
     </ScrollView>}
 
-    <AccountModal value={editing} onClose={() => setEditing(null)} onSave={saveAccount} onDelete={account => {
+    <AccountModal streamerMode={streamerMode} value={editing} onClose={() => setEditing(null)} onSave={saveAccount} onDelete={account => {
       engineCommand({action: 'disconnect', accountId: account.id}).catch(() => {});
       setAccounts(old => old.filter(item => item.id !== account.id)); setSelectedId(accounts.find(item => item.id !== account.id)?.id || ''); setEditing(null);
     }} />
-    <SettingsModal visible={settingsOpen} accounts={accounts} onClose={() => setSettingsOpen(false)} onChange={setAccounts} />
+    <SettingsModal streamerMode={streamerMode} onStreamerMode={changeStreamerMode} visible={settingsOpen} accounts={accounts} onClose={() => setSettingsOpen(false)} onChange={setAccounts} />
     <ServerMenuModal value={session?.serverWindow || null} onClick={slot => selected && engineCommand({action: 'window-click', accountId: selected.id, slot}).catch((error: Error) => Alert.alert('Menu action failed', error.message))} onClose={() => selected && engineCommand({action: 'window-close', accountId: selected.id}).catch((error: Error) => Alert.alert('Close menu failed', error.message))} />
     <Modal transparent visible={Boolean(loginCode)} animationType="fade"><View style={styles.backdrop}><View style={styles.modalCard}><Text style={styles.title}>Microsoft sign-in</Text><Text style={styles.modalHelp}>Open Microsoft, switch to the account you want, then enter this code:</Text><Text selectable style={styles.deviceCode}>{loginCode?.code}</Text><Pressable style={styles.primary} onPress={openMicrosoftSignIn}><Text style={styles.primaryText}>Open Microsoft sign-in</Text></Pressable><Pressable style={styles.modalButton} onPress={() => setLoginCode(null)}><Text style={styles.buttonText}>Close</Text></Pressable></View></View></Modal>
   </SafeAreaView>;
@@ -416,7 +430,7 @@ function ServerMenuModal({value, onClick, onClose}: {value: ServerMenu | null; o
   </Modal>;
 }
 
-function AccountModal({value, onClose, onSave, onDelete}: {value: Account | null; onClose: () => void; onSave: (value: Account) => void; onDelete: (value: Account) => void}) {
+function AccountModal({streamerMode, value, onClose, onSave, onDelete}: {streamerMode: boolean; value: Account | null; onClose: () => void; onSave: (value: Account) => void; onDelete: (value: Account) => void}) {
   const [draft, setDraft] = useState<Account | null>(value);
   useEffect(() => setDraft(value ? {...value, proxy: {...value.proxy}} : null), [value]);
   const set = (key: keyof Account, next: any) => draft && setDraft({...draft, [key]: next});
@@ -425,7 +439,7 @@ function AccountModal({value, onClose, onSave, onDelete}: {value: Account | null
     {draft && <SafeAreaView style={styles.safe}><View style={styles.modalHeader}><Pressable onPress={onClose}><Text style={styles.link}>Cancel</Text></Pressable><Text style={styles.panelTitle}>Account setup</Text><Pressable onPress={() => onSave(draft)}><Text style={styles.link}>Save</Text></Pressable></View>
       <ScrollView contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled">
         <Text style={styles.sectionTitle}>Connection</Text>
-        <Field label="Account label or Microsoft email" value={draft.username} onChange={(v: string) => set('username', v)} />
+        <Field secret={streamerMode} label="Account label or Microsoft email" value={draft.username} onChange={(v: string) => set('username', v)} />
         <Text style={styles.help}>After sign-in, the account card shows your Minecraft name and head. This login value is kept for future sign-ins.</Text>
         <Field label="Server" value={draft.host} onChange={(v: string) => set('host', v)} />
         <Field label="Port" value={draft.port} onChange={(v: string) => set('port', v)} keyboardType="number-pad" />
@@ -437,6 +451,8 @@ function AccountModal({value, onClose, onSave, onDelete}: {value: Account | null
         <Field label="Maximum attempts (0 = unlimited)" value={draft.autoReconnectMaxAttempts} onChange={(v: string) => set('autoReconnectMaxAttempts', v)} keyboardType="number-pad" />
         <Toggle label="Anti-AFK movement" value={draft.antiAfk} onChange={v => set('antiAfk', v)} />
         <Field label="Anti-AFK interval (seconds)" value={draft.antiAfkInterval} onChange={(v: string) => set('antiAfkInterval', v)} keyboardType="number-pad" />
+        <Toggle label="Anti-AFK chat message" value={draft.antiAfkChatEnabled} onChange={v => set('antiAfkChatEnabled', v)} />
+        {draft.antiAfkChatEnabled && <><Field label="Anti-AFK message" value={draft.antiAfkChatMessage} onChange={(v: string) => set('antiAfkChatMessage', v)} /><Field label="Chat interval (seconds; 10–86400)" value={draft.antiAfkChatIntervalSec} onChange={(v: string) => set('antiAfkChatIntervalSec', v)} keyboardType="number-pad" /><Text style={styles.help}>Requires anti-AFK movement to be enabled.</Text></>}
         <Field label="Message after joining" value={draft.joinMessage} onChange={(v: string) => set('joinMessage', v)} />
         <Field label="Message after changing servers" value={draft.serverChangeMessage} onChange={(v: string) => set('serverChangeMessage', v)} />
         <Field label="Automatic message delay (seconds)" value={draft.messageDelay} onChange={(v: string) => set('messageDelay', v)} keyboardType="number-pad" />
@@ -451,18 +467,18 @@ function AccountModal({value, onClose, onSave, onDelete}: {value: Account | null
         <Text style={styles.sectionTitle}>Proxy</Text>
         <Toggle label="Use a proxy for this account" value={draft.proxy.enabled} onChange={v => proxy('enabled', v)} />
         {draft.proxy.enabled && <><View style={styles.segmented}><Pressable style={[styles.segment, draft.proxy.type === 'socks5' && styles.segmentSelected]} onPress={() => proxy('type', 'socks5')}><Text style={styles.buttonText}>SOCKS5</Text></Pressable><Pressable style={[styles.segment, draft.proxy.type === 'http' && styles.segmentSelected]} onPress={() => proxy('type', 'http')}><Text style={styles.buttonText}>HTTP</Text></Pressable></View>
-          <Field label="Proxy host" value={draft.proxy.host} onChange={(v: string) => proxy('host', v)} /><Field label="Proxy port" value={draft.proxy.port} onChange={(v: string) => proxy('port', v)} keyboardType="number-pad" /><Field label="Proxy username (optional)" value={draft.proxy.username} onChange={(v: string) => proxy('username', v)} /><Field label="Proxy password (optional)" secret value={draft.proxy.password} onChange={(v: string) => proxy('password', v)} /></>}
+          <Field label="Proxy host" value={draft.proxy.host} onChange={(v: string) => proxy('host', v)} /><Field label="Proxy port" value={draft.proxy.port} onChange={(v: string) => proxy('port', v)} keyboardType="number-pad" /><Field secret={streamerMode} label="Proxy username (optional)" value={draft.proxy.username} onChange={(v: string) => proxy('username', v)} /><Field label="Proxy password (optional)" secret value={draft.proxy.password} onChange={(v: string) => proxy('password', v)} /></>}
         {value && <Pressable style={styles.deleteButton} onPress={() => Alert.alert('Delete account?', 'This removes its local settings.', [{text: 'Cancel'}, {text: 'Delete', style: 'destructive', onPress: () => onDelete(draft)}])}><Text style={styles.dangerText}>Delete account</Text></Pressable>}
       </ScrollView></SafeAreaView>}
   </Modal>;
 }
 
-function SettingsModal({visible, accounts, onClose, onChange}: {visible: boolean; accounts: Account[]; onClose: () => void; onChange: (accounts: Account[]) => void}) {
+function SettingsModal({streamerMode, onStreamerMode, visible, accounts, onClose, onChange}: {streamerMode: boolean; onStreamerMode: (value: boolean) => void; visible: boolean; accounts: Account[]; onClose: () => void; onChange: (accounts: Account[]) => void}) {
   const allStartup = accounts.length > 0 && accounts.every(account => account.connectOnStartup);
   return <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}><SafeAreaView style={styles.safe}><View style={styles.modalHeader}><Text style={styles.panelTitle}>Settings</Text><Pressable onPress={onClose}><Text style={styles.link}>Done</Text></Pressable></View><View style={styles.form}>
     <Text style={styles.sectionTitle}>Startup</Text><Toggle label="Connect every account on app start" value={allStartup} onChange={value => onChange(accounts.map(account => ({...account, connectOnStartup: value})))} />
     <Text style={styles.sectionTitle}>Background operation</Text><Text style={styles.help}>Android keeps the AFK engine in a foreground service with a persistent notification. iOS can maintain sessions while open, but the operating system may suspend network connections in the background.</Text>
-    <Text style={styles.sectionTitle}>Privacy</Text><Text style={styles.help}>Microsoft passwords are never requested or saved. Authentication tokens and account settings stay in this app's private storage.</Text>
+    <Text style={styles.sectionTitle}>Privacy</Text><Toggle label="Streamer mode" value={streamerMode} onChange={onStreamerMode} /><Text style={styles.help}>Hide account names in the app.</Text><Text style={styles.help}>Microsoft passwords are never requested or saved. Authentication tokens and account settings stay in this app's private storage.</Text>
   </View></SafeAreaView></Modal>;
 }
 
