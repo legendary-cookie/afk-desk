@@ -346,7 +346,7 @@ function refreshStreamerDisplay() {
   el['streamer-mode'].checked = state.settings.streamerMode === true
   render()
   if (el['pov-dialog'].open) renderPovGrid()
-  if (el['wall-dialog'].open) { wallCanvases.clear(); renderWall() }
+  if (el['wall-dialog'].open) renderWall()
   if (el['logs-dialog'].open) void refreshPersistentLogs()
 }
 
@@ -2255,36 +2255,55 @@ function stopWall() {
   wallGeneration++
   clearTimeout(wallTimer); wallTimer = null
   wallCanvases.clear()
+  wallCards.clear()
 }
 function wallAccounts() {
   return state.accounts.filter(account => ['online', 'connected'].includes(getStatus(account.id).status))
+}
+const wallCards = new Map()
+function wallStatusLines(account, live) {
+  const telemetry = state.telemetry.get(account.id) || {}
+  const p = telemetry.position
+  const lines = [`Server: ${maskText(account.host || '—')}`, `Health: ${telemetry.health ?? '—'} · Food: ${telemetry.food ?? '—'}`, `Position: ${p ? `${Math.round(p.x)}, ${Math.round(p.y)}, ${Math.round(p.z)}` : '—'}`, `Dimension: ${maskText(telemetry.dimension || '—')}`]
+  if (!live) lines.push(`Live view limit (${state.settings.wallMaxLive ?? 4}) reached. Raise “Wall maximum live feeds” in Settings, or click to open this POV.`)
+  else lines.push('Loading view…')
+  return lines
 }
 function renderWall() {
   const accounts = wallAccounts()
   const live = new Set(window.afkWall.liveIds(accounts, state.settings.wallMaxLive))
   for (const id of wallCanvases.keys()) if (!live.has(id)) wallCanvases.delete(id)
-  el['wall-grid'].replaceChildren(...accounts.map(account => {
-    const card = document.createElement('button'); card.type = 'button'; card.className = 'pov-card wall-card'
-    const header = document.createElement('header')
-    const name = document.createElement('strong'); name.textContent = displayAccount(account)
-    header.append(createPlayerHead(account, 'account-avatar'), name)
-    card.append(header)
-    if (live.has(account.id) && wallCanvases.has(account.id)) {
-      card.append(wallCanvases.get(account.id))
-    } else {
-      const telemetry = state.telemetry.get(account.id) || {}
-      const position = telemetry.position
-      const info = document.createElement('div'); info.className = 'wall-status'
-      const lines = [`Server: ${maskText(account.host || '—')}`, `Health: ${telemetry.health ?? '—'} · Food: ${telemetry.food ?? '—'}`, `Position: ${position ? `${position.x}, ${position.y}, ${position.z}` : '—'}`, `Dimension: ${maskText(telemetry.dimension || '—')}`]
-      for (const line of lines) { const row = document.createElement('div'); row.textContent = line; info.append(row) }
-      card.append(info)
+  for (const id of wallCards.keys()) if (!accounts.some(a => a.id === id)) wallCards.delete(id)
+  // Reuse each account's card so refreshes only swap the picture instead of rebuilding the grid (no flicker, keeps focus).
+  const cards = accounts.map(account => {
+    let entry = wallCards.get(account.id)
+    if (!entry) {
+      const card = document.createElement('button'); card.type = 'button'; card.className = 'pov-card wall-card'
+      const header = document.createElement('header')
+      const name = document.createElement('strong')
+      header.append(createPlayerHead(account, 'account-avatar'), name)
+      const body = document.createElement('div'); body.className = 'wall-body'
+      card.append(header, body)
+      card.addEventListener('click', () => {
+        el['wall-dialog'].close(); stopWall(); el['pov-search'].value = ''; openPov(); povFocusId = account.id; state.selectedId = account.id
+        render(); renderPovGrid(); void refreshPov(); startPovPolling()
+      })
+      entry = { card, name, body }
+      wallCards.set(account.id, entry)
     }
-    card.addEventListener('click', () => {
-      el['wall-dialog'].close(); stopWall(); el['pov-search'].value = ''; openPov(); povFocusId = account.id; state.selectedId = account.id
-      render(); renderPovGrid(); void refreshPov(); startPovPolling()
-    })
-    return card
-  }))
+    entry.name.textContent = displayAccount(account)
+    const canvas = live.has(account.id) ? wallCanvases.get(account.id) : null
+    if (canvas) {
+      if (entry.body.firstChild !== canvas || entry.body.childNodes.length !== 1) entry.body.replaceChildren(canvas)
+    } else {
+      const info = document.createElement('div'); info.className = 'wall-status'
+      for (const line of wallStatusLines(account, live.has(account.id))) { const row = document.createElement('div'); row.textContent = line; info.append(row) }
+      entry.body.replaceChildren(info)
+    }
+    return entry.card
+  })
+  const current = [...el['wall-grid'].children]
+  if (current.length !== cards.length || current.some((node, index) => node !== cards[index])) el['wall-grid'].replaceChildren(...cards)
   if (!accounts.length) { const empty = document.createElement('p'); empty.className = 'dialog-copy'; empty.textContent = 'No online accounts.'; el['wall-grid'].append(empty) }
 }
 async function refreshWall(generation) {

@@ -912,9 +912,13 @@ dialog.macro-templates-dialog {
   max-width: 100%;
 }
 
-.wall-card { color:var(--text); text-align:left; cursor:pointer; padding:0; font:inherit; }
+.wall-card { color:var(--text); text-align:left; cursor:pointer; padding:0; font:inherit; display:flex; flex-direction:column; align-items:stretch; justify-content:flex-start; }
+.wall-card:hover, .wall-card:focus-visible { border-color:var(--accent, #4ade80); }
+.wall-body { aspect-ratio:16/9; background:#090c10; display:flex; }
+.wall-body canvas { display:block; width:100%; height:100%; object-fit:contain; }
+.wall-body .wall-status { flex:1; }
 .wall-card header { grid-template-columns:28px minmax(0,1fr); }
-.wall-status { min-height:120px; padding:16px; color:var(--muted); line-height:1.8; overflow-wrap:anywhere; }
+.wall-status { padding:12px 16px; font-size:12px; color:var(--muted); line-height:1.8; overflow-wrap:anywhere; }
 
 .minimap { padding: 10px 12px 0; }
 .minimap-options { display: flex; gap: 8px; justify-content: space-between; font-size: 11px; }
