@@ -89,6 +89,29 @@
     { value: 'not', label: 'NOT (invert condition)' }
   ])
 
+  // Contract metadata is provided by the preload; the browser bridge can use
+  // the local fallback definitions when the desktop contract is unavailable.
+  const contract = typeof window !== 'undefined' ? window.afkDesk?.macros?.contract : null
+  if (contract) {
+    for (const [type, meta] of Object.entries(contract.triggers)) if (TRIGGER_TYPES[type]) Object.assign(TRIGGER_TYPES[type], meta)
+    for (const [type, meta] of Object.entries(contract.steps)) if (STEP_TYPES[type]) Object.assign(STEP_TYPES[type], meta)
+    for (const item of CONDITION_TYPES) if (contract.conditions[item.value]) Object.assign(item, contract.conditions[item.value])
+  }
+  for (const { group, types } of STEP_GROUPS) {
+    const category = ({ 'Inventory & GUI': 'Inventory', 'Flow control': 'Logic', Connection: 'Control' })[group] || group
+    for (const type of types) if (!STEP_TYPES[type].category) STEP_TYPES[type].category = category
+  }
+  function paletteGroups(steps = STEP_TYPES) {
+    const categories = ['Communication', 'Clicking', 'Inventory', 'Movement', 'Control', 'Logic']
+    return categories.map(group => ({ group, types: Object.keys(steps).filter(type => (steps[type].category || 'Control') === group) }))
+  }
+  function serializeDraft(value) { return JSON.stringify(value, null, 2) }
+  function parseDraft(value) {
+    const parsed = JSON.parse(value)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Macro JSON must be an object.')
+    return parsed
+  }
+
   const TEMPLATES = Object.freeze({
     // 1. Join → /afk: Enters AFK mode after connecting to server
     'join-afk': () => ({
@@ -348,6 +371,7 @@
     let collapsedPaths = new Set()
     let draggedStepPath = null
     let activeTab = 'editor'
+    let rawJson = false
     // Live run tracking: key `${macroId}:${accountId}` -> RunEvent, and macroId -> latest status summary
     const liveByMacroAccount = new Map()
     const lastStatusByMacro = new Map()
@@ -373,6 +397,25 @@
       })
       el['macro-duplicate-btn']?.addEventListener('click', () => void duplicateSelectedMacro())
       el['macro-delete-btn']?.addEventListener('click', () => void deleteSelectedMacro())
+      el['macro-share-export']?.addEventListener('click', async () => {
+        try {
+          if (!selectedMacroId) throw new Error('Select a saved macro first.')
+          const link = await api.shareExport('macro', selectedMacroId)
+          await navigator.clipboard.writeText(link)
+          toast('Macro share link copied. Text and account targets were removed.')
+        } catch (error) { toast(cleanError(error), 'error') }
+      })
+      el['macro-share-import']?.addEventListener('click', async () => {
+        const link = await window.askShareLink()
+        if (!link) return
+        try {
+          const preview = await api.sharePreview(link)
+          if (preview.kind !== 'macro') throw new Error('This link is not a macro.')
+          createNewMacro(preview.data)
+          draftValidationErrors = preview.errors || []
+          toast('Preview the macro, fill in removed text and targets, then save.')
+        } catch (error) { toast(cleanError(error), 'error') }
+      })
       el['macro-import-btn']?.addEventListener('click', openImportPanel)
       el['macro-export-btn']?.addEventListener('click', () => void openExportPanel())
       el['macro-import-file']?.addEventListener('change', handleImportFile)
@@ -380,6 +423,7 @@
       el['macro-json-copy']?.addEventListener('click', () => void copyJsonExport())
       el['macro-json-close']?.addEventListener('click', () => { el['macro-json-panel'].hidden = true })
 
+      el['macro-json-toggle']?.addEventListener('click', toggleRawJson)
       el['macro-tab-editor']?.addEventListener('click', () => switchTab('editor'))
       el['macro-tab-runs']?.addEventListener('click', () => switchTab('runs'))
       el['macro-undo-btn']?.addEventListener('click', undoDraft)
@@ -996,6 +1040,8 @@
 
     function setDraft(nextDraft) {
       draft = nextDraft
+      if (rawJson && el['macro-draft-json']) el['macro-draft-json'].value = nextDraft ? serializeDraft(nextDraft) : ''
+      if (el['macro-draft-json-panel']) el['macro-draft-json-panel'].hidden = !rawJson || !nextDraft
       history = nextDraft ? [clone(nextDraft)] : []
       historyIndex = nextDraft ? 0 : -1
       selectedStepPath = nextDraft?.steps?.length ? [0] : []
@@ -1042,6 +1088,31 @@
       if (el['macro-redo-btn']) el['macro-redo-btn'].disabled = historyIndex < 0 || historyIndex >= history.length - 1
     }
 
+    function applyRawJson() {
+      if (!rawJson || !draft) return true
+      try {
+        const parsed = parseDraft(el['macro-draft-json'].value)
+        draft = parsed
+        el['macro-draft-json-error'].hidden = true
+        return true
+      } catch (error) {
+        el['macro-draft-json-error'].textContent = error.message
+        el['macro-draft-json-error'].hidden = false
+        return false
+      }
+    }
+
+    function toggleRawJson() {
+      if (!draft) return
+      if (rawJson && !applyRawJson()) return
+      rawJson = !rawJson
+      if (rawJson) el['macro-draft-json'].value = serializeDraft(draft)
+      el['macro-draft-json-panel'].hidden = !rawJson
+      el['macro-editor-view'].hidden = rawJson
+      el['macro-json-toggle'].setAttribute('aria-pressed', String(rawJson))
+      if (!rawJson) renderEditor()
+    }
+
     function switchTab(tab) {
       activeTab = tab === 'runs' ? 'runs' : 'editor'
       el['macro-tab-editor']?.classList.toggle('active', activeTab === 'editor')
@@ -1049,8 +1120,9 @@
       if (el['macro-tab-editor']) el['macro-tab-editor'].setAttribute('aria-selected', String(activeTab === 'editor'))
       el['macro-tab-runs']?.classList.toggle('active', activeTab === 'runs')
       if (el['macro-tab-runs']) el['macro-tab-runs'].setAttribute('aria-selected', String(activeTab === 'runs'))
-      if (el['macro-editor-view']) el['macro-editor-view'].hidden = activeTab !== 'editor' || !draft
+      if (el['macro-editor-view']) el['macro-editor-view'].hidden = (activeTab !== 'editor' || !draft || rawJson)
       if (el['macro-runs-view']) el['macro-runs-view'].hidden = activeTab !== 'runs' || !draft
+      if (el['macro-draft-json-panel']) el['macro-draft-json-panel'].hidden = !rawJson || activeTab !== 'editor' || !draft
       if (activeTab === 'runs' && draft) void loadRunsForSelected()
     }
 
@@ -1072,7 +1144,7 @@
     function renderEditor() {
       const hasDraft = Boolean(draft)
       if (el['macro-empty-editor']) el['macro-empty-editor'].hidden = hasDraft
-      if (el['macro-editor-view']) el['macro-editor-view'].hidden = !hasDraft || activeTab !== 'editor'
+      if (el['macro-editor-view']) el['macro-editor-view'].hidden = !hasDraft || activeTab !== 'editor' || rawJson
       if (el['macro-runs-view']) el['macro-runs-view'].hidden = !hasDraft || activeTab !== 'runs'
       if (el['macro-save-btn']) el['macro-save-btn'].disabled = !hasDraft
       if (el['macro-duplicate-btn']) el['macro-duplicate-btn'].disabled = !hasDraft
@@ -1469,14 +1541,42 @@
       el['macro-step-picker'].hidden = !nextOpen
       if (nextOpen) {
         renderStepPicker()
-        el['macro-step-picker'].querySelector('button:not(:disabled)')?.focus()
+        el['macro-step-picker'].querySelector('input')?.focus()
       }
     }
 
     function renderStepPicker() {
       const picker = el['macro-step-picker']
       if (!picker) return
-      const groups = STEP_GROUPS.map(({ group, types }) => {
+      const search = document.createElement('input')
+      search.type = 'search'
+      search.placeholder = 'Search actions…'
+      search.setAttribute('aria-label', 'Search actions')
+      const triggerGroup = document.createElement('div')
+      triggerGroup.className = 'macro-picker-group'
+      const triggerHeading = document.createElement('h4')
+      triggerHeading.textContent = 'Triggers'
+      const triggerGrid = document.createElement('div')
+      triggerGrid.className = 'macro-picker-grid'
+      for (const [type, spec] of Object.entries(TRIGGER_TYPES)) {
+        const button = document.createElement('button')
+        button.type = 'button'
+        button.className = 'macro-picker-btn'
+        button.textContent = spec.label
+        const reason = unsupportedEditionReason(spec.editions)
+        button.disabled = Boolean(reason)
+        if (reason) button.title = reason
+        button.addEventListener('click', () => {
+          pushHistory()
+          draft.trigger = defaultTriggerFor(type, draft.trigger?.cooldownMs || 0)
+          picker.hidden = true
+          renderEditor()
+          el['macro-trigger-type']?.focus()
+        })
+        triggerGrid.append(button)
+      }
+      triggerGroup.append(triggerHeading, triggerGrid)
+      const groups = [triggerGroup, ...paletteGroups().map(({ group, types }) => {
         const section = document.createElement('div')
         section.className = 'macro-picker-group'
         const heading = document.createElement('h4')
@@ -1502,8 +1602,15 @@
         }
         section.append(heading, grid)
         return section
+      })]
+      search.addEventListener('input', () => {
+        const query = search.value.trim().toLowerCase()
+        for (const group of groups) {
+          for (const button of group.querySelectorAll('button')) button.hidden = !button.textContent.toLowerCase().includes(query)
+          group.hidden = ![...group.querySelectorAll('button')].some(button => !button.hidden)
+        }
       })
-      picker.replaceChildren(...groups)
+      picker.replaceChildren(search, ...groups)
     }
 
     function resolveStepListByPath(rootSteps, listPath) {
@@ -1693,7 +1800,7 @@
         const typeSelect = document.createElement('select')
         typeSelect.className = 'macro-step-type-select'
         typeSelect.setAttribute('aria-label', 'Step action type')
-        for (const { group, types } of STEP_GROUPS) {
+        for (const { group, types } of paletteGroups()) {
           const optgroup = document.createElement('optgroup')
           optgroup.label = group
           for (const t of types) {
@@ -1763,6 +1870,12 @@
         // Step-specific fields
         const fields = buildStepFields(step, stepPath, valPath, depth)
         if (fields) card.append(fields)
+        if (step.type === 'repeat') {
+          const loopEnd = document.createElement('div')
+          loopEnd.className = 'macro-loop-end'
+          loopEnd.textContent = '↻ LOOP end'
+          card.append(loopEnd)
+        }
 
         // Step-specific validation errors
         const stepErrors = draftValidationErrors.filter((err) => err.path === valPath || (err.path.startsWith(`${valPath}/`) && !err.path.slice(valPath.length + 1).includes('/')))
@@ -2339,7 +2452,7 @@
       placeholder.value = ''
       placeholder.textContent = '＋ Add nested step…'
       quickAddSelect.append(placeholder)
-      for (const { group, types } of STEP_GROUPS) {
+      for (const { group, types } of paletteGroups()) {
         const og = document.createElement('optgroup')
         og.label = group
         for (const t of types) {
@@ -2501,8 +2614,8 @@
     }
 
     async function saveCurrentMacro() {
-      if (!draft) return
-      draft.name = el['macro-name-input']?.value.trim() || 'Untitled macro'
+      if (!draft || !applyRawJson()) return
+      if (!rawJson) draft.name = el['macro-name-input']?.value.trim() || 'Untitled macro'
       try {
         const saved = await api.macros.save(draft)
         draftValidationErrors = []
@@ -2728,7 +2841,7 @@
         }
       }
 
-      if (inInput || !draft || activeTab !== 'editor') return
+      if (inInput || !draft || activeTab !== 'editor' || rawJson) return
 
       if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
         const delta = event.key === 'ArrowDown' ? 1 : -1
@@ -2781,7 +2894,7 @@
     }
   }
 
-  const exposed = { createMacroEditor, TEMPLATES }
+  const exposed = { createMacroEditor, TEMPLATES, paletteGroups, serializeDraft, parseDraft }
   if (typeof window !== 'undefined') {
     window.afkMacroEditor = exposed
   }

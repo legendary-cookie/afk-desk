@@ -5,7 +5,7 @@ const os = require('node:os')
 const path = require('node:path')
 const { AccountStore, SettingsStore, normalizeSettings, startupConnectionDelay } = require('../electron/store.cjs')
 const betaDefaults = {
-  streamerMode: false, notificationsEnabled: false, useLauncherPackCache: true, wallFps: 1, wallMaxLive: 4, workspaceDesign: 'hybrid', colorTheme: 'obsidian',
+  onboardingDone: false, streamerMode: false, notificationsEnabled: false, useLauncherPackCache: true, wallFps: 1, wallMaxLive: 4, workspaceDesign: 'hybrid', colorTheme: 'obsidian',
   povRefreshMs: 1500, povFrameRate: 30, povRadius: 6, povColumns: 3,
   povMaxFeeds: 9, povViewMode: 'perspective', povShowHud: true
 }

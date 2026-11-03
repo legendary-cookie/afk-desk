@@ -104,7 +104,7 @@ const state = {
 }
 
 const el = Object.fromEntries([
-  'account-list', 'account-count', 'add-account', 'open-settings', 'toggle-sidebar', 'open-command-center', 'command-dialog', 'command-search', 'command-results', 'close-command-center',
+  'account-list', 'account-count', 'add-account', 'import-profile-share', 'share-profile', 'open-settings', 'toggle-sidebar', 'open-command-center', 'command-dialog', 'command-search', 'command-results', 'close-command-center',
   'quick-scale', 'quick-scale-number', 'reset-scale', 'quick-scale-value', 'quick-workspace-design', 'quick-color-theme', 'workspace-design', 'color-theme', 'display-menu', 'console-menu',
   'streamer-quick-toggle', 'streamer-mode', 'macro-menu', 'settings-dialog', 'close-settings', 'start-with-windows', 'notifications-enabled', 'notify-attach-pov', 'notify-attach-inventory', 'notify-pov-offscreen', 'stagger-startup-connections', 'use-launcher-pack-cache', 'startup-connection-delay', 'save-settings', 'empty-state',
   'dashboard', 'account-title', 'app-version', 'settings-app-version', 'edit-account', 'open-logs', 'open-automations', 'open-pov', 'connection-button', 'status-banner',
@@ -123,8 +123,8 @@ const el = Object.fromEntries([
   'pov-settings-refresh', 'pov-settings-fps', 'pov-settings-radius', 'pov-settings-render-distance', 'pov-settings-columns', 'pov-max-feeds', 'pov-settings-view-mode', 'pov-show-hud', 'column-resizer', 'inventory-resizer',
   'server-window-dialog', 'server-window-title', 'server-window-stage', 'server-window-art', 'server-window-grid', 'close-server-window', 'logs-dialog', 'close-logs', 'log-filter', 'refresh-logs',
   'clear-persistent-logs', 'persistent-log-view', 'automation-dialog', 'close-automation', 'macro-watch-account', 'macro-live-chip', 'macro-run-now', 'macro-stop-run', 'macro-library-pane', 'macro-library-search',
-  'macro-new-btn', 'macro-template-picker', 'macro-duplicate-btn', 'macro-delete-btn', 'macro-import-btn', 'macro-export-btn', 'macro-import-file', 'macro-json-panel', 'macro-json-label', 'macro-json-io',
-  'macro-json-error', 'macro-json-confirm-import', 'macro-json-copy', 'macro-json-close', 'macro-library-list', 'macro-detail-pane', 'macro-tab-editor', 'macro-tab-runs', 'macro-runs-badge', 'macro-undo-btn',
+  'macro-share-import', 'macro-share-export', 'macro-new-btn', 'macro-template-picker', 'macro-duplicate-btn', 'macro-delete-btn', 'macro-import-btn', 'macro-export-btn', 'macro-import-file', 'macro-json-panel', 'macro-json-label', 'macro-json-io',
+  'macro-json-error', 'macro-json-confirm-import', 'macro-json-copy', 'macro-json-close', 'macro-library-list', 'macro-detail-pane', 'macro-tab-editor', 'macro-tab-runs', 'macro-json-toggle', 'macro-draft-json-panel', 'macro-draft-json', 'macro-draft-json-error', 'macro-runs-badge', 'macro-undo-btn',
   'macro-redo-btn', 'macro-close-editor-btn', 'macro-save-btn', 'macro-validation-banner', 'macro-empty-editor', 'macro-editor-view', 'macro-trigger-card', 'macro-editor-enabled-wrap', 'macro-editor-enabled', 'macro-name-input',
   'macro-trigger-type', 'macro-trigger-cooldown', 'macro-trigger-fields', 'macro-trigger-error', 'macro-targets-card', 'macro-target-mode', 'macro-concurrency', 'macro-on-error', 'macro-default-delay', 'macro-max-runtime',
   'macro-target-accounts-list', 'macro-target-tags-box', 'macro-target-tags-input', 'macro-target-tags-suggestions', 'macro-targets-error', 'macro-add-stop-cond', 'macro-stop-when-list', 'macro-steps-card', 'macro-steps-count', 'macro-open-step-picker',
@@ -159,10 +159,31 @@ async function init() {
   observePanelFit()
   startMinimap()
   api.onBotEvent(handleBotEvent)
+  const tour = window.afkOnboarding.create({ document, window, settings: () => state.settings, save: async () => {
+    state.settings = await api.saveSettings({ ...state.settings, onboardingDone: true })
+  }, onError: error => toast(`Tour completion was not saved: ${cleanError(error)}`, 'error') })
+  document.getElementById('open-help-tour').addEventListener('click', () => tour.open())
+  if (!state.settings.onboardingDone) tour.open()
 }
 
 function bindEvents() {
   el['add-account'].addEventListener('click', () => openAccountDialog())
+  el['import-profile-share'].addEventListener('click', async () => {
+    const link = await window.askShareLink()
+    if (!link) return
+    try {
+      const preview = await api.sharePreview(link)
+      if (preview.kind !== 'profile') throw new Error('This link is not a server profile.')
+      openAccountDialog(preview.data, true)
+    } catch (error) { toast(cleanError(error), 'error') }
+  })
+  el['share-profile'].addEventListener('click', async () => {
+    try {
+      const link = await api.shareExport('profile', el['account-id'].value)
+      await navigator.clipboard.writeText(link)
+      toast('Profile share link copied.')
+    } catch (error) { toast(cleanError(error), 'error') }
+  })
   el['auto-deposit-mode'].addEventListener('change', updateAutoDepositFields)
   el['auto-deposit-interval-unit'].addEventListener('change', updateAutoDepositFields)
   el['open-settings'].addEventListener('click', openSettingsDialog)
@@ -890,7 +911,16 @@ function updateAutoDepositFields() {
   el['auto-deposit-interval'].max = String(Math.floor(86400 / Number(el['auto-deposit-interval-unit'].value || 1)))
 }
 
-function openAccountDialog(account) {
+window.askShareLink = () => new Promise((resolve) => {
+  const dialog = document.getElementById('share-link-dialog')
+  const input = document.getElementById('share-link-input')
+  input.value = ''
+  dialog.addEventListener('close', () => resolve(dialog.returnValue === 'preview' ? input.value.trim() : ''), { once: true })
+  dialog.showModal()
+  input.focus()
+})
+
+function openAccountDialog(account, importing = false) {
   el['account-form'].reset()
   for (const input of [el['profile-name'], el.label, el.username, el['proxy-username']]) input.type = state.settings.streamerMode ? 'password' : (input === el.username ? 'email' : 'text')
   el['form-error'].hidden = true
@@ -965,9 +995,10 @@ function openAccountDialog(account) {
   el['server-change-message'].value = account?.serverChangeMessage || ''
   el['message-delay'].value = account?.messageDelay ?? 6
   el['server-change-retry-minutes'].value = account?.serverChangeRetryMinutes ?? 30
-  el['dialog-title'].textContent = account ? 'Edit account' : 'Add account'
-  el['delete-account'].hidden = !account
-  el['duplicate-profile'].hidden = !account
+  el['dialog-title'].textContent = importing ? 'Preview shared profile — enter your account to save' : account ? 'Edit account' : 'Add account'
+  el['delete-account'].hidden = !account || importing
+  el['share-profile'].hidden = !account || importing
+  el['duplicate-profile'].hidden = !account || importing
   el['account-dialog'].showModal()
   setTimeout(() => (account ? el.host : el.username).focus(), 0)
 }
@@ -2775,4 +2806,51 @@ function drawMinimap(canvas, map) {
   }
   const [x, y] = point(p.x, p.z), yaw = map.yaw || 0
   ctx.save(); ctx.translate(x, y); ctx.rotate(-yaw); ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.moveTo(0, -7); ctx.lineTo(-5, 5); ctx.lineTo(0, 3); ctx.lineTo(5, 5); ctx.closePath(); ctx.fill(); ctx.restore()
+}
+
+
+// Bulk appearance changes are submitted once and processed sequentially in the main process.
+{
+  const byId = id => document.getElementById(id)
+  const dialog = byId('bulk-appearance-dialog')
+  const apply = byId('bulk-appearance-apply')
+  byId('bulk-appearance-open').addEventListener('click', () => {
+    const list = byId('bulk-appearance-accounts')
+    list.replaceChildren(...state.accounts.map(account => {
+      const label = document.createElement('label')
+      const checkbox = document.createElement('input')
+      checkbox.type = 'checkbox'; checkbox.value = account.id
+      label.append(checkbox, document.createTextNode(' ' + displayAccount(account) + ' '))
+      return label
+    }))
+    byId('bulk-appearance-results').textContent = ''
+    dialog.showModal()
+  })
+  byId('bulk-appearance-close').addEventListener('click', () => dialog.close())
+  apply.addEventListener('click', async () => {
+    const output = byId('bulk-appearance-results')
+    const ids = [...byId('bulk-appearance-accounts').querySelectorAll('input:checked')].map(node => node.value)
+    const file = byId('bulk-skin-file').files[0]
+    const url = byId('bulk-skin-url').value.trim()
+    const cape = byId('bulk-cape').value.trim()
+    try {
+      if (file && url) throw new Error('Choose either a file or a URL for the skin.')
+      if (file && file.size > 1024 * 1024) throw new Error('Choose a PNG skin under 1 MB.')
+      const skin = file || url ? { variant: byId('bulk-skin-variant').value } : null
+      if (file) {
+        const bytes = new Uint8Array(await file.arrayBuffer())
+        let binary = ''
+        for (const byte of bytes) binary += String.fromCharCode(byte)
+        skin.data = btoa(binary)
+      } else if (skin) skin.url = url
+      apply.disabled = true
+      output.textContent = 'Applying changes…'
+      const results = await api.bulkAppearance(ids, { skin, cape: cape || null })
+      output.textContent = results.map(result => {
+        const account = state.accounts.find(item => item.id === result.id)
+        return `${account ? displayAccount(account) : result.id}: ${result.status} — ${result.message}`
+      }).join('\n')
+    } catch (error) { output.textContent = error.message }
+    finally { apply.disabled = false }
+  })
 }

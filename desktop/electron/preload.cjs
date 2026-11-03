@@ -1,6 +1,9 @@
 const { contextBridge, ipcRenderer, webFrame } = require('electron')
 
 contextBridge.exposeInMainWorld('afkDesk', {
+  shareExport: (kind, id) => ipcRenderer.invoke('share:export', { kind, id }),
+  sharePreview: (link) => ipcRenderer.invoke('share:preview', link),
+  bulkAppearance: (ids, change) => ipcRenderer.invoke('accounts:bulk-appearance', { ids, change }),
   listAccounts: () => ipcRenderer.invoke('accounts:list'),
   saveAccount: (account) => ipcRenderer.invoke('accounts:save', account),
   deleteAccount: (id) => ipcRenderer.invoke('accounts:delete', id),
@@ -33,6 +36,7 @@ contextBridge.exposeInMainWorld('afkDesk', {
   runAutomation: (id, macroId) => ipcRenderer.invoke('macros:run', { accountId: id, macroId }),
   stopAutomation: (id) => ipcRenderer.invoke('macros:stop', { accountId: id }),
   macros: {
+    contract: (() => { const { TRIGGER_TYPES, STEP_TYPES, CONDITION_METADATA } = require('./macro/contract.cjs'); return { triggers: TRIGGER_TYPES, steps: STEP_TYPES, conditions: CONDITION_METADATA } })(),
     list: () => ipcRenderer.invoke('macros:list'),
     save: (macro) => ipcRenderer.invoke('macros:save', macro),
     remove: (id) => ipcRenderer.invoke('macros:delete', id),

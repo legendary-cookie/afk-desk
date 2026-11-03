@@ -1,0 +1,47 @@
+const test = require('node:test')
+const assert = require('node:assert/strict')
+const { steps, create } = require('../src/onboarding.js')
+const { SettingsStore } = require('../electron/store.cjs')
+const fs = require('node:fs')
+const os = require('node:os')
+const path = require('node:path')
+
+test('tour navigates, falls back for unavailable controls, persists dismissal and can reopen', async () => {
+  const elements = new Map()
+  const document = { activeElement: null, getElementById(id) {
+    if (!elements.has(id)) elements.set(id, { id, hidden: false, disabled: false, style: {}, handlers: {}, addEventListener(type, fn) { this.handlers[type] = fn }, focus() { document.activeElement = this }, getClientRects() { return this.visible === false ? [] : [{}] }, getBoundingClientRect() { return { left: 10, top: 20, width: 30, height: 40 } } })
+    return elements.get(id)
+  } }
+  const get = id => document.getElementById(id)
+  get('connection-button').visible = false
+  get('add-account').getBoundingClientRect = () => ({ left: 50, top: 20, width: 30, height: 40 })
+  let saves = 0
+  const tour = create({ document, window: { addEventListener() {} }, save: async () => { saves++ }, onError: error => { throw error } })
+  tour.open()
+  assert.equal(get('onboarding-title').textContent, 'Add an account')
+  assert.equal(get('onboarding-back').disabled, true)
+  get('onboarding-next').handlers.click(); get('onboarding-next').handlers.click()
+  assert.equal(get('onboarding-title').textContent, 'Start your bot')
+  assert.equal(get('onboarding-highlight').style.left, '46px')
+  get('onboarding-back').handlers.click()
+  assert.equal(get('onboarding-title').textContent, 'Add a server profile')
+  await get('onboarding-dismiss').handlers.click()
+  assert.equal(saves, 1)
+  assert.equal(get('onboarding').hidden, true)
+  tour.open()
+  for (let i = 1; i < steps.length; i++) get('onboarding-next').handlers.click()
+  assert.equal(get('onboarding-next').textContent, 'Finish')
+  get('onboarding-next').handlers.click()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(saves, 2)
+  assert.equal(get('onboarding').hidden, true)
+})
+
+test('onboarding completion defaults to false and survives settings persistence', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'afkdesk-tour-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const store = new SettingsStore(directory)
+  assert.equal(store.get().onboardingDone, false)
+  store.save({ ...store.get(), onboardingDone: true })
+  assert.equal(store.get().onboardingDone, true)
+})

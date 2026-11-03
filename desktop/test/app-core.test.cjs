@@ -42,6 +42,9 @@ test('anti-AFK chat settings have defaults, bounds and survive partial updates',
 })
 
 const ORIGINAL_IPC_CHANNELS = Object.freeze([
+  'share:export',
+  'share:preview',
+  'accounts:bulk-appearance',
   'accounts:list',
   'accounts:save',
   'accounts:delete',

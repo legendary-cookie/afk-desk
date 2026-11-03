@@ -238,6 +238,9 @@ app.on('before-quit', () => {
 
 function registerIpc() {
   const handle = (channel, callback) => registerTrustedHandler(ipcMain, () => mainWindow, documentUrl, channel, callback)
+  handle('share:export', (_event, input) => core.share.export(input))
+  handle('share:preview', (_event, link) => core.share.preview(link))
+  handle('accounts:bulk-appearance', (_event, input) => core.accounts.bulkAppearance(input))
   handle('accounts:list', () => core.accounts.list())
   handle('accounts:save', (_event, input) => core.accounts.save(input))
   handle('accounts:delete', (_event, id) => core.accounts.delete(id))

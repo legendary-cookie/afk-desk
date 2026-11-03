@@ -72,56 +72,70 @@ const LIMITS = Object.freeze({
 // ---------------------------------------------------------------------------
 
 const TRIGGER_TYPES = Object.freeze({
-  manual: { editions: ['java', 'bedrock'] },
-  playerAppears: { editions: ['java'] },
-  join: { editions: ['java', 'bedrock'] },
-  worldChange: { editions: ['java'] },
-  timer: { editions: ['java', 'bedrock'] },
-  schedule: { editions: ['java', 'bedrock'] },
-  chat: { editions: ['java', 'bedrock'] },
-  death: { editions: ['java'] },
-  disconnected: { editions: ['java', 'bedrock'] },
-  healthBelow: { editions: ['java'] },
-  hungerBelow: { editions: ['java'] },
-  inventoryFull: { editions: ['java'] },
-  inventoryChanged: { editions: ['java'] },
-  windowOpen: { editions: ['java'] }
+  manual: { label: 'Manual (Run now)', category: 'Triggers', editions: ['java', 'bedrock'] },
+  playerAppears: { label: 'Player appears', category: 'Triggers', editions: ['java'] },
+  join: { label: 'On server join', category: 'Triggers', editions: ['java', 'bedrock'] },
+  worldChange: { label: 'On world / server change', category: 'Triggers', editions: ['java'] },
+  timer: { label: 'Timer interval', category: 'Triggers', editions: ['java', 'bedrock'] },
+  schedule: { label: 'Daily schedule (HH:MM)', category: 'Triggers', editions: ['java', 'bedrock'] },
+  chat: { label: 'Chat message match', category: 'Triggers', editions: ['java', 'bedrock'] },
+  death: { label: 'On death', category: 'Triggers', editions: ['java'] },
+  disconnected: { label: 'On disconnect', category: 'Triggers', editions: ['java', 'bedrock'] },
+  healthBelow: { label: 'Health drops below', category: 'Triggers', editions: ['java'] },
+  hungerBelow: { label: 'Hunger drops below', category: 'Triggers', editions: ['java'] },
+  inventoryFull: { label: 'Inventory becomes full', category: 'Triggers', editions: ['java'] },
+  inventoryChanged: { label: 'Inventory changes', category: 'Triggers', editions: ['java'] },
+  windowOpen: { label: 'Server window opens', category: 'Triggers', editions: ['java'] }
 })
 
 const STEP_TYPES = Object.freeze({
-  chat: { editions: ['java', 'bedrock'] },
-  wait: { editions: ['java', 'bedrock'] },
-  notify: { editions: ['java', 'bedrock'] },
-  move: { editions: ['java'] },
-  look: { editions: ['java'] },
-  control: { editions: ['java'] }, // sneak/jump/sprint hold|release
-  autoclick: { editions: ['java'] },
-  leftClick: { editions: ['java'] }, // once|hold|release
-  rightClick: { editions: ['java'] }, // once|hold|release
-  selectHotbar: { editions: ['java'] },
-  holdItem: { editions: ['java'] },
-  useInventory: { editions: ['java'] },
-  useGui: { editions: ['java'] },
-  closeGui: { editions: ['java'] },
-  waitForWindow: { editions: ['java'] },
-  drop: { editions: ['java'] },
-  dropAll: { editions: ['java'] },
-  deposit: { editions: ['java'] },
-  disconnect: { editions: ['java', 'bedrock'] },
-  reconnect: { editions: ['java', 'bedrock'] },
-  setVar: { editions: ['java', 'bedrock'] },
-  clearVar: { editions: ['java', 'bedrock'] },
-  readLore: { editions: ['java'] },
-  set: { editions: ['java', 'bedrock'] },
-  if: { editions: ['java', 'bedrock'] },
-  repeat: { editions: ['java', 'bedrock'] },
-  stop: { editions: ['java', 'bedrock'] }
+  chat: { label: 'Send chat / command', category: 'Communication', editions: ['java', 'bedrock'] },
+  wait: { label: 'Wait / delay', category: 'Control', editions: ['java', 'bedrock'] },
+  notify: { label: 'Send notification', category: 'Communication', editions: ['java', 'bedrock'] },
+  move: { label: 'Move (walk)', category: 'Movement', editions: ['java'] },
+  look: { label: 'Look / rotate', category: 'Movement', editions: ['java'] },
+  control: { label: 'Sneak / jump / sprint', category: 'Movement', editions: ['java'] }, // sneak/jump/sprint hold|release
+  autoclick: { label: 'Autoclick', category: 'Clicking', editions: ['java'] },
+  leftClick: { label: 'Left click', category: 'Clicking', editions: ['java'] }, // once|hold|release
+  rightClick: { label: 'Right click', category: 'Clicking', editions: ['java'] }, // once|hold|release
+  selectHotbar: { label: 'Select hotbar slot', category: 'Inventory', editions: ['java'] },
+  holdItem: { label: 'Hold item by name', category: 'Inventory', editions: ['java'] },
+  useInventory: { label: 'Click player inventory', category: 'Inventory', editions: ['java'] },
+  useGui: { label: 'Click open GUI slot', category: 'Inventory', editions: ['java'] },
+  closeGui: { label: 'Close open GUI', category: 'Inventory', editions: ['java'] },
+  waitForWindow: { label: 'Wait for server window', category: 'Inventory', editions: ['java'] },
+  drop: { label: 'Drop item', category: 'Inventory', editions: ['java'] },
+  dropAll: { label: 'Drop all matching items', category: 'Inventory', editions: ['java'] },
+  deposit: { label: 'Deposit item', category: 'Inventory', editions: ['java'] },
+  disconnect: { label: 'Disconnect account', category: 'Control', editions: ['java', 'bedrock'] },
+  reconnect: { label: 'Reconnect account', category: 'Control', editions: ['java', 'bedrock'] },
+  setVar: { label: 'Set variable (persistent option)', category: 'Logic', editions: ['java', 'bedrock'] },
+  clearVar: { label: 'Clear variable', category: 'Logic', editions: ['java', 'bedrock'] },
+  readLore: { label: 'Read item lore', category: 'Inventory', editions: ['java'] },
+  set: { label: 'Set variable', category: 'Logic', editions: ['java', 'bedrock'] },
+  if: { label: 'If / Else branch', category: 'Logic', editions: ['java', 'bedrock'] },
+  repeat: { label: 'Repeat loop', category: 'Logic', editions: ['java', 'bedrock'] },
+  stop: { label: 'Stop macro run', category: 'Control', editions: ['java', 'bedrock'] }
 })
 
 // Steps executed by the engine itself; all others go through the facade.
 const ENGINE_STEP_TYPES = Object.freeze(['wait', 'set', 'setVar', 'clearVar', 'if', 'repeat', 'stop'])
 
 const CONDITION_TYPES = Object.freeze(['always', 'online', 'healthBelow', 'hungerBelow', 'hasItem', 'itemCount', 'entityCount', 'inventoryFull', 'windowOpen', 'variableEquals', 'not'])
+
+const CONDITION_METADATA = Object.freeze({
+  always: { label: 'Always', category: 'Logic' },
+  online: { label: 'Connection status', category: 'Logic' },
+  healthBelow: { label: 'Health below', category: 'Logic' },
+  hungerBelow: { label: 'Hunger below', category: 'Logic' },
+  hasItem: { label: 'Has inventory item', category: 'Logic' },
+  itemCount: { label: 'Inventory item count', category: 'Logic' },
+  entityCount: { label: 'Nearby entity count', category: 'Logic' },
+  inventoryFull: { label: 'Inventory is full', category: 'Logic' },
+  windowOpen: { label: 'Server window is open', category: 'Logic' },
+  variableEquals: { label: 'Variable equals', category: 'Logic' },
+  not: { label: 'NOT (invert condition)', category: 'Logic' },
+})
 
 const RUN_STATUSES = Object.freeze(['started', 'step', 'stepFailed', 'skipped', 'completed', 'failed', 'cancelled', 'interrupted', 'stopped'])
 
@@ -414,6 +428,7 @@ module.exports = {
   STEP_TYPES,
   ENGINE_STEP_TYPES,
   CONDITION_TYPES,
+  CONDITION_METADATA,
   RUN_STATUSES,
   ERROR_CODES,
   MacroActionError,

@@ -131,6 +131,7 @@ function normalizeSettings(input = {}) {
   const workspaceDesigns = new Set(['operations', 'community', 'command', 'hybrid', 'studio', 'telemetry'])
   const colorThemes = new Set(['obsidian', 'midnight', 'graphite', 'ember', 'arctic', 'high-contrast'])
   return {
+    onboardingDone: input?.onboardingDone === true,
     streamerMode: input?.streamerMode === true,
     notificationsEnabled: input?.notificationsEnabled === true,
     staggerStartupConnections: input?.staggerStartupConnections !== false,

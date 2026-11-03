@@ -1,4 +1,6 @@
 'use strict'
+const shareLinks = require('../electron/share-links.cjs')
+const { bulkChange } = require('../electron/appearance.cjs')
 // Electron-free owner of durable/application services. Platform effects enter through hooks.
 const path = require('node:path')
 const fs = require('node:fs')
@@ -143,8 +145,32 @@ class AppCore {
     this._notifierFactory = notifierFactory
     this.commands = null
 
+    this.share = {
+      export: ({ kind, id } = {}) => {
+        if (kind === 'profile') return shareLinks.encode(kind, shareLinks.profileData(this._require(id)))
+        if (kind === 'macro') {
+          const macro = this.macroLibrary.get(id)
+          if (!macro) throw new Error('Macro not found.')
+          return shareLinks.encode(kind, shareLinks.macroData(macro, macroModel))
+        }
+        throw new Error('Unknown share kind.')
+      },
+      preview: (link) => {
+        const { kind, data } = shareLinks.decode(link)
+        if (kind === 'profile') {
+          const safe = shareLinks.profileData(data)
+          const normalized = validateAccount({ ...safe, username: 'share-preview' }, null, null)
+          return { kind, data: shareLinks.profileData(normalized), errors: [] }
+        }
+        const safe = shareLinks.macroData(data, macroModel)
+        const result = macroModel.importMacros(JSON.stringify(safe), this._macroOptions())
+        return { kind, data: result.macros[0], errors: result.errors }
+      }
+    }
+
     this.accounts = {
       list: () => this.store.list().map(publicAccount),
+      bulkAppearance: ({ ids, change } = {}) => bulkChange(this.store.list(), ids, change, { profilesPath }),
       save: (input) => this._saveAccount(input),
       delete: (id) => {
         this.cancelStartupConnection(id)
