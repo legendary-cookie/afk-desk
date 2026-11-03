@@ -1,0 +1,21 @@
+const test = require('node:test')
+const assert = require('node:assert/strict')
+const { compareVersions, shouldCheck, makeBundle, INTERVAL } = require('../electron/support-tools.cjs')
+test('semver handles releases, prereleases and numeric identifiers', () => {
+  assert.equal(compareVersions('v1.2.3-beta.10', '1.2.3-beta.2'), 1)
+  assert.equal(compareVersions('1.2.3', '1.2.3-beta.2'), 1)
+  assert.equal(compareVersions('1.2.3-alpha', '1.2.3-beta'), -1)
+  assert.equal(compareVersions('1.2.3+build', '1.2.3'), 0)
+  assert.equal(compareVersions('invalid', '1.0.0'), null)
+})
+test('checks are throttled for twelve hours', () => {
+  assert.equal(shouldCheck(0, INTERVAL), true)
+  assert.equal(shouldCheck(100, 100 + INTERVAL - 1), false)
+  assert.equal(shouldCheck(100, 100 + INTERVAL), true)
+})
+test('bundle masks accounts and redacts secrets in settings and logs', () => {
+  const bundle = makeBundle({ version: '1', os: 'OS', settings: { token: 'secret', notifyChannels: [{ webhookUrl: 'https://example.com/secret' }] }, accounts: [{ id: '1', username: 'Alice', minecraftName: 'Alice' }], logs: { 1: { console: [{ message: 'Alice hello', password: 'hunter2' }], events: [{ message: 'Alice logged in' }] } } })
+  for (const text of ['Alice', 'hunter2', 'https://example.com/secret', '"secret"']) assert.ok(!bundle.includes(text))
+  assert.match(bundle, /Acc•••/)
+  assert.match(bundle, /\[redacted\]/)
+})

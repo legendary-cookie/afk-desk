@@ -1,4 +1,6 @@
-const { app, BrowserWindow, ipcMain, shell, safeStorage, Notification, dialog } = require('electron')
+const { app, BrowserWindow, ipcMain, shell, safeStorage, Notification, dialog, net } = require('electron')
+const { fetchWithPolicy } = require('./net-policy.cjs')
+const { compareVersions, shouldCheck, makeBundle } = require('./support-tools.cjs')
 const path = require('node:path')
 const fs = require('node:fs')
 const os = require('node:os')
@@ -36,6 +38,8 @@ const offscreenPov = createOffscreenPov({
   snapshot: (id, radius) => core.bots.worldSnapshot(id, radius),
   radius: snapshotRadius
 })
+let updatePromise = null
+let updateCache = null
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -254,6 +258,38 @@ app.on('before-quit', () => {
   void core?.shutdown()
 })
 
+async function checkUpdates(manual = false) {
+  if (!manual && !core.settings.get().updateCheckEnabled) return null
+  if (updatePromise) return updatePromise
+  const file = path.join(app.getPath('userData'), 'update-check.json')
+  if (!updateCache) { try { updateCache = JSON.parse(fs.readFileSync(file, 'utf8')) } catch { updateCache = {} } }
+  if (!shouldCheck(updateCache.checkedAt)) {
+    try {
+      const release = updateCache.release
+      const url = new URL(release.url)
+      if (url.protocol === 'https:' && url.hostname === 'github.com' && url.pathname.startsWith('/legendary-cookie/afk-desk/releases/') && compareVersions(release.version, app.getVersion()) === 1) return release
+    } catch {}
+    updateCache.release = null
+    return null
+  }
+  updateCache = { checkedAt: Date.now(), release: null }
+  try { fs.writeFileSync(file, JSON.stringify(updateCache)) } catch {}
+  updatePromise = (async () => {
+    try {
+      const response = await fetchWithPolicy('https://api.github.com/repos/legendary-cookie/afk-desk/releases/latest', { fetchImpl: net.fetch, signal: AbortSignal.timeout(15000), init: { headers: { Accept: 'application/vnd.github+json' } } })
+      if (!response.ok) return null
+      const data = await response.json()
+      const url = new URL(data.html_url)
+      if (url.protocol !== 'https:' || url.hostname !== 'github.com' || !url.pathname.startsWith('/legendary-cookie/afk-desk/releases/')) return null
+      if (compareVersions(data.tag_name, app.getVersion()) !== 1) return null
+      updateCache.release = { version: data.tag_name, url: url.href }
+      try { fs.writeFileSync(file, JSON.stringify(updateCache)) } catch {}
+      return updateCache.release
+    } catch { return null }
+  })()
+  try { return await updatePromise } finally { updatePromise = null }
+}
+
 function registerIpc() {
   const handle = (channel, callback) => registerTrustedHandler(ipcMain, () => mainWindow, documentUrl, channel, callback)
   handle('share:export', (_event, input) => core.share.export(input))
@@ -286,6 +322,16 @@ function registerIpc() {
   handle('bot:world-snapshot', (_event, input) => core.bots.worldSnapshot(input))
   handle('bot:world-action', (_event, input) => core.bots.worldAction(input))
   handle('logs:list', (_event, input) => core.logs.list(input))
+  handle('logs:export', async () => {
+    const result = await dialog.showSaveDialog(mainWindow, { title: 'Export logs', defaultPath: 'afk-desk-logs.txt', filters: [{ name: 'Text files', extensions: ['txt'] }] })
+    if (result.canceled || !result.filePath) return false
+    const accounts = core.accounts.list()
+    const logs = Object.fromEntries(accounts.map(a => [a.id, { console: core.status(a.id).logs, events: core.logs.list(a.id, { limit: 500 }) }]))
+    await fs.promises.writeFile(result.filePath, makeBundle({ version: app.getVersion(), os: `${os.type()} ${os.release()} ${os.arch()}`, settings: core.settings.get(), accounts, logs }), 'utf8')
+    return true
+  })
+  handle('updates:check', (_event, manual) => checkUpdates(manual === true))
+  handle('updates:open', () => updateCache?.release ? shell.openExternal(updateCache.release.url) : undefined)
   handle('logs:clear', (_event, id) => core.logs.clear(id))
   handle(MACRO_IPC.contract, () => core.macros.contract())
   handle(MACRO_IPC.list, () => core.macros.list())

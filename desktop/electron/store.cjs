@@ -133,6 +133,7 @@ function normalizeSettings(input = {}) {
   return {
     onboardingDone: input?.onboardingDone === true,
     streamerMode: input?.streamerMode === true,
+    updateCheckEnabled: input?.updateCheckEnabled !== false,
     notificationsEnabled: input?.notificationsEnabled === true,
     staggerStartupConnections: input?.staggerStartupConnections !== false,
     useLauncherPackCache: input?.useLauncherPackCache !== false,
