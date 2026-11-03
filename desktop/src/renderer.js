@@ -162,8 +162,12 @@ async function init() {
   const tour = window.afkOnboarding.create({ document, window, settings: () => state.settings, save: async () => {
     state.settings = await api.saveSettings({ ...state.settings, onboardingDone: true })
   }, onError: error => toast(`Tour completion was not saved: ${cleanError(error)}`, 'error') })
-  document.getElementById('open-help-tour').addEventListener('click', () => tour.open())
-  if (!state.settings.onboardingDone) tour.open()
+  document.getElementById('open-help-tour').addEventListener('click', () => { el['settings-dialog']?.close?.(); tour.open() })
+  // Only new users get the tour automatically; existing users are marked done silently.
+  if (!state.settings.onboardingDone) {
+    if (state.accounts.length) void api.saveSettings({ ...state.settings, onboardingDone: true }).then(saved => { state.settings = saved }).catch(() => {})
+    else tour.open()
+  }
 }
 
 function bindEvents() {
@@ -1859,7 +1863,7 @@ async function saveSettings() {
 }
 
 function applyUiScale(value) {
-  const scale = Math.max(75, Math.min(Number(value) || 100, 125))
+  const scale = Math.max(50, Math.min(Number(value) || 100, 125))
   if (el['quick-scale-value']) el['quick-scale-value'].textContent = `${scale}%`
   if (el['quick-scale']) el['quick-scale'].value = scale
   if (el['quick-scale-number']) el['quick-scale-number'].value = scale
@@ -1868,7 +1872,7 @@ function applyUiScale(value) {
 }
 
 function previewQuickScale(value) {
-  const scale = Math.max(75, Math.min(Number(value) || 100, 125))
+  const scale = Math.max(50, Math.min(Number(value) || 100, 125))
   state.settings.uiScale = scale
   el['ui-scale'].value = scale
   el['ui-scale-value'].textContent = `${scale}%`
@@ -1877,12 +1881,12 @@ function previewQuickScale(value) {
 
 function previewTypedScale(value) {
   const scale = Number(value)
-  if (!Number.isFinite(scale) || scale < 75 || scale > 125) return
+  if (!Number.isFinite(scale) || scale < 50 || scale > 125) return
   previewQuickScale(scale)
 }
 
 async function saveQuickScale(value) {
-  const scale = Math.max(75, Math.min(Number(value) || 100, 125))
+  const scale = Math.max(50, Math.min(Number(value) || 100, 125))
   state.settings.uiScale = scale
   el['ui-scale'].value = scale
   el['ui-scale-value'].textContent = `${scale}%`

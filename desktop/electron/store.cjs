@@ -137,7 +137,7 @@ function normalizeSettings(input = {}) {
     staggerStartupConnections: input?.staggerStartupConnections !== false,
     useLauncherPackCache: input?.useLauncherPackCache !== false,
     startupConnectionDelay: Math.max(1, Math.min(Number(input?.startupConnectionDelay) || 3, 300)),
-    uiScale: Math.max(75, Math.min(Number(input?.uiScale) || 100, 125)),
+    uiScale: Math.max(50, Math.min(Number(input?.uiScale) || 100, 125)),
     workspaceDesign: workspaceDesigns.has(input?.workspaceDesign) ? input.workspaceDesign : 'hybrid',
     colorTheme: colorThemes.has(input?.colorTheme) ? input.colorTheme : 'obsidian',
     sidePanelWidth: Math.max(240, Math.min(Number(input?.sidePanelWidth) || 300, 520)),

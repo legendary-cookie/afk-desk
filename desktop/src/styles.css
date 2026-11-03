@@ -937,3 +937,7 @@ dialog.macro-templates-dialog {
 .onboarding-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; margin-top: 20px; }
 
 .macro-schema-fields[hidden] { display: none; }
+
+.settings-tools { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.share-import-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 4px; }
+.share-import-row small { flex: 1 1 220px; opacity: .75; }
