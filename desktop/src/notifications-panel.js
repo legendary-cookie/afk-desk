@@ -2,6 +2,7 @@
 
 ;(function initNotificationsPanelGlobal() {
   const EVENT_KINDS = Object.freeze([
+    { id: 'playerAppears', label: 'Player appears' },
     { id: 'connected', label: 'Connected' },
     { id: 'disconnected', label: 'Disconnected' },
     { id: 'kicked', label: 'Kicked' },

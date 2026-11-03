@@ -34,3 +34,17 @@ test('POV settings preserve notification secrets and corrupt settings remain unt
   assert.throws(() => core.settings.save({ povRenderDistance: 5 }), /Existing data is preserved/)
   assert.equal(fs.readFileSync(file, 'utf8'), '{broken')
 })
+
+test('alert image settings default off and persist through unrelated saves', t => {
+  const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'alert-images-'))
+  t.after(() => fs.rmSync(userDataPath, { recursive: true, force: true }))
+  const core = new AppCore({ userDataPath })
+  assert.equal(core.settings.get().notifyAttachPov, false)
+  assert.equal(core.settings.get().notifyAttachInventory, false)
+  assert.equal(core.settings.get().notifyPovOffscreen, false)
+  core.settings.save({ notifyAttachPov: true, notifyAttachInventory: true, notifyPovOffscreen: true })
+  core.settings.save({ povRenderDistance: 2 })
+  assert.equal(core.settings.get().notifyAttachPov, true)
+  assert.equal(core.settings.get().notifyAttachInventory, true)
+  assert.equal(core.settings.get().notifyPovOffscreen, true)
+})

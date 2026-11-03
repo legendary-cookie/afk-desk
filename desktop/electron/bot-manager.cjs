@@ -1,4 +1,5 @@
 const path = require('node:path')
+const { sampleGrid, goalPosition, entityType, PALETTE } = require('./minimap.cjs')
 const { randomUUID } = require('node:crypto')
 const { isDeepStrictEqual } = require('node:util')
 const { profilePath, validateProfileId } = require('./profile-path.cjs')
@@ -890,6 +891,23 @@ class BotManager {
     const queued = session.inventoryQueue.then(execute, execute)
     session.inventoryQueue = queued.catch(() => {})
     return queued
+  }
+
+  minimapSnapshot(id, radius, mode) {
+    const session = this.sessions.get(id)
+    const bot = this.requireOnline(id)
+    const position = bot.entity?.position
+    if (!position) throw new Error('World position is not available yet.')
+    const now = Date.now()
+    if (!session.minimapCache || now - session.minimapCache.at >= 2000) {
+      const minY = Number.isFinite(bot.game?.minY) ? bot.game.minY : -64
+      const height = Number.isFinite(bot.game?.height) ? bot.game.height : 384
+      const grid = sampleGrid({ position, radius, mode, minY, maxY: minY + height - 1,
+        getBlock: (x, y, z) => bot.blockAt(new Vec3(x, y, z), false) })
+      session.minimapCache = { ...grid, at: now }
+    }
+    const entities = Object.values(bot.entities || {}).filter(e => e !== bot.entity && e?.position && entityType(e) && Math.abs(e.position.x - position.x) <= 96 && Math.abs(e.position.z - position.z) <= 96).slice(0, 100).map(e => ({ x: e.position.x, z: e.position.z, type: entityType(e) }))
+    return { grid: session.minimapCache, palette: PALETTE, position: vectorSnapshot(position), yaw: Number(bot.entity.yaw) || 0, entities, goal: goalPosition(bot.pathfinder?.goal) }
   }
 
   worldSnapshot(id, radius = 6, blockRefreshMs = 1000) {

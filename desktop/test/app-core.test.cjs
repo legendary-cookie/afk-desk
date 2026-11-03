@@ -47,6 +47,7 @@ const ORIGINAL_IPC_CHANNELS = Object.freeze([
   'accounts:delete',
   'accounts:duplicate-profile',
   'accounts:reorder',
+  'bot:minimap-snapshot',
   'bot:upcoming-runs',
   'bot:connect',
   'bot:disconnect',

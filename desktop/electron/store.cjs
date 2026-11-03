@@ -148,6 +148,8 @@ function normalizeSettings(input = {}) {
     povMaxFeeds: Math.max(1, Math.min(Math.round(Number(input?.povMaxFeeds) || 9), 12)),
     povViewMode: input?.povViewMode === 'map' ? 'map' : 'perspective',
     povShowHud: input?.povShowHud !== false,
+    wallFps: Number.isFinite(Number(input?.wallFps)) && input?.wallFps != null ? Math.max(0.2, Math.min(5, Number(input.wallFps))) : 1,
+    wallMaxLive: Number.isFinite(Number(input?.wallMaxLive)) && input?.wallMaxLive != null ? Math.max(0, Math.min(12, Math.round(Number(input.wallMaxLive)))) : 4,
     macros: normalizeMacros(input?.macros)
   }
 }

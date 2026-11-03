@@ -15,6 +15,7 @@ const { IPC: MACRO_IPC } = require('./macro/contract.cjs')
 const { BotManager, normalizeSkinUrl } = require('./bot-manager.cjs')
 const { BedrockBotManager } = require('./bedrock-bot-manager.cjs')
 const { MultiEditionBotManager } = require('./multi-edition-manager.cjs')
+const { inventoryLayout } = require('./notify/inventory-image.cjs')
 const documentPath = path.join(__dirname, '..', 'src', 'index.html')
 const documentUrl = pathToFileURL(documentPath).href
 
@@ -168,6 +169,26 @@ app.whenReady().then(async () => {
     // AppCore emits UI events such as ('bot:event', { type: 'storage-warning' }) through emitToUi -> sendToWindow.
     emitToUi: (channel, payload) => sendToWindow(mainWindow, channel, payload),
     platform: {
+      captureAlertImages: async (id, settings, inventory) => {
+        const images = []
+        if (settings.notifyAttachPov && mainWindow && !mainWindow.isDestroyed()) {
+          try {
+            const rect = await mainWindow.webContents.executeJavaScript(`(() => { const d = document.getElementById('pov-dialog'); if (!d?.open) return null; const c = [...d.querySelectorAll('canvas[data-account-id]')].find(c => c.dataset.accountId === ${JSON.stringify(id)}); if (!c) return null; const r = c.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) }; })()`)
+            if (rect && rect.width > 0 && rect.height > 0) images.push({ name: 'pov.png', data: (await mainWindow.webContents.capturePage(rect)).toPNG() })
+          } catch {}
+        }
+        if (settings.notifyAttachInventory) {
+          let win
+          try {
+            win = new BrowserWindow({ show: false, width: 900, height: 400, webPreferences: { offscreen: true, nodeIntegration: false, contextIsolation: true } })
+            await win.loadURL('data:text/html,<html><body style="margin:0"><canvas id="c" width="900" height="400"></canvas></body></html>')
+            const layout = inventoryLayout(await inventory)
+            const data = await win.webContents.executeJavaScript(`(() => { const c = document.getElementById('c'), x = c.getContext('2d'); x.fillStyle = '#20242a'; x.fillRect(0,0,900,400); x.font = '12px sans-serif'; for (const cell of ${JSON.stringify(layout)}) { const px = cell.x * 100, py = cell.y * 80; x.fillStyle = '#464e58'; x.fillRect(px+2,py+2,96,76); x.fillStyle = 'white'; x.fillText(cell.name,px+5,py+30,90); if (cell.count) x.fillText(String(cell.count),px+5,py+55); } return c.toDataURL('image/png').split(',')[1]; })()`)
+            images.push({ name: 'inventory.png', data: Buffer.from(data, 'base64') })
+          } catch {} finally { if (win && !win.isDestroyed()) win.destroy() }
+        }
+        return images
+      },
       notify: ({ title, body }) => {
         try {
           if (Notification.isSupported()) new Notification({ title, body, silent: false }).show()
@@ -240,6 +261,7 @@ function registerIpc() {
   handle('bot:window-click', (_event, input) => core.bots.windowClick(input))
   handle('bot:window-close', (_event, id) => core.bots.windowClose(id))
   handle('bot:form-respond', (_event, input) => core.bots.respondForm(input))
+  handle('bot:minimap-snapshot', (_event, input) => core.bots.minimapSnapshot(input))
   handle('bot:world-snapshot', (_event, input) => core.bots.worldSnapshot(input))
   handle('bot:world-action', (_event, input) => core.bots.worldAction(input))
   handle('logs:list', (_event, input) => core.logs.list(input))

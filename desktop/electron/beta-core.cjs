@@ -131,7 +131,7 @@ class AlertManager {
     const now = Date.now()
     if (now - (this.last.get(throttleKey) || 0) < this.cooldownMs) return
     this.last.set(throttleKey, now)
-    this.notify({ title: `${account.profileName || account.label || 'AFK Desk'} — ${key}`, body: String(body).slice(0, 240) })
+    this.notify({ title: account.host || account.profileName || account.label || 'AFK Desk', body: String(body).slice(0, 240) })
   }
 }
 

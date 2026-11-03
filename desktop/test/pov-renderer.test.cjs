@@ -6,7 +6,7 @@ const { VoxelRenderer, surfaceColor, material } = require('../assets/pov-rendere
 
 test('entity overlay draws hologram content with pitch projection and skips unnamed display entities', () => {
   const labels = []
-  const context = vm.createContext({ povMath: require('../assets/pov-math.js') })
+  const context = vm.createContext({ povMath: require('../assets/pov-math.js'), maskText: (text) => text })
   const source = fs.readFileSync(require.resolve('../src/renderer.js'), 'utf8')
   vm.runInContext(source.slice(source.indexOf('function drawPovEntities('), source.indexOf('function drawPovHud(')), context)
   const canvas = { width: 960, height: 540 }

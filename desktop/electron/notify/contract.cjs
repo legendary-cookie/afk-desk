@@ -5,6 +5,7 @@
 // wired by main.cjs (Stage 2). Node 18 compatible (may later run in the Android engine).
 
 const EVENT_KINDS = Object.freeze([
+  'playerAppears', // nearby player appeared
   'connected', // account joined a server
   'disconnected', // connection lost (payload.reason)
   'kicked', // kicked by server (payload.reason)

@@ -533,13 +533,28 @@ function createNotifier({
     return null
   }
 
-  function buildRequestForChannel(validChannel, text) {
+  function buildRequestForChannel(validChannel, text, images = [], title) {
+    if (images.length) {
+      const form = new FormData()
+      if (validChannel.type === 'discord') {
+        const urlObj = new URL(validChannel.webhookUrl)
+        urlObj.searchParams.set('wait', 'false')
+        form.append('payload_json', JSON.stringify({ content: text, allowed_mentions: { parse: [] }, embeds: images.map(image => ({ title: String(title || 'AFK Desk').slice(0, 256), image: { url: `attachment://${image.name}` } })) }))
+        images.forEach((image, i) => form.append(`files[${i}]`, new Blob([image.data], { type: 'image/png' }), image.name))
+        return { url: urlObj.toString(), body: form }
+      }
+      form.append('chat_id', validChannel.chatId)
+      form.append('caption', text.slice(0, 1024))
+      form.append('photo', new Blob([images[0].data], { type: 'image/png' }), images[0].name)
+      return { url: `https://api.telegram.org/bot${validChannel.botToken}/sendPhoto`, body: form }
+    }
     if (validChannel.type === 'discord') {
       const urlObj = new URL(validChannel.webhookUrl)
       urlObj.searchParams.set('wait', 'false')
       const body = JSON.stringify({
         content: text,
-        allowed_mentions: { parse: [] }
+        allowed_mentions: { parse: [] },
+        ...(title ? { embeds: [{ title: String(title).slice(0, 256) }] } : {})
       })
       return { url: urlObj.toString(), body }
     }
@@ -552,8 +567,8 @@ function createNotifier({
     return { url, body }
   }
 
-  async function executeHttpSend(validChannel, text) {
-    const { url, body } = buildRequestForChannel(validChannel, text)
+  async function executeHttpSend(validChannel, text, images = [], title) {
+    const { url, body } = buildRequestForChannel(validChannel, text, images, title)
     const controller = new AbortController()
     let timeoutHandle = null
     timeoutHandle = scheduleTimer(() => {
@@ -565,7 +580,7 @@ function createNotifier({
     }, LIMITS.requestTimeoutMs)
 
     try {
-      const headers = { 'content-type': 'application/json' }
+      const headers = images.length ? {} : { 'content-type': 'application/json' }
       const init = {
         method: 'POST',
         headers,
@@ -681,7 +696,14 @@ function createNotifier({
     let sendPromise
     sendPromise = (async () => {
       try {
-        const result = await executeHttpSend(validChannel, text)
+        const images = batch.flatMap(event => Array.isArray(event.images) ? event.images : []).slice(0, 10).map((image, i) => ({ ...image, name: `${i}-${image.name}` }))
+        let result = await executeHttpSend(validChannel, text, validChannel.type === 'telegram' ? images.slice(0, 1) : images, batch[0]?.server)
+        if (result.ok && validChannel.type === 'telegram') {
+          for (const image of images.slice(1)) {
+            result = await executeHttpSend(validChannel, '', [image], batch[0]?.server)
+            if (!result.ok) break
+          }
+        }
         if (disposed) return
 
         const finishedAt = safeNow()
@@ -787,6 +809,7 @@ function createNotifier({
         server: typeof event.server === 'string' ? event.server : undefined,
         message: typeof event.message === 'string' ? event.message : String(event.message ?? ''),
         payload: event.payload,
+        images: Array.isArray(event.images) ? event.images : [],
         at: typeof event.at === 'number' && Number.isFinite(event.at) ? event.at : currentNow
       }
 

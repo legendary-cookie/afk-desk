@@ -35,19 +35,24 @@ function normalizePovRenderDistance(value) {
   return Number.isFinite(chunks) ? Math.max(1, Math.min(8, Math.round(chunks))) : 1
 }
 
+function normalizeAlertImages(input) {
+  return Object.fromEntries(['notifyAttachPov', 'notifyAttachInventory', 'notifyPovOffscreen'].map(key => [key, input?.[key] === true]))
+}
+
 // Extend the existing settings schema here, keeping POV ownership in AppCore.
 class PovSettingsStore extends SettingsStore {
   get() {
     const settings = super.get() // Retain the store's validation and corrupt-file protection.
     let raw = {}
     try { raw = JSON.parse(fs.readFileSync(this.file, 'utf8')) } catch (error) { if (error.code !== 'ENOENT') throw error }
-    return { ...settings, povRenderDistance: normalizePovRenderDistance(raw.povRenderDistance) }
+    return { ...settings, povRenderDistance: normalizePovRenderDistance(raw.povRenderDistance), ...normalizeAlertImages(raw) }
   }
 
   save(input) {
     const current = this.get()
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw new TypeError('Settings must be an object')
-    const settings = { ...normalizeSettings(input), povRenderDistance: normalizePovRenderDistance(Object.hasOwn(input, 'povRenderDistance') ? input.povRenderDistance : current.povRenderDistance) }
+    const settings = { ...normalizeSettings({ ...input, wallFps: input.wallFps ?? current.wallFps, wallMaxLive: input.wallMaxLive ?? current.wallMaxLive }), povRenderDistance: normalizePovRenderDistance(Object.hasOwn(input, 'povRenderDistance') ? input.povRenderDistance : current.povRenderDistance) }
+    Object.assign(settings, normalizeAlertImages({ ...current, ...input }))
     const notifyChannels = Object.hasOwn(input, 'notifyChannels') ? normalizeNotifyChannels(input.notifyChannels) : this.getNotifyChannels()
     fs.mkdirSync(path.dirname(this.file), { recursive: true })
     const temporaryFile = `${this.file}.tmp`
@@ -191,6 +196,7 @@ class AppCore {
       closeWindow: (idOrInput) => { const id = typeof idOrInput === 'object' && idOrInput !== null ? idOrInput.id : idOrInput; return this.botManager.closeWindow(id) },
       formRespond: (idOrInput, formId, response) => this._respondForm(unpack(idOrInput, { formId, response })),
       respondForm: (idOrInput, formId, response) => this._respondForm(unpack(idOrInput, { formId, response })),
+      minimapSnapshot: (input) => this.botManager.minimapSnapshot(input.id, input.radius, input.mode),
       worldSnapshot: (idOrInput, radius, blockRefreshMs) => { const p = unpack(idOrInput, { radius, blockRefreshMs }); return this.botManager.worldSnapshot(p.id, p.radius, p.blockRefreshMs) },
       worldAction: (idOrInput, action, target) => { const p = unpack(idOrInput, { action, target }); return this.botManager.worldAction(p.id, p.action, p.target) },
       autoDeposit: (idOrInput, enabled) => this._setAutoDeposit(unpack(idOrInput, { enabled })),
@@ -707,13 +713,26 @@ class AppCore {
     }
   }
 
-  _send(event) { try { this.notifier?.notify(event) } catch {} }
+  _send(event) {
+    try {
+      const account = event.accountId && this.store.list().find(a => a.id === event.accountId)
+      if (account) event.server = account.host || account.profileName || 'AFK Desk'
+      const settings = this.settingsStore.get()
+      if (!['playerAppears', 'lowHealth', 'death', 'inventoryFull'].includes(event.kind) || (!settings.notifyAttachPov && !settings.notifyAttachInventory)) return this.notifier?.notify(event)
+      Promise.resolve().then(() => this.platform.captureAlertImages?.(event.accountId, settings, this.bots.inventory(event.accountId))).then(images => {
+        event.images = images || []
+        this.notifier?.notify(event)
+      }).catch(() => this.notifier?.notify(event))
+    } catch { try { this.notifier?.notify(event) } catch {} }
+  }
   _sendUi(channel, payload) { try { this.emitToUi(channel, payload) } catch {} }
   _storageError(error) { try { this.platform.storageError?.(error) } catch {} }
 
   _notifyBot(event, account) {
     if (!account) return
     const name = displayName(account)
+    if (event.type === 'playerAppears' && this.settingsStore.get().notificationsEnabled === true) this.platform.notify?.({ title: account.host || account.profileName || 'AFK Desk', body: `${event.payload.username} appeared near ${name}.` })
+    if (event.type === 'playerAppears') this._send({ kind: 'playerAppears', accountId: account.id, accountName: name, message: `${event.payload.username} appeared near ${name}.`, at: event.at })
     if (event.type === 'connected') this._send({ kind: 'connected', accountId: account.id, accountName: name, message: `${name} connected.`, at: event.at })
     if (event.type === 'disconnected') this._send({ kind: 'disconnected', accountId: account.id, accountName: name, message: `${name} disconnected: ${event.payload.reason}`, payload: event.payload, at: event.at })
     if (event.type === 'disconnected') {

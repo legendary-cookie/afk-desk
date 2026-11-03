@@ -688,3 +688,21 @@ test('enforces requestTimeoutMs via AbortSignal, treats 3xx as failure, and caps
   assert.equal(bytesRead, LIMITS.maxResponseBytes)
 })
 
+
+test('image alerts use Discord multipart embeds and Telegram photos', async () => {
+  const requests = []
+  const notifier = createNotifier({
+    getChannels: () => [makeDiscordChannel(), makeTelegramChannel()],
+    fetchWithPolicy: async (url, options) => { requests.push({ url, body: options.init.body }); return { status: 200, text: async () => '{"ok":true}' } }
+  })
+  notifier.notify({ kind: 'death', message: 'Alert', server: 'Example server', images: [{ name: 'pov.png', data: Buffer.from('png') }, { name: 'inventory.png', data: Buffer.from('png') }] })
+  await notifier.flush()
+  const discord = requests.find(r => r.url.includes('discord.com'))
+  assert.equal(JSON.parse(discord.body.get('payload_json')).embeds[0].title, 'Example server')
+  assert.equal(JSON.parse(discord.body.get('payload_json')).embeds[0].image.url, 'attachment://0-pov.png')
+  assert.ok(discord.body.get('files[0]'))
+  const photos = requests.filter(r => r.url.includes('/sendPhoto'))
+  assert.equal(photos.length, 2)
+  assert.ok(photos[0].body.get('photo'))
+  notifier.dispose()
+})

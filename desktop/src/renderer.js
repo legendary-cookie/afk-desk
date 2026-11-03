@@ -15,6 +15,9 @@ const KEY_CONTROLS = {
 
 const activeManualInputs = new Map()
 let chatCompletionTimer = null
+let wallTimer = null
+let wallGeneration = 0
+const wallCanvases = new Map()
 let povTimer = null
 let povPaused = false
 let povFocusId = null
@@ -103,7 +106,7 @@ const state = {
 const el = Object.fromEntries([
   'account-list', 'account-count', 'add-account', 'open-settings', 'toggle-sidebar', 'open-command-center', 'command-dialog', 'command-search', 'command-results', 'close-command-center',
   'quick-scale', 'quick-scale-number', 'reset-scale', 'quick-scale-value', 'quick-workspace-design', 'quick-color-theme', 'workspace-design', 'color-theme', 'display-menu', 'console-menu',
-  'streamer-quick-toggle', 'streamer-mode', 'macro-menu', 'settings-dialog', 'close-settings', 'start-with-windows', 'notifications-enabled', 'stagger-startup-connections', 'use-launcher-pack-cache', 'startup-connection-delay', 'save-settings', 'empty-state',
+  'streamer-quick-toggle', 'streamer-mode', 'macro-menu', 'settings-dialog', 'close-settings', 'start-with-windows', 'notifications-enabled', 'notify-attach-pov', 'notify-attach-inventory', 'notify-pov-offscreen', 'stagger-startup-connections', 'use-launcher-pack-cache', 'startup-connection-delay', 'save-settings', 'empty-state',
   'dashboard', 'account-title', 'app-version', 'settings-app-version', 'edit-account', 'open-logs', 'open-automations', 'open-pov', 'connection-button', 'status-banner',
   'status-name', 'status-detail', 'server-address', 'detail-username', 'detail-server', 'detail-version', 'detail-antiafk', 'detail-environment', 'detail-water', 'detail-health',
   'detail-hunger', 'detail-coordinates', 'detail-chest', 'detail-dimension', 'inventory-count', 'inventory-grid', 'auto-deposit-toggle', 'hold-selected', 'equip-destination', 'equip-selected',
@@ -116,6 +119,7 @@ const el = Object.fromEntries([
   'anti-afk-chat-enabled', 'anti-afk-chat-message', 'anti-afk-chat-interval', 'anti-afk-walk-distance', 'anti-afk-jump', 'anti-afk-look', 'anti-afk-sneak', 'anti-afk-swing', 'anti-afk-walk', 'environmental-movement', 'auto-reconnect', 'auto-reconnect-delay', 'auto-reconnect-backoff',
   'auto-reconnect-max-delay', 'auto-reconnect-rate-limit-delay', 'auto-reconnect-max', 'connect-timeout', 'reconnect-reset-delay', 'auto-deposit-setting', 'auto-deposit-range', 'auto-deposit-mode', 'auto-deposit-interval-wrap', 'auto-deposit-interval', 'auto-deposit-interval-unit', 'auto-deposit-full-threshold', 'auto-deposit-threshold-wrap', 'join-message', 'server-change-message', 'message-delay', 'server-change-retry-minutes',
   'form-error', 'delete-account', 'duplicate-profile', 'login-dialog', 'login-code', 'open-login-private', 'open-login', 'close-login', 'ui-scale', 'ui-scale-value',
+  'wall-dialog', 'wall-grid', 'close-wall', 'wall-fps', 'wall-max-live',
   'pov-settings-refresh', 'pov-settings-fps', 'pov-settings-radius', 'pov-settings-render-distance', 'pov-settings-columns', 'pov-max-feeds', 'pov-settings-view-mode', 'pov-show-hud', 'column-resizer', 'inventory-resizer',
   'server-window-dialog', 'server-window-title', 'server-window-stage', 'server-window-art', 'server-window-grid', 'close-server-window', 'logs-dialog', 'close-logs', 'log-filter', 'refresh-logs',
   'clear-persistent-logs', 'persistent-log-view', 'automation-dialog', 'close-automation', 'macro-watch-account', 'macro-live-chip', 'macro-run-now', 'macro-stop-run', 'macro-library-pane', 'macro-library-search',
@@ -153,6 +157,7 @@ async function init() {
   bindEvents()
   render()
   observePanelFit()
+  startMinimap()
   api.onBotEvent(handleBotEvent)
 }
 
@@ -264,6 +269,9 @@ function bindEvents() {
   document.querySelectorAll('[data-collapse-target]').forEach((button) => button.addEventListener('click', () => toggleSection(button)))
   document.querySelectorAll('[data-workspace-view]').forEach((button) => button.addEventListener('click', () => setWorkspaceView(button.dataset.workspaceView)))
   document.querySelector('[data-workspace-dialog="pov"]').addEventListener('click', openPov)
+  document.querySelector('[data-workspace-dialog="wall"]').addEventListener('click', openWall)
+  el['close-wall'].addEventListener('click', () => el['wall-dialog'].close())
+  el['wall-dialog'].addEventListener('close', stopWall)
   document.querySelector('[data-workspace-dialog="automations"]').addEventListener('click', openAutomations)
   document.querySelector('[data-workspace-dialog="logs"]').addEventListener('click', openPersistentLogs)
   bindManualMovement()
@@ -313,6 +321,7 @@ function refreshStreamerDisplay() {
   el['streamer-mode'].checked = state.settings.streamerMode === true
   render()
   if (el['pov-dialog'].open) renderPovGrid()
+  if (el['wall-dialog'].open) { wallCanvases.clear(); renderWall() }
   if (el['logs-dialog'].open) void refreshPersistentLogs()
 }
 
@@ -1756,6 +1765,9 @@ async function openSettingsDialog() {
     state.settings = settings
     el['start-with-windows'].checked = settings.startWithWindows === true
     el['notifications-enabled'].checked = settings.notificationsEnabled === true
+    el['notify-attach-pov'].checked = settings.notifyAttachPov === true
+    el['notify-attach-inventory'].checked = settings.notifyAttachInventory === true
+    el['notify-pov-offscreen'].checked = settings.notifyPovOffscreen === true
     el['streamer-mode'].checked = settings.streamerMode === true
     el['stagger-startup-connections'].checked = settings.staggerStartupConnections !== false
     el['use-launcher-pack-cache'].checked = settings.useLauncherPackCache !== false
@@ -1771,6 +1783,8 @@ async function openSettingsDialog() {
     el['pov-max-feeds'].value = settings.povMaxFeeds || 9
     el['pov-settings-view-mode'].value = settings.povViewMode || 'perspective'
     el['pov-show-hud'].checked = settings.povShowHud !== false
+    el['wall-fps'].value = settings.wallFps ?? 1
+    el['wall-max-live'].value = settings.wallMaxLive ?? 4
     el['ui-scale-value'].textContent = `${el['ui-scale'].value}%`
     syncStartupDelay()
     await notificationsPanel?.load()
@@ -1784,6 +1798,9 @@ async function saveSettings() {
       ...state.settings,
       startWithWindows: el['start-with-windows'].checked,
       notificationsEnabled: el['notifications-enabled'].checked,
+      notifyAttachPov: el['notify-attach-pov'].checked,
+      notifyAttachInventory: el['notify-attach-inventory'].checked,
+      notifyPovOffscreen: el['notify-pov-offscreen'].checked,
       streamerMode: el['streamer-mode'].checked,
       staggerStartupConnections: el['stagger-startup-connections'].checked,
       useLauncherPackCache: el['use-launcher-pack-cache'].checked,
@@ -1799,6 +1816,8 @@ async function saveSettings() {
       ,povMaxFeeds: Number(el['pov-max-feeds'].value)
       ,povViewMode: el['pov-settings-view-mode'].value
       ,povShowHud: el['pov-show-hud'].checked
+      ,wallFps: Number(el['wall-fps'].value)
+      ,wallMaxLive: Number(el['wall-max-live'].value)
     })
     applyUiScale(state.settings.uiScale)
     applyVisualDesign(state.settings.workspaceDesign, state.settings.colorTheme)
@@ -2191,6 +2210,70 @@ function bindDialogAccessibility() {
   })
 }
 
+function openWall() {
+  el['wall-dialog'].showModal()
+  const generation = ++wallGeneration
+  renderWall()
+  void refreshWall(generation)
+}
+function stopWall() {
+  wallGeneration++
+  clearTimeout(wallTimer); wallTimer = null
+  wallCanvases.clear()
+}
+function wallAccounts() {
+  return state.accounts.filter(account => ['online', 'connected'].includes(getStatus(account.id).status))
+}
+function renderWall() {
+  const accounts = wallAccounts()
+  const live = new Set(window.afkWall.liveIds(accounts, state.settings.wallMaxLive))
+  for (const id of wallCanvases.keys()) if (!live.has(id)) wallCanvases.delete(id)
+  el['wall-grid'].replaceChildren(...accounts.map(account => {
+    const card = document.createElement('button'); card.type = 'button'; card.className = 'pov-card wall-card'
+    const header = document.createElement('header')
+    const name = document.createElement('strong'); name.textContent = displayAccount(account)
+    header.append(createPlayerHead(account, 'account-avatar'), name)
+    card.append(header)
+    if (live.has(account.id) && wallCanvases.has(account.id)) {
+      card.append(wallCanvases.get(account.id))
+    } else {
+      const telemetry = state.telemetry.get(account.id) || {}
+      const position = telemetry.position
+      const info = document.createElement('div'); info.className = 'wall-status'
+      const lines = [`Server: ${maskText(account.host || '—')}`, `Health: ${telemetry.health ?? '—'} · Food: ${telemetry.food ?? '—'}`, `Position: ${position ? `${position.x}, ${position.y}, ${position.z}` : '—'}`, `Dimension: ${maskText(telemetry.dimension || '—')}`]
+      for (const line of lines) { const row = document.createElement('div'); row.textContent = line; info.append(row) }
+      card.append(info)
+    }
+    card.addEventListener('click', () => {
+      el['wall-dialog'].close(); stopWall(); el['pov-search'].value = ''; openPov(); povFocusId = account.id; state.selectedId = account.id
+      render(); renderPovGrid(); void refreshPov(); startPovPolling()
+    })
+    return card
+  }))
+  if (!accounts.length) { const empty = document.createElement('p'); empty.className = 'dialog-copy'; empty.textContent = 'No online accounts.'; el['wall-grid'].append(empty) }
+}
+async function refreshWall(generation) {
+  if (generation !== wallGeneration || !el['wall-dialog'].open) return
+  if (!document.hidden) {
+    const online = wallAccounts()
+    const ids = new Set(window.afkWall.liveIds(online, state.settings.wallMaxLive))
+    const accounts = online.filter(account => ids.has(account.id))
+    const fps = state.settings.wallFps ?? 1
+    const results = await Promise.allSettled(accounts.map(account => api.getWorldSnapshot(account.id, povMath.snapshotRadius(state.settings, 'perspective', state.settings.povRadius), 1000 / fps)))
+    if (generation !== wallGeneration || !el['wall-dialog'].open) return
+    results.forEach((result, index) => {
+      const account = accounts[index]
+      if (!['online', 'connected'].includes(getStatus(account.id).status)) return
+      if (result.status !== 'fulfilled' || !result.value?.position) { wallCanvases.delete(account.id); return }
+      let canvas = wallCanvases.get(account.id)
+      if (!canvas) { canvas = document.createElement('canvas'); canvas.width = 480; canvas.height = 270; wallCanvases.set(account.id, canvas) }
+      try { drawPerspectivePov(result.value, canvas, account) } catch { wallCanvases.delete(account.id) }
+    })
+    renderWall()
+  }
+  wallTimer = setTimeout(() => void refreshWall(generation), 1000 / (state.settings.wallFps ?? 1))
+}
+
 function openPov() {
   if (!state.accounts.length) return
   povPaused = false; povFocusId = null; povSnapshots.clear(); povDisplaySnapshots.clear()
@@ -2413,7 +2496,7 @@ function drawPovEntities(context, snapshot, canvas) {
     if (x < 0 || x > canvas.width || y < 0 || y > canvas.height) continue
     context.globalAlpha = 1 - Math.min(.8, distance / maximum * .72)
     context.fillStyle = ['text_display', 'armor_stand'].includes(entity.entityType) ? '#f3eedf' : entity.type === 'player' ? '#ffe06a' : '#ff7479'
-    label.split('\n').slice(0, 8).forEach((line, index) => context.fillText(line, x, y + index * fontSize * 1.2))
+    maskText(label).split('\n').slice(0, 8).forEach((line, index) => context.fillText(line, x, y + index * fontSize * 1.2))
   }
   context.restore()
 }
@@ -2634,3 +2717,62 @@ function toast(message, kind = '') {
 }
 
 init().catch((error) => toast(cleanError(error), 'error'))
+
+function startMinimap() {
+  const radius = document.getElementById('minimap-radius')
+  const mode = document.getElementById('minimap-mode')
+  radius.value = Math.max(16, Math.min(96, Number(localStorage.getItem('minimap-radius')) || 32))
+  mode.value = localStorage.getItem('minimap-mode') === 'cave' ? 'cave' : 'surface'
+  radius.addEventListener('change', () => { radius.value = Math.max(16, Math.min(96, Math.round(Number(radius.value) || 32))); localStorage.setItem('minimap-radius', radius.value) })
+  mode.addEventListener('change', () => localStorage.setItem('minimap-mode', mode.value))
+  let busy = false
+  async function refresh() {
+    if (busy || document.getElementById('movement-panel').classList.contains('collapsed')) return
+    const id = state.selectedId
+    const canvas = document.getElementById('minimap-canvas')
+    const status = document.getElementById('minimap-status')
+    if (!id || !['online', 'connected'].includes(getStatus(id).status)) {
+      canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height)
+      status.textContent = 'Connect to view the map.'
+      return
+    }
+    busy = true
+    try {
+      const map = await api.getMinimapSnapshot(id, Number(radius.value), mode.value)
+      if (id !== state.selectedId) return
+      drawMinimap(canvas, map)
+      const g = map.goal, p = map.position
+      status.textContent = g && p ? `Walking to ${g.x} ${g.y} ${g.z} (${Math.ceil(Math.hypot(g.x - p.x, g.y - p.y, g.z - p.z))} blocks)` : (map.grid ? 'N ↑ · Nearby players and mobs' : 'Map data unavailable for this account.')
+    } catch (_) {
+      canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height)
+      status.textContent = 'Map data unavailable.'
+    } finally { busy = false }
+  }
+  setInterval(refresh, 2000)
+  document.querySelector('[data-collapse-target="movement-panel"]').addEventListener('click', refresh)
+  radius.addEventListener('change', refresh)
+  mode.addEventListener('change', refresh)
+}
+function drawMinimap(canvas, map) {
+  const ctx = canvas.getContext('2d'), grid = map.grid, p = map.position
+  ctx.fillStyle = '#242a30'; ctx.fillRect(0, 0, canvas.width, canvas.height)
+  if (!grid || !p) return
+  const cell = canvas.width / grid.size
+  for (let i = 0; i < grid.colors.length; i++) {
+    ctx.fillStyle = map.palette[grid.colors[i]] || '#242a30'
+    ctx.fillRect((i % grid.size) * cell, Math.floor(i / grid.size) * cell, Math.ceil(cell), Math.ceil(cell))
+  }
+  const point = (x, z) => [(x - grid.x) / grid.step * cell + cell / 2, (z - grid.z) / grid.step * cell + cell / 2]
+  for (const entity of map.entities || []) {
+    if (!Number.isFinite(entity.x) || !Number.isFinite(entity.z)) continue
+    const [x, y] = point(entity.x, entity.z)
+    if (x < 0 || y < 0 || x > canvas.width || y > canvas.height) continue
+    ctx.fillStyle = entity.type === 'player' ? '#55d9ff' : '#ff7979'; ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2); ctx.fill()
+  }
+  if (map.goal) {
+    const [x, y] = point(map.goal.x, map.goal.z)
+    if (x >= 0 && y >= 0 && x <= canvas.width && y <= canvas.height) { ctx.strokeStyle = '#ffd45b'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x - 5, y); ctx.lineTo(x + 5, y); ctx.moveTo(x, y - 5); ctx.lineTo(x, y + 5); ctx.stroke() }
+  }
+  const [x, y] = point(p.x, p.z), yaw = map.yaw || 0
+  ctx.save(); ctx.translate(x, y); ctx.rotate(-yaw); ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.moveTo(0, -7); ctx.lineTo(-5, 5); ctx.lineTo(0, 3); ctx.lineTo(5, 5); ctx.closePath(); ctx.fill(); ctx.restore()
+}

@@ -911,3 +911,13 @@ dialog.macro-templates-dialog {
   width: 100%;
   max-width: 100%;
 }
+
+.wall-card { color:var(--text); text-align:left; cursor:pointer; padding:0; font:inherit; }
+.wall-card header { grid-template-columns:28px minmax(0,1fr); }
+.wall-status { min-height:120px; padding:16px; color:var(--muted); line-height:1.8; overflow-wrap:anywhere; }
+
+.minimap { padding: 10px 12px 0; }
+.minimap-options { display: flex; gap: 8px; justify-content: space-between; font-size: 11px; }
+.minimap-options input { width: 50px; }
+.minimap canvas { display: block; width: min(100%, 256px); aspect-ratio: 1; margin: 8px auto 0; image-rendering: pixelated; background: #242a30; }
+.minimap p { font-size: 11px; margin: 6px 0; }

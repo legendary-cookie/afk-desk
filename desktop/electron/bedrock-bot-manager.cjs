@@ -515,6 +515,11 @@ class BedrockBotManager {
     }
   }
 
+  minimapSnapshot(id) {
+    const session = this.requireOnline(id)
+    return { position: session.position, yaw: session.yaw || 0, entities: [...session.players.values()], grid: null, goal: null }
+  }
+
   worldSnapshot(id, radius = 6) {
     const session = this.requireOnline(id)
     return { edition: 'bedrock', radius: Math.max(2, Math.min(Number(radius) || 6, 12)), position: session.position, yaw: session.yaw, pitch: session.pitch, blocks: [], entities: [...session.players.values()], limited: true, at: Date.now() }
