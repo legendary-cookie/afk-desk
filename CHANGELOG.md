@@ -2,6 +2,21 @@
 
 For the complete desktop history from 0.1.0 onward, including source tags, installers, and comparisons, see [HISTORY.md](HISTORY.md).
 
+## Desktop and Android 0.11.0-beta.3 — 2026-11-04
+
+### Added
+
+- Safety (per account, off by default): auto-eat below a food level, low-health totem equip or disconnect with a cooldown, and daily online hours.
+- Alerts can include a POV image even when that account's POV window is closed.
+- Update check: a banner when a newer GitHub release exists (no auto-download).
+- Settings → Export logs: one text file with passwords, tokens and login commands removed and account names masked.
+- Android: anti-AFK chat message, streamer mode, a recent-messages picker, and the header now shows the real app version.
+
+### Fixed
+
+- Wall tiles fill properly, don't flicker between refreshes, explain the live-feed limit, and show rounded numbers.
+- The new buttons no longer overflow the collapsed sidebar; the tour only opens for new users; interface scale goes down to 50%.
+
 ## Desktop and Android 0.11.0-beta.2 — 2026-11-03
 
 ### Added
