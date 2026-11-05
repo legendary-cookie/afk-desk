@@ -20,7 +20,7 @@ type Account = {
   linkGroup?: {id: string; name: string; categories: string[]; excluded: string[]} | null;
   id: string; username: string; minecraftName?: string; host: string; port: string; version: string; skinUrl?: string;
   antiAfk: boolean; antiAfkInterval: string; antiAfkChatEnabled: boolean; antiAfkChatMessage: string; antiAfkChatIntervalSec: string; autoReconnect: boolean; autoReconnectDelay: string;
-  autoOminousBottle: boolean; autoOminousAmplifier: string; autoOminousCooldown: string; autoGoldenApple: boolean; autoGoldenAppleHealth: string; autoGoldenApplePreference: 'normal' | 'enchanted';
+  autoOminousBottle: boolean; autoOminousOrder: 'highest' | 'lowest'; autoOminousCooldown: string; autoGoldenApple: boolean; autoGoldenAppleHealth: string; autoGoldenApplePreference: 'normal' | 'enchanted';
   autoArmor: boolean; autoArmorThreshold: string;
   lowHealthDisconnect: boolean; lowHealthThreshold: string; armorDisconnect: boolean; armorDisconnectThreshold: string; totemDisconnect: boolean; safetyDisconnectNotify: boolean; lowHealthCooldownMinutes: string;
   autoReconnectMaxAttempts: string; connectOnStartup: boolean; joinMessage: string;
@@ -46,7 +46,7 @@ const EMPTY_PROXY: ProxyConfig = {enabled: false, type: 'socks5', host: '', port
 const blankAccount = (): Account => ({
   id: `${Date.now()}-${Math.random().toString(16).slice(2)}`, username: '', host: '', port: '25565', version: '',
   antiAfk: true, antiAfkInterval: '45', antiAfkChatEnabled: false, antiAfkChatMessage: '', antiAfkChatIntervalSec: '300', autoReconnect: true, autoReconnectDelay: '5', autoReconnectMaxAttempts: '0',
-  autoOminousBottle: false, autoOminousAmplifier: '0', autoOminousCooldown: '0', autoGoldenApple: false, autoGoldenAppleHealth: '10', autoGoldenApplePreference: 'normal',
+  autoOminousBottle: false, autoOminousOrder: 'highest', autoOminousCooldown: '0', autoGoldenApple: false, autoGoldenAppleHealth: '10', autoGoldenApplePreference: 'normal',
   autoArmor: false, autoArmorThreshold: '5',
   lowHealthDisconnect: false, lowHealthThreshold: '6', armorDisconnect: false, armorDisconnectThreshold: '5', totemDisconnect: false, safetyDisconnectNotify: false, lowHealthCooldownMinutes: '10',
   connectOnStartup: false, joinMessage: '', serverChangeMessage: '', messageDelay: '6',
@@ -55,7 +55,7 @@ const blankAccount = (): Account => ({
   scheduleStart: '00:00', scheduleEnd: '00:00',
 });
 
-const normalizeAccount = (account: Partial<Account>): Account => ({
+const normalizeAccount = (account: Partial<Account> & {autoOminousAmplifier?: string | number}): Account => ({
   ...blankAccount(), ...account,
   port: String(account.port ?? '25565'),
   version: String(account.version ?? ''),
@@ -64,7 +64,7 @@ const normalizeAccount = (account: Partial<Account>): Account => ({
   autoReconnectMaxAttempts: String(account.autoReconnectMaxAttempts ?? '0'),
   antiAfkChatEnabled: account.antiAfkChatEnabled === true,
   antiAfkChatIntervalSec: String(Math.max(10, Math.min(Math.round(Number(account.antiAfkChatIntervalSec) || 300), 86400))),
-  autoOminousBottle: account.autoOminousBottle === true, autoOminousAmplifier: String(Math.max(0, Math.min(4, Number(account.autoOminousAmplifier ?? 0) || 0))), autoOminousCooldown: String(Math.max(0, Math.min(86400, Number(account.autoOminousCooldown ?? 0) || 0))),
+  autoOminousBottle: account.autoOminousBottle === true, autoOminousOrder: account.autoOminousOrder === 'lowest' || (account.autoOminousOrder == null && account.autoOminousAmplifier != null && Number(account.autoOminousAmplifier) < 4) ? 'lowest' : 'highest', autoOminousCooldown: String(Math.max(0, Math.min(86400, Number(account.autoOminousCooldown ?? 0) || 0))),
   autoGoldenApple: account.autoGoldenApple === true, autoGoldenAppleHealth: String(Math.max(1, Math.min(20, Number(account.autoGoldenAppleHealth ?? 10) || 1))), autoGoldenApplePreference: account.autoGoldenApplePreference === 'enchanted' ? 'enchanted' : 'normal',
   lowHealthDisconnect: account.lowHealthDisconnect === true, lowHealthThreshold: String(Math.max(0, Math.min(20, Number(account.lowHealthThreshold ?? 6) || 0))),
   armorDisconnect: account.armorDisconnect === true, armorDisconnectThreshold: String(Math.max(0, Math.min(100, Number(account.armorDisconnectThreshold ?? 5) || 0))),
@@ -531,7 +531,7 @@ function AccountModal({streamerMode, value, onClose, onSave, onDelete}: {streame
         {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day, index) => <Toggle key={day} label={day} value={(draft.scheduleDays ?? [0, 1, 2, 3, 4, 5, 6]).includes(index)} onChange={v => set('scheduleDays', v ? [...(draft.scheduleDays ?? [0, 1, 2, 3, 4, 5, 6]), index] : (draft.scheduleDays ?? [0, 1, 2, 3, 4, 5, 6]).filter(dayIndex => dayIndex !== index))} />)}
         <Toggle label="Join when the app starts" value={draft.connectOnStartup} onChange={v => set('connectOnStartup', v)} />
         <Toggle label="Auto drink Ominous Bottle" value={draft.autoOminousBottle} onChange={v => set('autoOminousBottle', v)} />
-        <Field label="Preferred Ominous amplifier (0–4; level I–V)" value={draft.autoOminousAmplifier} onChange={(v: string) => set('autoOminousAmplifier', v)} keyboardType="number-pad" />
+        <Toggle label="Use lowest Ominous Bottle level first" value={draft.autoOminousOrder === 'lowest'} onChange={v => set('autoOminousOrder', v ? 'lowest' : 'highest')} />
         <Field label="Ominous cooldown (seconds; 0 disables)" value={draft.autoOminousCooldown} onChange={(v: string) => set('autoOminousCooldown', v)} keyboardType="number-pad" />
         <Toggle label="Auto golden apple" value={draft.autoGoldenApple} onChange={v => set('autoGoldenApple', v)} />
         <Field label="Golden apple health threshold (1–20)" value={draft.autoGoldenAppleHealth} onChange={(v: string) => set('autoGoldenAppleHealth', v)} keyboardType="number-pad" />

@@ -1057,7 +1057,12 @@ function validateAccount(input, existing, secretBox, normalizeSkinUrl = defaultN
     autoArmor: (input?.autoArmor ?? existing?.autoArmor) === true,
     autoArmorThreshold: bounded(input?.autoArmorThreshold ?? existing?.autoArmorThreshold, 0, 100, 5),
     autoOminousBottle: (input?.autoOminousBottle ?? existing?.autoOminousBottle) === true,
-    autoOminousAmplifier: bounded(input?.autoOminousAmplifier ?? existing?.autoOminousAmplifier, 0, 4, 0),
+    autoOminousOrder: (() => {
+      const order = input?.autoOminousOrder ?? existing?.autoOminousOrder
+      if (order === 'highest' || order === 'lowest') return order
+      const legacy = input?.autoOminousAmplifier ?? existing?.autoOminousAmplifier
+      return legacy == null || Number(legacy) >= 4 ? 'highest' : 'lowest'
+    })(),
     autoOminousCooldown: bounded(input?.autoOminousCooldown ?? existing?.autoOminousCooldown, 0, 86400, 0),
     autoGoldenApple: (input?.autoGoldenApple ?? existing?.autoGoldenApple) === true,
     autoGoldenAppleHealth: bounded(input?.autoGoldenAppleHealth ?? existing?.autoGoldenAppleHealth, 1, 20, 10),
