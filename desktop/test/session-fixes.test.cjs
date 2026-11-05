@@ -224,3 +224,29 @@ test('D6: device-code style keys are redacted from any persisted event', (t) => 
   assert.ok(!raw.includes('login-code'))
   assert.ok(raw.includes('visible'))
 })
+
+test('linked account saves and quick anti-AFK updates persist and refresh every member', async (t) => {
+  const linkGroup = {id: 'friends', name: 'Friends', categories: ['server', 'antiAfk'], excluded: []}
+  const app = await launch(t, [account({linkGroup}), account({id: 'acct-two', identityId: 'acct-two', username: 'other@example.com', linkGroup})])
+  const configs = []
+  patchPrototype(t, {updateAccountConfig: config => configs.push(config), setAntiAfk: () => {}})
+  await app.call('accounts:save', {id: 'acct-one', username: 'a@b.co', host: 'new.example', antiAfk: false})
+  const stored = app.readAccounts()
+  assert.equal(stored[1].host, 'new.example')
+  assert.equal(stored[1].antiAfk, false)
+  assert.equal(stored[1].username, 'other@example.com')
+  assert.ok(configs.some(config => config.id === 'acct-two'))
+})
+
+test('linked macro targets synchronize on join and library edits', async t => {
+  const link = {id:'g', name:'Group', categories:['macros'], excluded:[]}
+  const app = await launch(t, [account({linkGroup:link}), account({id:'acct-two', identityId:'acct-two', username:'other@example.com'})])
+  const macro = await app.call('macros:save', {name:'Test', targets:{mode:'accounts', accountIds:['acct-one']}, trigger:{type:'join'}, steps:[{type:'chat', message:'/afk'}]})
+  await app.call('accounts:save', {id:'acct-two', username:'other@example.com', host:'old.example', linkGroup:link})
+  let list = await app.call('macros:list')
+  assert.deepEqual(Array.from(list.macros.find(m => m.id === macro.id).targets.accountIds), ['acct-one', 'acct-two'])
+  const updated = {...list.macros.find(m => m.id === macro.id), targets:{mode:'accounts', accountIds:['acct-two']}}
+  await app.call('macros:save', updated)
+  list = await app.call('macros:list')
+  assert.deepEqual(Array.from(list.macros.find(m => m.id === macro.id).targets.accountIds), [])
+})
