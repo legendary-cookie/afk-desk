@@ -16,6 +16,7 @@ type ProxyConfig = {enabled: boolean; type: 'socks5' | 'http'; host: string; por
 type Account = {
   id: string; username: string; minecraftName?: string; host: string; port: string; version: string; skinUrl?: string;
   antiAfk: boolean; antiAfkInterval: string; antiAfkChatEnabled: boolean; antiAfkChatMessage: string; antiAfkChatIntervalSec: string; autoReconnect: boolean; autoReconnectDelay: string;
+  autoOminousBottle: boolean; autoOminousAmplifier: string; autoOminousCooldown: string; autoGoldenApple: boolean; autoGoldenAppleHealth: string; autoGoldenApplePreference: 'normal' | 'enchanted';
   autoArmor: boolean; autoArmorThreshold: string;
   autoReconnectMaxAttempts: string; connectOnStartup: boolean; joinMessage: string;
   serverChangeMessage: string; messageDelay: string; autoDepositToChest: boolean;
@@ -37,6 +38,7 @@ const EMPTY_PROXY: ProxyConfig = {enabled: false, type: 'socks5', host: '', port
 const blankAccount = (): Account => ({
   id: `${Date.now()}-${Math.random().toString(16).slice(2)}`, username: '', host: '', port: '25565', version: '',
   antiAfk: true, antiAfkInterval: '45', antiAfkChatEnabled: false, antiAfkChatMessage: '', antiAfkChatIntervalSec: '300', autoReconnect: true, autoReconnectDelay: '5', autoReconnectMaxAttempts: '0',
+  autoOminousBottle: false, autoOminousAmplifier: '0', autoOminousCooldown: '0', autoGoldenApple: false, autoGoldenAppleHealth: '10', autoGoldenApplePreference: 'normal',
   autoArmor: false, autoArmorThreshold: '5',
   connectOnStartup: false, joinMessage: '', serverChangeMessage: '', messageDelay: '6',
   autoDepositToChest: false, autoDepositRange: '5', autoDepositMode: 'immediate', autoDepositInterval: '300',
@@ -47,6 +49,8 @@ const normalizeAccount = (account: Partial<Account>): Account => ({
   ...blankAccount(), ...account,
   antiAfkChatEnabled: account.antiAfkChatEnabled === true,
   antiAfkChatIntervalSec: String(Math.max(10, Math.min(Math.round(Number(account.antiAfkChatIntervalSec) || 300), 86400))),
+  autoOminousBottle: account.autoOminousBottle === true, autoOminousAmplifier: String(Math.max(0, Math.min(4, Number(account.autoOminousAmplifier ?? 0) || 0))), autoOminousCooldown: String(Math.max(0, Math.min(86400, Number(account.autoOminousCooldown ?? 0) || 0))),
+  autoGoldenApple: account.autoGoldenApple === true, autoGoldenAppleHealth: String(Math.max(1, Math.min(20, Number(account.autoGoldenAppleHealth ?? 10) || 1))), autoGoldenApplePreference: account.autoGoldenApplePreference === 'enchanted' ? 'enchanted' : 'normal',
   autoArmor: account.autoArmor === true,
   autoArmorThreshold: String(Math.max(0, Math.min(100, Number(account.autoArmorThreshold ?? 5) || 0))),
   autoDepositToChest: account.autoDepositToChest === true,
@@ -450,6 +454,13 @@ function AccountModal({streamerMode, value, onClose, onSave, onDelete}: {streame
         <VersionField value={draft.version} onChange={(v: string) => set('version', v)} />
         <Text style={styles.sectionTitle}>Automation</Text>
         <Toggle label="Join when the app starts" value={draft.connectOnStartup} onChange={v => set('connectOnStartup', v)} />
+        <Toggle label="Auto drink Ominous Bottle" value={draft.autoOminousBottle} onChange={v => set('autoOminousBottle', v)} />
+        <Field label="Preferred Ominous amplifier (0–4; level I–V)" value={draft.autoOminousAmplifier} onChange={(v: string) => set('autoOminousAmplifier', v)} keyboardType="number-pad" />
+        <Field label="Ominous cooldown (seconds; 0 disables)" value={draft.autoOminousCooldown} onChange={(v: string) => set('autoOminousCooldown', v)} keyboardType="number-pad" />
+        <Toggle label="Auto golden apple" value={draft.autoGoldenApple} onChange={v => set('autoGoldenApple', v)} />
+        <Field label="Golden apple health threshold (1–20)" value={draft.autoGoldenAppleHealth} onChange={(v: string) => set('autoGoldenAppleHealth', v)} keyboardType="number-pad" />
+        <Toggle label="Prefer enchanted golden apples" value={draft.autoGoldenApplePreference === 'enchanted'} onChange={v => set('autoGoldenApplePreference', v ? 'enchanted' : 'normal')} />
+        <Text style={styles.help}>Also eats an apple when recently damaged and Absorption or Regeneration is missing.</Text>
         <Toggle label="Auto armor" value={draft.autoArmor} onChange={v => set('autoArmor', v)} />
         <Field label="Replace armor below durability (%)" value={draft.autoArmorThreshold} onChange={(v: string) => set('autoArmorThreshold', v)} keyboardType="number-pad" />
         <Toggle label="Auto reconnect" value={draft.autoReconnect} onChange={v => set('autoReconnect', v)} />

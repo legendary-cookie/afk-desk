@@ -362,3 +362,17 @@ test('auto armor account settings default, persist and clamp', () => {
   assert.equal(restored.autoArmor, true)
   assert.equal(restored.autoArmorThreshold, 100)
 })
+
+test('consumable settings default off, clamp and survive updates', () => {
+  const base = { username: 'user', host: 'localhost' }
+  const defaults = validateAccount(base, null, null)
+  assert.equal(defaults.autoOminousBottle, false)
+  assert.equal(defaults.autoGoldenApple, false)
+  const saved = validateAccount({...base, autoOminousBottle: true, autoOminousAmplifier: 9, autoOminousCooldown: -1, autoGoldenApple: true, autoGoldenAppleHealth: 99, autoGoldenApplePreference: 'enchanted'}, null, null)
+  assert.equal(saved.autoOminousAmplifier, 4)
+  assert.equal(saved.autoOminousCooldown, 0)
+  assert.equal(saved.autoGoldenAppleHealth, 20)
+  const restored = validateAccount(base, saved, null)
+  assert.equal(restored.autoOminousBottle, true)
+  assert.equal(restored.autoGoldenApplePreference, 'enchanted')
+})

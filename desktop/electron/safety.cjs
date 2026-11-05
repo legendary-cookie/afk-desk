@@ -51,6 +51,45 @@ function pickFood(items, foods, locked = [], priority = 'hotbar', allowGoldenApp
     return priority === 'nutrition' ? value(b) - value(a) || hot(b) - hot(a) : hot(b) - hot(a) || value(b) - value(a)
   })[0] || null
 }
+function hasEffect(bot, name) {
+  const effects = bot.entity?.effects || {}
+  const id = bot.registry?.effectsByName?.[name]?.id
+  return (id != null && effects[id] != null) || Object.keys(effects).some(key => key.replace(/[^a-z]/gi, '').toLowerCase() === name.toLowerCase())
+}
+function bottleAmplifier(item) {
+  const component = item.components?.find(c => String(c.type ?? c.name).replace('minecraft:', '') === 'ominous_bottle_amplifier')
+  let value = component?.data ?? component?.value ?? item.nbt?.value?.OminousBottleAmplifier?.value ?? item.nbt?.OminousBottleAmplifier
+  while (value && typeof value === 'object') value = value.value
+  return Number.isInteger(Number(value)) && value != null ? Number(value) : 0
+}
+function pickConsumable(account, bot, lastDamage, lastBottle, now = Date.now()) {
+  if (bot.currentWindow || !(bot.health > 0)) return null
+  const locks = new Set((account.lockedInventorySlots || []).map(Number))
+  const items = (bot.inventory?.items?.() || []).filter(item => item.slot >= 9 && item.slot <= 44 && !locks.has(Number(item.slot)))
+  if (account.autoGoldenApple && (bot.health <= (Number(account.autoGoldenAppleHealth ?? 10)) || (lastDamage != null && now - lastDamage < 10000 && (!hasEffect(bot, 'Absorption') || !hasEffect(bot, 'Regeneration'))))) {
+    const preferred = account.autoGoldenApplePreference === 'enchanted' ? 'enchanted_golden_apple' : 'golden_apple'
+    const apple = items.find(item => item.name === preferred) || items.find(item => ['golden_apple', 'enchanted_golden_apple'].includes(item.name))
+    if (apple) return apple
+  }
+  if (account.autoOminousBottle && !hasEffect(bot, 'BadOmen') && !hasEffect(bot, 'RaidOmen') && (lastBottle == null || now - lastBottle >= (Number(account.autoOminousCooldown ?? 0) * 1000))) {
+    const bottles = items.filter(item => item.name === 'ominous_bottle')
+    const preference = Number(account.autoOminousAmplifier ?? 0)
+    return bottles.find(item => bottleAmplifier(item) === preference) || bottles.sort((a, b) => Math.abs(bottleAmplifier(a) - preference) - Math.abs(bottleAmplifier(b) - preference))[0] || null
+  }
+  return null
+}
+async function consumeItem(bot, item) {
+  if (item.name !== 'ominous_bottle') return bot.consume()
+  // Mineflayer's consume() rejects bottles at full hunger, though the game allows them.
+  const type = item.type, count = item.count
+  await new Promise((resolve, reject) => {
+    const finish = error => { clearTimeout(timer); bot.removeListener('heldItemChanged', changed); bot.deactivateItem(); error ? reject(error) : resolve() }
+    const changed = held => { if (!held || held.type !== type || held.count !== count) finish() }
+    const timer = setTimeout(() => finish(new Error('Bottle consumption timed out')), 5000)
+    bot.on('heldItemChanged', changed)
+    try { bot.activateItem() } catch (error) { finish(error) }
+  })
+}
 function shouldLowHealthAct(account, health) {
   return Number.isFinite(health) && health > 0 && health <= (account.lowHealthThreshold ?? 6) && (account.lowHealthTotem === true || account.lowHealthDisconnect === true)
 }
@@ -82,7 +121,12 @@ function deferSafety(manager, account, state) {
 }
 function installSafety(manager, account, session, state) {
   const bot = session.bot
+  let previousHealth = bot.health, lastDamage = null, lastBottle = null
   const tick = async () => {
+    if (Number.isFinite(bot.health)) {
+      if (Number.isFinite(previousHealth) && bot.health < previousHealth) lastDamage = Date.now()
+      previousHealth = bot.health
+    }
     if (manager.sessions.get(account.id) !== session || session.safetyBusy) return
     const config = session.account
     if (!isWithinSchedule(config)) { state.safetyPause = 'schedule'; bot.end('Outside online hours'); return }
@@ -117,12 +161,12 @@ function installSafety(manager, account, session, state) {
           }
         })
       }
-      if (shouldEat(config, bot) && !session.depositing && !session.inputClaims?.get('rightClick')?.size) {
+      if ((pickConsumable(config, bot, lastDamage, lastBottle) || shouldEat(config, bot)) && !session.depositing && !session.inputClaims?.get('rightClick')?.size) {
         await manager.withInventoryAction(account.id, async () => {
           const current = session.account
-          if (manager.sessions.get(account.id) !== session || session.depositing || !shouldEat(current, bot) || session.inputClaims?.get('rightClick')?.size) return
+          if (manager.sessions.get(account.id) !== session || !session.ready || session.depositing || bot.currentWindow || session.inputClaims?.get('rightClick')?.size) return
           const locks = new Set((current.lockedInventorySlots || []).map(Number))
-          const food = pickFood(bot.inventory?.items?.(), bot.registry?.foodsByName, [...locks], current.autoEatPriority, current.autoEatAllowGoldenApples)
+          const food = pickConsumable(current, bot, lastDamage, lastBottle) || (shouldEat(current, bot) && pickFood(bot.inventory?.items?.(), bot.registry?.foodsByName, [...locks], current.autoEatPriority, current.autoEatAllowGoldenApples))
           if (!food) return
           const source = Number(food.slot)
           const target = source >= 36 && source <= 44 ? source : Array.from({ length: 9 }, (_, i) => i + 36).find(slot => !locks.has(slot))
@@ -134,7 +178,7 @@ function installSafety(manager, account, session, state) {
           try {
             if (source !== target) { await bot.moveSlotItem(source, target); swapped = true }
             bot.setQuickBarSlot(target - 36)
-            if (!bot.currentWindow && !session.depositing && manager.sessions.get(account.id) === session) await bot.consume()
+            if (!bot.currentWindow && !session.depositing && manager.sessions.get(account.id) === session) { await consumeItem(bot, food); if (food.name === 'ominous_bottle') lastBottle = Date.now(); if (food.name === 'golden_apple' || food.name === 'enchanted_golden_apple') lastDamage = null }
           } finally {
             try {
               while (swapped && manager.sessions.get(account.id) === session && bot.currentWindow) await new Promise(resolve => setTimeout(resolve, 50))
@@ -155,4 +199,4 @@ function installSafety(manager, account, session, state) {
   bot.on('health', tick)
   bot.inventory?.on?.('updateSlot', tick)
 }
-module.exports = { chooseArmor, armorStats, shouldEat, pickFood, shouldLowHealthAct, isWithinSchedule, deferSafety, installSafety }
+module.exports = { consumeItem, hasEffect, bottleAmplifier, pickConsumable, chooseArmor, armorStats, shouldEat, pickFood, shouldLowHealthAct, isWithinSchedule, deferSafety, installSafety }

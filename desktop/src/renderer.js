@@ -104,7 +104,7 @@ const state = {
 }
 
 const el = Object.fromEntries([
-  'safety-armor', 'safety-armor-threshold', 'safety-eat', 'safety-food', 'safety-food-priority', 'safety-food-golden', 'safety-auto-totem', 'safety-totem', 'safety-disconnect', 'safety-health', 'safety-cooldown', 'safety-schedule', 'safety-start', 'safety-end', 'safety-day-0', 'safety-day-1', 'safety-day-2', 'safety-day-3', 'safety-day-4', 'safety-day-5', 'safety-day-6',
+  'safety-ominous', 'safety-ominous-level', 'safety-ominous-cooldown', 'safety-apple', 'safety-apple-health', 'safety-apple-preference', 'safety-armor', 'safety-armor-threshold', 'safety-eat', 'safety-food', 'safety-food-priority', 'safety-food-golden', 'safety-auto-totem', 'safety-totem', 'safety-disconnect', 'safety-health', 'safety-cooldown', 'safety-schedule', 'safety-start', 'safety-end', 'safety-day-0', 'safety-day-1', 'safety-day-2', 'safety-day-3', 'safety-day-4', 'safety-day-5', 'safety-day-6',
   'account-list', 'account-count', 'add-account', 'import-profile-share', 'share-profile', 'open-settings', 'toggle-sidebar', 'open-command-center', 'command-dialog', 'command-search', 'command-results', 'close-command-center',
   'quick-scale', 'quick-scale-number', 'reset-scale', 'quick-scale-value', 'quick-workspace-design', 'quick-color-theme', 'workspace-design', 'color-theme', 'display-menu', 'console-menu',
   'update-banner', 'update-message', 'update-open', 'update-dismiss', 'check-updates', 'export-logs', 'update-check-enabled', 'streamer-quick-toggle', 'streamer-mode', 'macro-menu', 'settings-dialog', 'close-settings', 'start-with-windows', 'notifications-enabled', 'notify-attach-pov', 'notify-attach-inventory', 'notify-pov-offscreen', 'stagger-startup-connections', 'use-launcher-pack-cache', 'startup-connection-delay', 'save-settings', 'empty-state',
@@ -986,6 +986,12 @@ function openAccountDialog(account, importing = false) {
   el['environmental-movement'].checked = account?.environmentalMovement !== false
   el['safety-armor'].checked = account?.autoArmor === true
   el['safety-armor-threshold'].value = account?.autoArmorThreshold ?? 5
+  el['safety-ominous'].checked = account?.autoOminousBottle === true
+  el['safety-ominous-level'].value = account?.autoOminousAmplifier ?? 0
+  el['safety-ominous-cooldown'].value = account?.autoOminousCooldown ?? 0
+  el['safety-apple'].checked = account?.autoGoldenApple === true
+  el['safety-apple-health'].value = account?.autoGoldenAppleHealth ?? 10
+  el['safety-apple-preference'].value = account?.autoGoldenApplePreference ?? 'normal'
   el['safety-eat'].checked = account?.autoEat === true
   el['safety-food'].value = account?.autoEatThreshold ?? 14
   el['safety-food-priority'].value = account?.autoEatPriority ?? 'hotbar'
@@ -1086,6 +1092,12 @@ async function saveAccount(event) {
     environmentalMovement: el['environmental-movement'].checked,
     autoArmor: el['safety-armor'].checked,
     autoArmorThreshold: Number(el['safety-armor-threshold'].value),
+    autoOminousBottle: el['safety-ominous'].checked,
+    autoOminousAmplifier: Number(el['safety-ominous-level'].value),
+    autoOminousCooldown: Number(el['safety-ominous-cooldown'].value),
+    autoGoldenApple: el['safety-apple'].checked,
+    autoGoldenAppleHealth: Number(el['safety-apple-health'].value),
+    autoGoldenApplePreference: el['safety-apple-preference'].value,
     autoEat: el['safety-eat'].checked,
     autoEatThreshold: Number(el['safety-food'].value),
     autoEatPriority: el['safety-food-priority'].value,
