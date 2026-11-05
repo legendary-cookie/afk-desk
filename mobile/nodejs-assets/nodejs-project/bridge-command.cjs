@@ -12,4 +12,9 @@ function validateCommand(value) {
   return value
 }
 
-module.exports = { validateCommand, isRequestId }
+function getUpcomingRuns(manager, accountId) {
+  if (typeof accountId !== 'string' || !accountId) throw new Error('Account id is required.')
+  return manager.getUpcomingRuns(accountId)
+}
+
+module.exports = { validateCommand, isRequestId, getUpcomingRuns }

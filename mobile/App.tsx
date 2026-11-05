@@ -12,6 +12,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 // Version shown in the header comes from package.json so it can't go stale.
 const APP_VERSION: string = require('./package.json').version;
 const {maskNames, addRecent} = require('./mobile-ui-logic.cjs');
+const {graphCards} = require('./macro-graph-view.cjs');
 
 type ProxyConfig = {enabled: boolean; type: 'socks5' | 'http'; host: string; port: string; username: string; password: string};
 type Account = {
@@ -25,6 +26,8 @@ type Account = {
   serverChangeMessage: string; messageDelay: string; autoDepositToChest: boolean;
   autoDepositRange: string; autoDepositMode: 'immediate' | 'interval' | 'inventoryFull' | 'intervalOrFull';
   autoDepositInterval: string; autoDepositFullThreshold: string; serverChangeRetryMinutes: string; proxy: ProxyConfig;
+  autoEat?: boolean; autoEatThreshold?: number; lowHealthTotem?: boolean; lowHealthDisconnect?: boolean; lowHealthThreshold?: number; lowHealthCooldownMinutes?: number;
+  scheduleEnabled?: boolean; scheduleStart?: string; scheduleEnd?: string; scheduleDays?: number[];
 };
 type ChatClick = {action: 'open_url' | 'run_command' | 'suggest_command' | 'copy_to_clipboard'; value: string};
 type Segment = {text: string; color?: string; bold?: boolean; italic?: boolean; underlined?: boolean; strikethrough?: boolean; hover?: string; click?: ChatClick};
@@ -48,10 +51,16 @@ const blankAccount = (): Account => ({
   connectOnStartup: false, joinMessage: '', serverChangeMessage: '', messageDelay: '6',
   autoDepositToChest: false, autoDepositRange: '5', autoDepositMode: 'immediate', autoDepositInterval: '300',
   autoDepositFullThreshold: '0', serverChangeRetryMinutes: '30', proxy: {...EMPTY_PROXY},
+  scheduleStart: '00:00', scheduleEnd: '00:00',
 });
 
 const normalizeAccount = (account: Partial<Account>): Account => ({
   ...blankAccount(), ...account,
+  port: String(account.port ?? '25565'),
+  version: String(account.version ?? ''),
+  antiAfkInterval: String(account.antiAfkInterval ?? '45'),
+  autoReconnectDelay: String(account.autoReconnectDelay ?? '5'),
+  autoReconnectMaxAttempts: String(account.autoReconnectMaxAttempts ?? '0'),
   antiAfkChatEnabled: account.antiAfkChatEnabled === true,
   antiAfkChatIntervalSec: String(Math.max(10, Math.min(Math.round(Number(account.antiAfkChatIntervalSec) || 300), 86400))),
   autoOminousBottle: account.autoOminousBottle === true, autoOminousAmplifier: String(Math.max(0, Math.min(4, Number(account.autoOminousAmplifier ?? 0) || 0))), autoOminousCooldown: String(Math.max(0, Math.min(86400, Number(account.autoOminousCooldown ?? 0) || 0))),
@@ -93,8 +102,11 @@ function App(): React.JSX.Element {
   const [selectedId, setSelectedId] = useState('');
   const [sessions, setSessions] = useState<Record<string, Session>>({});
   const [engineReady, setEngineReady] = useState(false);
+  const [upcomingRuns, setUpcomingRuns] = useState<{kind: string; at: number}[]>([]);
   const [editing, setEditing] = useState<Account | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [graphOpen, setGraphOpen] = useState(false);
   const [chat, setChat] = useState('');
   const [recent, setRecent] = useState<Record<string, string[]>>({});
   const [recentOpen, setRecentOpen] = useState(false);
@@ -116,6 +128,15 @@ function App(): React.JSX.Element {
 
   const selected = accounts.find(account => account.id === selectedId) || accounts[0];
   const session = selected ? sessions[selected.id] || {status: 'offline', detail: 'Not connected', logs: []} : undefined;
+
+  useEffect(() => {
+    if (!engineReady || !selected?.id) { setUpcomingRuns([]); return; }
+    let active = true;
+    const refresh = () => engineCommand<{kind: string; at: number}[]>({action: 'getUpcomingRuns', accountId: selected.id}).then(runs => { if (active) setUpcomingRuns(runs); }).catch(() => { if (active) setUpcomingRuns([]); });
+    refresh();
+    const timer = setInterval(refresh, 2000);
+    return () => { active = false; clearInterval(timer); };
+  }, [engineReady, selected?.id]);
 
   const updateSession = useCallback((id: string, updater: (old: Session) => Session) => {
     setSessions(old => ({...old, [id]: updater(old[id] || {status: 'offline', detail: 'Not connected', logs: []})}));
@@ -348,6 +369,8 @@ function App(): React.JSX.Element {
         <Stat label="Coordinates" value={session?.telemetry?.position ? `${session.telemetry.position.x}, ${session.telemetry.position.y}, ${session.telemetry.position.z}` : '—'} wide />
         <Stat label="Nearest container" value={session?.telemetry?.nearestChest ? `${session.telemetry.nearestChest.type.replace(/_/g, ' ')} · ${session.telemetry.nearestChest.x}, ${session.telemetry.nearestChest.y}, ${session.telemetry.nearestChest.z} · ${session.telemetry.nearestChest.distance} blocks` : `No visible container within ${selected.autoDepositRange || '5'} blocks`} wide />
       </View>
+      <View style={styles.panel}><Text style={styles.panelTitle}>Next runs</Text>{upcomingRuns.length ? upcomingRuns.map((run, index) => <Text key={`${run.kind}-${run.at}-${index}`} style={styles.muted}>{run.kind} · {new Date(run.at).toLocaleTimeString()}</Text>) : <Text style={styles.muted}>No scheduled runs.</Text>}</View>
+      <View style={styles.panel}><Text style={styles.panelTitle}>Accounts status</Text>{accounts.map((account, index) => { const current = sessions[account.id]; const position = current?.telemetry?.position; return <View key={account.id} style={styles.item}><Text style={styles.itemName}>{streamerMode ? `Account ${index + 1}` : account.minecraftName || account.username}</Text><Text style={styles.muted}>{mask(account.host)} · {current?.status || 'offline'} · HP {current?.telemetry?.health ?? '—'} · Food {current?.telemetry?.food ?? '—'} · {position ? `${position.x}, ${position.y}, ${position.z}` : '—'}</Text></View>; })}</View>
 
       <View style={styles.panel}><View style={styles.panelHeader}><Text style={styles.panelTitle}>Movement</Text><Text style={styles.muted}>Quick taps</Text></View>
         <View style={styles.moveGrid}><View /><Move label="W" onPress={() => action('move', 'forward')} /><View /><Move label="A" onPress={() => action('move', 'left')} /><Move label="S" onPress={() => action('move', 'back')} /><Move label="D" onPress={() => action('move', 'right')} /></View>
@@ -369,7 +392,9 @@ function App(): React.JSX.Element {
       engineCommand({action: 'disconnect', accountId: account.id}).catch(() => {});
       setAccounts(old => old.filter(item => item.id !== account.id)); setSelectedId(accounts.find(item => item.id !== account.id)?.id || ''); setEditing(null);
     }} />
-    <SettingsModal streamerMode={streamerMode} onStreamerMode={changeStreamerMode} visible={settingsOpen} accounts={accounts} onClose={() => setSettingsOpen(false)} onChange={setAccounts} />
+    <ShareModal visible={shareOpen} accounts={accounts} selected={selected} streamerMode={streamerMode} onClose={() => setShareOpen(false)} onProfile={data => { setShareOpen(false); setSettingsOpen(false); setEditing(normalizeAccount({...blankAccount(), ...data, port: String(data.port ?? '25565')})); }} />
+    <GraphModal visible={graphOpen} accounts={accounts} streamerMode={streamerMode} onClose={() => setGraphOpen(false)} />
+    <SettingsModal onGraph={() => setGraphOpen(true)} onShare={() => setShareOpen(true)} streamerMode={streamerMode} onStreamerMode={changeStreamerMode} visible={settingsOpen} accounts={accounts} onClose={() => setSettingsOpen(false)} onChange={setAccounts} />
     <ServerMenuModal value={session?.serverWindow || null} onClick={slot => selected && engineCommand({action: 'window-click', accountId: selected.id, slot}).catch((error: Error) => Alert.alert('Menu action failed', error.message))} onClose={() => selected && engineCommand({action: 'window-close', accountId: selected.id}).catch((error: Error) => Alert.alert('Close menu failed', error.message))} />
     <Modal transparent visible={Boolean(loginCode)} animationType="fade"><View style={styles.backdrop}><View style={styles.modalCard}><Text style={styles.title}>Microsoft sign-in</Text><Text style={styles.modalHelp}>Open Microsoft, switch to the account you want, then enter this code:</Text><Text selectable style={styles.deviceCode}>{loginCode?.code}</Text><Pressable style={styles.primary} onPress={openMicrosoftSignIn}><Text style={styles.primaryText}>Open Microsoft sign-in</Text></Pressable><Pressable style={styles.modalButton} onPress={() => setLoginCode(null)}><Text style={styles.buttonText}>Close</Text></Pressable></View></View></Modal>
   </SafeAreaView>;
@@ -477,6 +502,17 @@ function AccountModal({streamerMode, value, onClose, onSave, onDelete}: {streame
         <Field label="Port" value={draft.port} onChange={(v: string) => set('port', v)} keyboardType="number-pad" />
         <VersionField value={draft.version} onChange={(v: string) => set('version', v)} />
         <Text style={styles.sectionTitle}>Automation</Text>
+        <Text style={styles.sectionTitle}>Safety</Text>
+        <Toggle label="Auto eat" value={draft.autoEat === true} onChange={v => set('autoEat', v)} />
+        <Field label="Eat at food level" value={String(draft.autoEatThreshold ?? 14)} onChange={(v: string) => set('autoEatThreshold', Number(v))} keyboardType="number-pad" />
+        <Toggle label="Equip totem on low health" value={draft.lowHealthTotem === true} onChange={v => set('lowHealthTotem', v)} />
+        <Toggle label="Disconnect on low health" value={draft.lowHealthDisconnect === true} onChange={v => set('lowHealthDisconnect', v)} />
+        <Field label="Low health threshold" value={String(draft.lowHealthThreshold ?? 6)} onChange={(v: string) => set('lowHealthThreshold', Number(v))} keyboardType="number-pad" />
+        <Field label="Low health cooldown (minutes)" value={String(draft.lowHealthCooldownMinutes ?? 10)} onChange={(v: string) => set('lowHealthCooldownMinutes', Number(v))} keyboardType="number-pad" />
+        <Toggle label="Limit online hours" value={draft.scheduleEnabled === true} onChange={v => set('scheduleEnabled', v)} />
+        <Field label="Start time (HH:MM)" value={draft.scheduleStart ?? '00:00'} onChange={(v: string) => set('scheduleStart', v)} />
+        <Field label="End time (HH:MM)" value={draft.scheduleEnd ?? '00:00'} onChange={(v: string) => set('scheduleEnd', v)} />
+        {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day, index) => <Toggle key={day} label={day} value={(draft.scheduleDays ?? [0, 1, 2, 3, 4, 5, 6]).includes(index)} onChange={v => set('scheduleDays', v ? [...(draft.scheduleDays ?? [0, 1, 2, 3, 4, 5, 6]), index] : (draft.scheduleDays ?? [0, 1, 2, 3, 4, 5, 6]).filter(dayIndex => dayIndex !== index))} />)}
         <Toggle label="Join when the app starts" value={draft.connectOnStartup} onChange={v => set('connectOnStartup', v)} />
         <Toggle label="Auto drink Ominous Bottle" value={draft.autoOminousBottle} onChange={v => set('autoOminousBottle', v)} />
         <Field label="Preferred Ominous amplifier (0–4; level I–V)" value={draft.autoOminousAmplifier} onChange={(v: string) => set('autoOminousAmplifier', v)} keyboardType="number-pad" />
@@ -521,9 +557,64 @@ function AccountModal({streamerMode, value, onClose, onSave, onDelete}: {streame
   </Modal>;
 }
 
-function SettingsModal({streamerMode, onStreamerMode, visible, accounts, onClose, onChange}: {streamerMode: boolean; onStreamerMode: (value: boolean) => void; visible: boolean; accounts: Account[]; onClose: () => void; onChange: (accounts: Account[]) => void}) {
+type SharePreview = {kind: 'profile' | 'macro'; data: any; errors: {message: string}[]};
+const MACRO_STORAGE_KEY = 'afkdesk.mobile.sharedMacros.v1';
+function ShareModal({visible, accounts, selected, streamerMode, onClose, onProfile}: {visible: boolean; accounts: Account[]; selected?: Account; streamerMode: boolean; onClose: () => void; onProfile: (data: Partial<Account>) => void}) {
+  const [link, setLink] = useState('');
+  const [preview, setPreview] = useState<SharePreview | null>(null);
+  const [macros, setMacros] = useState<any[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    if (!visible) return;
+    setLoaded(false); setPreview(null); setLink('');
+    AsyncStorage.getItem(MACRO_STORAGE_KEY).then(raw => {
+      const value = raw === null ? [] : JSON.parse(raw);
+      if (!Array.isArray(value)) throw new Error('Invalid macro storage');
+      setMacros(value); setLoaded(true);
+    }).catch(() => Alert.alert('Storage error', 'Shared macros could not be loaded.'));
+  }, [visible]);
+  const exportItem = async (kind: string, data: unknown) => {
+    try { const message = await engineCommand<string>({action: 'share-export', kind, data}); await Share.share({message}); }
+    catch (error: any) { Alert.alert('Export failed', error.message); }
+  };
+  const inspect = async () => {
+    setPreview(null);
+    try { setPreview(await engineCommand<SharePreview>({action: 'share-preview', value: link})); }
+    catch (error: any) { Alert.alert('Invalid share link', error.message); }
+  };
+  const save = async () => {
+    if (!preview) return;
+    if (preview.kind === 'profile') { onProfile(preview.data); return; }
+    if (!loaded) return;
+    const next = [...macros, preview.data];
+    try { await AsyncStorage.setItem(MACRO_STORAGE_KEY, JSON.stringify(next)); setMacros(next); setPreview(null); setLink(''); Alert.alert('Macro saved', 'The macro is disabled and stored for sharing. Macro execution is not available on mobile.'); }
+    catch { Alert.alert('Storage error', 'The macro could not be saved.'); }
+  };
+  return <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}><SafeAreaView style={styles.safe}><View style={styles.modalHeader}><Text style={styles.panelTitle}>Share links</Text><Pressable onPress={onClose}><Text style={styles.link}>Done</Text></Pressable></View><ScrollView contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled">
+    <Text style={styles.sectionTitle}>Export</Text><Text style={styles.help}>Links omit account identities, credentials and macro text.</Text>
+    {selected && <Pressable style={styles.modalButton} onPress={() => exportItem('profile', selected)}><Text style={styles.buttonText}>Share selected profile</Text></Pressable>}
+    {macros.map((macro, index) => <Pressable key={macro.id || index} style={styles.modalButton} onPress={() => exportItem('macro', macro)}><Text style={styles.buttonText}>Share macro {index + 1}</Text></Pressable>)}
+    <Text style={styles.sectionTitle}>Import</Text><TextInput accessibilityLabel="Share link" value={link} onChangeText={value => {setLink(value); setPreview(null);}} autoCapitalize="none" autoCorrect={false} multiline style={styles.input} placeholder="Paste an AFK Desk share link" placeholderTextColor="#626d7b" /><Pressable style={styles.modalButton} onPress={inspect}><Text style={styles.buttonText}>Preview</Text></Pressable>
+    {preview && <><Text style={styles.sectionTitle}>Preview {preview.kind}</Text><Text selectable style={styles.help}>{maskNames(JSON.stringify(preview.data, null, 2), accounts, streamerMode)}</Text>{preview.errors.map((error, index) => <Text key={index} style={styles.help}>{maskNames(error.message, accounts, streamerMode)}</Text>)}<Text style={styles.help}>{preview.kind === 'profile' ? 'Continue to enter an account label and review settings before saving.' : 'Macros are imported disabled. Mobile can store and share them but cannot run them.'}</Text><Pressable style={styles.primary} onPress={save}><Text style={styles.primaryText}>{preview.kind === 'profile' ? 'Continue to account editor' : 'Save macro'}</Text></Pressable></>}
+  </ScrollView></SafeAreaView></Modal>;
+}
+
+function GraphModal({visible, accounts, streamerMode, onClose}: {visible: boolean; accounts: Account[]; streamerMode: boolean; onClose: () => void}) {
+  const [json, setJson] = useState('');
+  const [graph, setGraph] = useState<any>(null);
+  const mask = (value: string) => maskNames(value, accounts, streamerMode);
+  const inspect = () => { try { setGraph(graphCards(json)); } catch (error: any) { setGraph(null); Alert.alert('Invalid graph', error.message); } };
+  return <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}><SafeAreaView style={styles.safe}><View style={styles.modalHeader}><Text style={styles.panelTitle}>Macro graph</Text><Pressable onPress={onClose}><Text style={styles.link}>Done</Text></Pressable></View><ScrollView contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled">
+    <Text style={styles.help}>Paste version 3 graph JSON to view its nodes and connections.</Text><TextInput accessibilityLabel="Graph JSON" value={json} onChangeText={value => {setJson(value); setGraph(null);}} secureTextEntry={streamerMode} autoCapitalize="none" autoCorrect={false} style={styles.input} placeholder="Graph JSON" placeholderTextColor="#626d7b" /><Pressable style={styles.modalButton} onPress={inspect}><Text style={styles.buttonText}>View graph</Text></Pressable>
+    {graph && <><Text style={styles.sectionTitle}>{mask(graph.name)}</Text><Text style={styles.help}>Read-only · execution is not available on this device.</Text>{graph.nodes.map((node: any) => <View key={node.id} style={[styles.panel, styles.form]}><Text style={styles.panelTitle}>{mask(node.label)} · {mask(node.id)}</Text><Text style={styles.help}>{mask(node.kind)}{node.disabled ? ' · disabled' : ''}</Text><Text selectable style={styles.help}>{mask(node.params)}</Text><Text style={styles.help}>{node.connections.length ? node.connections.map(mask).join('\n') : 'No outgoing connections'}</Text></View>)}</>}
+  </ScrollView></SafeAreaView></Modal>;
+}
+
+function SettingsModal({onGraph, onShare, streamerMode, onStreamerMode, visible, accounts, onClose, onChange}: {onGraph: () => void; onShare: () => void; streamerMode: boolean; onStreamerMode: (value: boolean) => void; visible: boolean; accounts: Account[]; onClose: () => void; onChange: (accounts: Account[]) => void}) {
   const allStartup = accounts.length > 0 && accounts.every(account => account.connectOnStartup);
   return <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}><SafeAreaView style={styles.safe}><View style={styles.modalHeader}><Text style={styles.panelTitle}>Settings</Text><Pressable onPress={onClose}><Text style={styles.link}>Done</Text></Pressable></View><View style={styles.form}>
+    <Text style={styles.sectionTitle}>Macro graph</Text><Pressable style={styles.modalButton} onPress={onGraph}><Text style={styles.buttonText}>View graph JSON</Text></Pressable>
+    <Text style={styles.sectionTitle}>Share links</Text><Pressable style={styles.modalButton} onPress={onShare}><Text style={styles.buttonText}>Import or export profiles and macros</Text></Pressable>
     <Text style={styles.sectionTitle}>Startup</Text><Toggle label="Connect every account on app start" value={allStartup} onChange={value => onChange(accounts.map(account => ({...account, connectOnStartup: value})))} />
     <Text style={styles.sectionTitle}>Background operation</Text><Text style={styles.help}>Android keeps the AFK engine in a foreground service with a persistent notification. iOS can maintain sessions while open, but the operating system may suspend network connections in the background.</Text>
     <Text style={styles.sectionTitle}>Privacy</Text><Toggle label="Streamer mode" value={streamerMode} onChange={onStreamerMode} /><Text style={styles.help}>Hide account names in the app.</Text><Text style={styles.help}>Microsoft passwords are never requested or saved. Authentication tokens and account settings stay in this app's private storage.</Text>

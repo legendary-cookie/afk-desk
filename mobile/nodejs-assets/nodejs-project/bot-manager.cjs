@@ -81,7 +81,7 @@ class BotManager {
 
     session = {
       bot, account: { ...account }, antiAfkTimer: null, jumpTimer: null, telemetryTimer: null,
-      containerScanTimer: null, messageTimers: new Set(), ready: false, switching: false,
+      containerScanTimer: null, messageTimers: new Set(), upcomingMessages: new Map(), ready: false, switching: false,
       joinMessageSent: false, identityKey: '', telemetryKey: '', nearestChest: null,
       depositing: false, depositRevision: 0, activeDepositContainer: null,
       inventoryAction: false, inventoryQueue: Promise.resolve(), resourcePack: null, joinedAt: Date.now(), lastDepositAt: 0,
@@ -129,7 +129,8 @@ class BotManager {
       if (!session.telemetryTimer) session.telemetryTimer = setInterval(emitTelemetry, 2000)
       if (!session.containerScanTimer) {
         void this.refreshChest(account.id)
-        session.containerScanTimer = setInterval(() => { void this.refreshChest(account.id) }, CONTAINER_SCAN_INTERVAL)
+        session.nextContainerScan = Date.now() + CONTAINER_SCAN_INTERVAL
+        session.containerScanTimer = setInterval(() => { session.nextContainerScan = Date.now() + CONTAINER_SCAN_INTERVAL; void this.refreshChest(account.id) }, CONTAINER_SCAN_INTERVAL)
       }
       if (firstReady && account.antiAfk !== false) this.enableAntiAfk(account.id, account.antiAfkInterval)
       if (firstReady && account.joinMessage && !session.joinMessageSent) {
@@ -496,6 +497,7 @@ class BotManager {
     const delay = Math.max(0, Math.min(Number(delaySeconds) || 0, 30)) * 1000
     const timer = setTimeout(() => {
       session.messageTimers.delete(timer)
+      session.upcomingMessages.delete(timer)
       if (this.sessions.get(id) !== session) return
       if (kind === 'join' && message !== session.account.joinMessage) return
       if (kind === 'serverChange' && message !== session.account.serverChangeMessage) return
@@ -507,6 +509,17 @@ class BotManager {
       catch (error) { this.emit('log', id, { kind: 'error', message: `Automatic message failed: ${error.message}`, at: Date.now() }) }
     }, delay)
     session.messageTimers.add(timer)
+    session.upcomingMessages.set(timer, { kind: 'message', at: Date.now() + delay })
+  }
+
+  getUpcomingRuns(id) {
+    const session = this.sessions.get(id)
+    if (!session) return []
+    const runs = [...session.upcomingMessages.values()]
+    if (session.account.autoDepositToChest && session.containerScanTimer) runs.push({ kind: 'auto-deposit check', at: session.nextContainerScan })
+    if (session.serverChangeRetryTimer) runs.push({ kind: 'server-change retry', at: session.nextServerChangeRetry })
+    if (session.antiAfkChatTimer) runs.push({ kind: 'timed message', at: session.nextAntiAfkChat })
+    return runs.sort((a, b) => a.at - b.at)
   }
 
   updateAccountConfig(account) {
@@ -559,6 +572,7 @@ class BotManager {
     if (!minutes || Date.now() - pending.startedAt >= minutes * 60_000) return this.clearServerChangeRetry(session)
     const attempt = ++session.serverChangeRetryAttempts + 1
     const seconds = SERVER_CHANGE_RETRY_DELAYS[Math.min(session.serverChangeRetryAttempts - 1, SERVER_CHANGE_RETRY_DELAYS.length - 1)]
+    session.nextServerChangeRetry = Date.now() + seconds * 1000
     this.emit('log', id, { kind: 'info', message: `Server not ready, retrying ${pending.message} in ${seconds}s (attempt ${attempt})`, at: Date.now() })
     session.serverChangeRetryTimer = setTimeout(() => {
       session.serverChangeRetryTimer = null
@@ -594,7 +608,9 @@ class BotManager {
     session.antiAfkChatTimer = null
     if (session.account.antiAfkChatEnabled && session.account.antiAfkChatMessage) {
       const chatInterval = Math.max(10, Math.min(Number(session.account.antiAfkChatIntervalSec) || 300, 86400)) * 1000
+      session.nextAntiAfkChat = Date.now() + chatInterval
       session.antiAfkChatTimer = setInterval(() => {
+        session.nextAntiAfkChat = Date.now() + chatInterval
         if (this.sessions.get(id) === session) this.scheduleMessage(id, session.account.antiAfkChatMessage, 0, 'antiAfk')
       }, chatInterval)
     }
@@ -630,6 +646,7 @@ class BotManager {
     if (session.containerScanTimer) clearInterval(session.containerScanTimer)
     for (const timer of session.messageTimers || []) clearTimeout(timer)
     session.messageTimers?.clear()
+    session.upcomingMessages?.clear()
     this.clearServerChangeRetry(session)
     session.antiAfkTimer = null
     session.jumpTimer = null
