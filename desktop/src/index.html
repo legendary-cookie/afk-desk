@@ -332,11 +332,27 @@
           <div class="field full" id="auto-deposit-interval-wrap"><span>Deposit interval</span><div class="settings-visual-grid"><input id="auto-deposit-interval" type="number" min="1" max="86400" value="300" /><select id="auto-deposit-interval-unit"><option value="1">Seconds</option><option value="60">Minutes</option><option value="3600">Hours</option></select></div><small>Stored as seconds. The interval starts when you join or after a successful deposit.</small></div>
           <label class="field full" id="auto-deposit-threshold-wrap"><span>Free slots remaining to count as full</span><input id="auto-deposit-full-threshold" type="number" min="0" max="35" value="0" /><small>Counts unlocked main-inventory slots only; armor and offhand are ignored. 0 means every unlocked main slot is occupied.</small></label>
           <div class="form-section full"><h3>Safety</h3><p>Safety actions are off by default. Online hours use this device's local time.</p></div>
+          <label class="check-row"><input id="safety-armor" type="checkbox" /> Auto armor</label>
+          <label class="field"><span>Replace armor below durability (%)</span><input id="safety-armor-threshold" type="number" min="0" max="100" value="5" /></label>
+          <label class="check-row"><input id="safety-ominous" type="checkbox" /> Auto drink Ominous Bottle</label>
+          <label>Preferred Ominous level <select id="safety-ominous-level"><option value="0">I</option><option value="1">II</option><option value="2">III</option><option value="3">IV</option><option value="4">V</option></select></label>
+          <label>Ominous cooldown (seconds; 0 disables) <input id="safety-ominous-cooldown" type="number" min="0" max="86400" /></label>
+          <label class="check-row"><input id="safety-apple" type="checkbox" /> Auto golden apple</label>
+          <label>Golden apple health threshold (1–20) <input id="safety-apple-health" type="number" min="1" max="20" /></label>
+          <label>Preferred apple <select id="safety-apple-preference"><option value="normal">Golden apple</option><option value="enchanted">Enchanted golden apple</option></select></label>
+          <p>Also eats an apple when recently damaged and Absorption or Regeneration is missing.</p>
           <label class="check-row"><input id="safety-eat" type="checkbox" /> Auto-eat</label>
           <label class="field"><span>Eat at food level</span><input id="safety-food" type="number" min="0" max="20" value="14" /></label>
+          <label class="field"><span>Food priority</span><select id="safety-food-priority"><option value="hotbar">Hotbar first</option><option value="nutrition">Most nutritious first</option></select></label>
+          <label class="check-row"><input id="safety-food-golden" type="checkbox" /> Allow golden apples as normal food</label>
+          <label class="check-row"><input id="safety-auto-totem" type="checkbox" /> Keep a totem in offhand</label>
           <label class="check-row"><input id="safety-totem" type="checkbox" /> Equip a totem at low health</label>
           <label class="check-row"><input id="safety-disconnect" type="checkbox" /> Disconnect at low health</label>
           <label class="field"><span>Low-health threshold</span><input id="safety-health" type="number" min="0" max="20" value="6" /></label>
+          <label class="check-row"><input id="safety-armor-disconnect" type="checkbox" /> Disconnect when armor durability is low</label>
+          <label class="field"><span>Armor durability threshold (%)</span><input id="safety-armor-disconnect-threshold" type="number" min="0" max="100" value="5" /></label>
+          <label class="check-row"><input id="safety-totem-disconnect" type="checkbox" /> Disconnect when totems run out after a pop</label>
+          <label class="check-row"><input id="safety-disconnect-notify" type="checkbox" /> Notify on safety disconnect</label>
           <label class="field"><span>Reconnect cooldown (minutes)</span><input id="safety-cooldown" type="number" min="1" max="1440" value="10" /></label>
           <label class="check-row full"><input id="safety-schedule" type="checkbox" /> Limit online hours</label>
           <label class="field"><span>Start</span><input id="safety-start" type="time" value="00:00" /></label>

@@ -792,7 +792,12 @@ class AppCore {
       this.healthEdges.set(account.id, h)
       this.previousInventoryFull.set(account.id, p.inventoryFull === true)
     }
-    if (event.type === 'safety-disconnect') this._send({ kind: 'lowHealth', accountId: account.id, accountName: name, message: `${name} disconnected for low health.`, payload: event.payload, at: event.at })
+    if (event.type === 'safety-disconnect' && event.payload.notify) {
+      const reason = { 'low health': 'low health', 'low armor durability': 'low armor durability', 'totems exhausted': 'totems exhausted' }[event.payload.reason] || 'safety protection'
+      const message = `${name} disconnected: ${reason}.`
+      this._send({ kind: 'lowHealth', accountId: account.id, accountName: name, message, payload: event.payload, at: event.at })
+      if (this.settingsStore.get().notificationsEnabled === true) this.platform.notify?.({ title: 'AFK Desk', body: message })
+    }
     if (event.type === 'death') this._send({ kind: 'death', accountId: account.id, accountName: name, message: `${name} died.`, at: event.at })
   }
 
@@ -1005,10 +1010,25 @@ function validateAccount(input, existing, secretBox, normalizeSkinUrl = defaultN
     autoDepositMode: ['immediate', 'interval', 'inventoryFull', 'intervalOrFull'].includes(input?.autoDepositMode ?? existing?.autoDepositMode) ? (input?.autoDepositMode ?? existing?.autoDepositMode) : 'immediate',
     autoDepositInterval: Math.round(bounded(input?.autoDepositInterval ?? existing?.autoDepositInterval, 1, 86400, 300)),
     autoDepositFullThreshold: Math.round(bounded(input?.autoDepositFullThreshold ?? existing?.autoDepositFullThreshold, 0, 35, 0)),
+    autoArmor: (input?.autoArmor ?? existing?.autoArmor) === true,
+    autoArmorThreshold: bounded(input?.autoArmorThreshold ?? existing?.autoArmorThreshold, 0, 100, 5),
+    autoOminousBottle: (input?.autoOminousBottle ?? existing?.autoOminousBottle) === true,
+    autoOminousAmplifier: bounded(input?.autoOminousAmplifier ?? existing?.autoOminousAmplifier, 0, 4, 0),
+    autoOminousCooldown: bounded(input?.autoOminousCooldown ?? existing?.autoOminousCooldown, 0, 86400, 0),
+    autoGoldenApple: (input?.autoGoldenApple ?? existing?.autoGoldenApple) === true,
+    autoGoldenAppleHealth: bounded(input?.autoGoldenAppleHealth ?? existing?.autoGoldenAppleHealth, 1, 20, 10),
+    autoGoldenApplePreference: (input?.autoGoldenApplePreference ?? existing?.autoGoldenApplePreference) === 'enchanted' ? 'enchanted' : 'normal',
     autoEat: (input?.autoEat ?? existing?.autoEat) === true,
     autoEatThreshold: bounded(input?.autoEatThreshold ?? existing?.autoEatThreshold, 0, 20, 14),
+    autoTotem: (input?.autoTotem ?? existing?.autoTotem) === true,
+    autoEatPriority: (input?.autoEatPriority ?? existing?.autoEatPriority) === 'nutrition' ? 'nutrition' : 'hotbar',
+    autoEatAllowGoldenApples: (input?.autoEatAllowGoldenApples ?? existing?.autoEatAllowGoldenApples) === true,
     lowHealthTotem: (input?.lowHealthTotem ?? existing?.lowHealthTotem) === true,
     lowHealthDisconnect: (input?.lowHealthDisconnect ?? existing?.lowHealthDisconnect) === true,
+    armorDisconnect: (input?.armorDisconnect ?? existing?.armorDisconnect) === true,
+    armorDisconnectThreshold: bounded(input?.armorDisconnectThreshold ?? existing?.armorDisconnectThreshold, 0, 100, 5),
+    totemDisconnect: (input?.totemDisconnect ?? existing?.totemDisconnect) === true,
+    safetyDisconnectNotify: (input?.safetyDisconnectNotify ?? existing?.safetyDisconnectNotify) === true,
     lowHealthThreshold: bounded(input?.lowHealthThreshold ?? existing?.lowHealthThreshold, 0, 20, 6),
     lowHealthCooldownMinutes: bounded(input?.lowHealthCooldownMinutes ?? existing?.lowHealthCooldownMinutes, 1, 1440, 10),
     scheduleEnabled: (input?.scheduleEnabled ?? existing?.scheduleEnabled) === true,

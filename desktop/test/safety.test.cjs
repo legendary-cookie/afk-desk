@@ -67,3 +67,79 @@ for (const file of ['../electron/safety.cjs', '../../mobile/nodejs-assets/nodejs
     clearInterval(session.safetyTimer)
   })
 }
+for (const file of ['../electron/safety.cjs', '../../mobile/nodejs-assets/nodejs-project/safety.cjs']) {
+  const { pickFood, installSafety } = require(file)
+  test(`${file}: food preference and golden apple opt-in`, () => {
+    const foods = { bread: { foodPoints: 5 }, steak: { foodPoints: 8 }, golden_apple: { foodPoints: 20 } }
+    const items = [{ name: 'bread', slot: 36 }, { name: 'steak', slot: 9 }, { name: 'golden_apple', slot: 10 }]
+    assert.equal(pickFood(items, foods, [], 'nutrition').name, 'steak')
+    assert.equal(pickFood(items, foods, [], 'hotbar').name, 'bread')
+    assert.equal(pickFood(items, foods, [], 'nutrition', true).name, 'golden_apple')
+  })
+  test(`${file}: auto totem re-equips on inventory change`, async () => {
+    const { EventEmitter } = require('node:events')
+    const bot = new EventEmitter(), inventory = new EventEmitter(), slots = []
+    slots[9] = { name: 'totem_of_undying', slot: 9 }
+    Object.assign(inventory, { slots, items: () => slots.filter(Boolean) })
+    let equipped = 0
+    Object.assign(bot, { health: 20, inventory, async equip(item) { equipped++; slots[45] = item; slots[9] = null } })
+    const account = { id: 'a', autoTotem: true }, session = { bot, account, ready: true }
+    const manager = { sessions: new Map([['a', session]]), emit() {}, async withInventoryAction(id, fn) { await fn() } }
+    installSafety(manager, account, session, {})
+    inventory.emit('updateSlot'); await new Promise(resolve => setImmediate(resolve))
+    assert.equal(equipped, 1)
+    slots[45] = null; slots[9] = { name: 'totem_of_undying', slot: 9 }
+    inventory.emit('updateSlot'); await new Promise(resolve => setImmediate(resolve))
+    assert.equal(equipped, 2)
+    clearInterval(session.safetyTimer)
+  })
+}
+for (const file of ['../electron/safety.cjs', '../../mobile/nodejs-assets/nodejs-project/safety.cjs']) {
+  const { pickConsumable } = require(file)
+  test(`${file}: consumables honor effects, damage, preference, locks and cooldown`, () => {
+    const items = [{name: 'ominous_bottle', slot: 9, components: [{type: 'ominous_bottle_amplifier', data: 2}]}, {name: 'golden_apple', slot: 10}, {name: 'enchanted_golden_apple', slot: 11}]
+    const bot = {health: 20, entity: {effects: {}}, registry: {effectsByName: {BadOmen: {id: 30}, RaidOmen: {id: 34}, Absorption: {id: 21}, Regeneration: {id: 9}}}, inventory: {items: () => items}}
+    const config = {autoOminousBottle: true, autoOminousAmplifier: 2, autoOminousCooldown: 30}
+    assert.equal(pickConsumable(config, bot, null, null, 50000), items[0])
+    assert.equal(pickConsumable({...config, autoOminousAmplifier: 4}, bot, null, null, 50000), items[0])
+    assert.equal(pickConsumable(config, bot, null, 40000, 50000), null)
+    bot.entity.effects[34] = {}; assert.equal(pickConsumable(config, bot, null, null, 50000), null)
+    delete bot.entity.effects[34]; bot.entity.effects[30] = {}; assert.equal(pickConsumable(config, bot, null, null, 50000), null)
+    delete bot.entity.effects[30]; assert.equal(pickConsumable({...config, lockedInventorySlots: [9]}, bot, null, null, 50000), null)
+    const apple = {autoGoldenApple: true, autoGoldenAppleHealth: 10, autoGoldenApplePreference: 'enchanted'}
+    assert.equal(pickConsumable(apple, bot, null, null, 50000), null)
+    assert.equal(pickConsumable(apple, bot, 45000, null, 50000), items[2])
+    bot.entity.effects[21] = {}; bot.entity.effects[9] = {}
+    assert.equal(pickConsumable(apple, bot, 45000, null, 50000), null)
+    bot.health = 10; assert.equal(pickConsumable({...apple, lockedInventorySlots: [11]}, bot, null, null, 50000), items[1])
+    bot.currentWindow = {}; assert.equal(pickConsumable(apple, bot, null, null, 50000), null)
+  })
+}
+for (const file of ['../electron/safety.cjs', '../../mobile/nodejs-assets/nodejs-project/safety.cjs']) {
+  test(`${file}: bottle use works at full hunger and waits for held item change`, async () => {
+    const {consumeItem} = require(file), {EventEmitter} = require('node:events')
+    const bot = new EventEmitter(), item = {name: 'ominous_bottle', type: 7, count: 1}
+    let activated = 0, deactivated = 0
+    bot.activateItem = () => { activated++ }; bot.deactivateItem = () => { deactivated++ }
+    const pending = consumeItem(bot, item)
+    assert.equal(activated, 1)
+    bot.emit('heldItemChanged', {type: 8, count: 1})
+    await pending
+    assert.equal(deactivated, 1)
+    assert.equal(bot.listenerCount('heldItemChanged'), 0)
+  })
+}
+for (const file of ['../electron/safety.cjs', '../../mobile/nodejs-assets/nodejs-project/safety.cjs']) {
+  test(`${file}: damaged health event triggers preferred apple through inventory queue`, async () => {
+    const {installSafety} = require(file), {EventEmitter} = require('node:events')
+    const bot = new EventEmitter(), slots = []
+    slots[36] = {name: 'enchanted_golden_apple', slot: 36}
+    Object.assign(bot, {health: 20, quickBarSlot: 1, entity: {effects: {}}, inventory: {slots, items: () => slots.filter(Boolean)}, setQuickBarSlot(n) { this.quickBarSlot = n }, async consume() { assert.equal(this.quickBarSlot, 0); this.eaten = true }})
+    const account = {id: 'a', autoGoldenApple: true, autoGoldenApplePreference: 'enchanted', autoGoldenAppleHealth: 5}
+    const session = {bot, account, ready: true}, manager = {sessions: new Map([['a', session]]), emit() {}, async withInventoryAction(id, fn) { await fn() }}
+    installSafety(manager, account, session, {})
+    bot.health = 19; bot.emit('health'); await new Promise(resolve => setImmediate(resolve))
+    assert.equal(bot.eaten, true); assert.equal(bot.quickBarSlot, 1)
+    clearInterval(session.safetyTimer)
+  })
+}

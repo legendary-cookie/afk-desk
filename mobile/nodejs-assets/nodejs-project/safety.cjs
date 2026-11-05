@@ -1,15 +1,94 @@
 'use strict'
 
+// Inventory slots 5–8 are the player's equipped armor.
+const armorSlots = [['head', 5, 'helmet'], ['torso', 6, 'chestplate'], ['legs', 7, 'leggings'], ['feet', 8, 'boots']]
+const armorTiers = { leather: 1, golden: 2, chainmail: 3, iron: 4, diamond: 5, netherite: 6 }
+function armorStats(item, suffix, registry) {
+  const match = /^(leather|golden|chainmail|iron|diamond|netherite)_(helmet|chestplate|leggings|boots)$/.exec(item?.name || '')
+  if (!match || match[2] !== suffix) return null
+  const maximum = Number(item.maxDurability)
+  const durability = maximum > 0 ? Math.max(0, Math.min(100, 100 * (maximum - (Number(item.durabilityUsed) || 0)) / maximum)) : 100
+  let enchants = []
+  try { enchants = item.enchants || [] } catch {}
+  const levels = enchants?.levels || enchants
+  const entries = Array.isArray(levels) ? levels : levels instanceof Map ? [...levels].map(([name, level]) => ({ name, level })) : Object.entries(levels || {}).map(([name, level]) => ({ name, level }))
+  const protection = entries.reduce((best, e) => {
+    const id = e.name ?? e.id
+    const name = registry?.enchantments?.[id]?.name ?? id
+    return String(name).replace(/^minecraft:/, '') === 'protection' ? Math.max(best, Number(e.lvl ?? e.level) || 0) : best
+  }, 0)
+  return { tier: armorTiers[match[1]], protection, durability }
+}
+function chooseArmor(bot, account, destination, slot, suffix) {
+  const locks = new Set((account.lockedInventorySlots || []).map(Number))
+  if (locks.has(slot)) return null
+  const threshold = Math.max(0, Math.min(100, Number(account.autoArmorThreshold ?? 5) || 0))
+  const current = bot.inventory?.slots?.[slot]
+  // Do not displace non-armor equipment such as elytra, or binding-cursed armor.
+  const currentStats = armorStats(current, suffix, bot.registry)
+  if (current && !currentStats) return null
+  try {
+    const enchants = current?.enchants || []
+    const levels = enchants.levels || enchants
+    if (Array.isArray(levels) ? levels.some(e => /(?:binding_curse|curse_of_binding)$/.test(String(e.name ?? e.id))) : Object.keys(levels || {}).some(key => /(?:binding_curse|curse_of_binding)$/.test(key))) return null
+  } catch { return null }
+  const candidates = (bot.inventory?.items?.() || []).filter(item => item.slot >= 9 && item.slot <= 44 && !locks.has(Number(item.slot))).map(item => ({ item, stats: armorStats(item, suffix, bot.registry) })).filter(entry => entry.stats)
+  if (currentStats) candidates.push({ item: current, stats: currentStats })
+  candidates.sort((a, b) => {
+    const healthy = x => x.durability >= threshold ? 1 : 0
+    return healthy(b.stats) - healthy(a.stats) || b.stats.tier - a.stats.tier || b.stats.protection - a.stats.protection || b.stats.durability - a.stats.durability
+  })
+  return candidates[0]?.item === current ? null : candidates[0]?.item || null
+}
 function shouldEat(account, bot) {
   return account.autoEat === true && Number.isFinite(bot.food) && bot.food <= (account.autoEatThreshold ?? 14) && !bot.currentWindow
 }
-function pickFood(items, foods, locked = []) {
+function pickFood(items, foods, locked = [], priority = 'hotbar', allowGoldenApples = false) {
   const locks = new Set(locked.map(Number))
-  return (items || []).filter(item => !locks.has(Number(item.slot)) && foods?.[item.name]).sort((a, b) => {
+  return (items || []).filter(item => !locks.has(Number(item.slot)) && foods?.[item.name] && (allowGoldenApples || !['golden_apple', 'enchanted_golden_apple'].includes(item.name))).sort((a, b) => {
     const hot = (item) => item.slot >= 36 && item.slot <= 44 ? 1 : 0
     const value = (item) => Number(foods[item.name].foodPoints || 0) + Number(foods[item.name].saturation || 0)
-    return hot(b) - hot(a) || value(b) - value(a)
+    return priority === 'nutrition' ? value(b) - value(a) || hot(b) - hot(a) : hot(b) - hot(a) || value(b) - value(a)
   })[0] || null
+}
+function hasEffect(bot, name) {
+  const effects = bot.entity?.effects || {}
+  const id = bot.registry?.effectsByName?.[name]?.id
+  return (id != null && effects[id] != null) || Object.keys(effects).some(key => key.replace(/[^a-z]/gi, '').toLowerCase() === name.toLowerCase())
+}
+function bottleAmplifier(item) {
+  const component = item.components?.find(c => String(c.type ?? c.name).replace('minecraft:', '') === 'ominous_bottle_amplifier')
+  let value = component?.data ?? component?.value ?? item.nbt?.value?.OminousBottleAmplifier?.value ?? item.nbt?.OminousBottleAmplifier
+  while (value && typeof value === 'object') value = value.value
+  return Number.isInteger(Number(value)) && value != null ? Number(value) : 0
+}
+function pickConsumable(account, bot, lastDamage, lastBottle, now = Date.now()) {
+  if (bot.currentWindow || !(bot.health > 0)) return null
+  const locks = new Set((account.lockedInventorySlots || []).map(Number))
+  const items = (bot.inventory?.items?.() || []).filter(item => item.slot >= 9 && item.slot <= 44 && !locks.has(Number(item.slot)))
+  if (account.autoGoldenApple && (bot.health <= (Number(account.autoGoldenAppleHealth ?? 10)) || (lastDamage != null && now - lastDamage < 10000 && (!hasEffect(bot, 'Absorption') || !hasEffect(bot, 'Regeneration'))))) {
+    const preferred = account.autoGoldenApplePreference === 'enchanted' ? 'enchanted_golden_apple' : 'golden_apple'
+    const apple = items.find(item => item.name === preferred) || items.find(item => ['golden_apple', 'enchanted_golden_apple'].includes(item.name))
+    if (apple) return apple
+  }
+  if (account.autoOminousBottle && !hasEffect(bot, 'BadOmen') && !hasEffect(bot, 'RaidOmen') && (lastBottle == null || now - lastBottle >= (Number(account.autoOminousCooldown ?? 0) * 1000))) {
+    const bottles = items.filter(item => item.name === 'ominous_bottle')
+    const preference = Number(account.autoOminousAmplifier ?? 0)
+    return bottles.find(item => bottleAmplifier(item) === preference) || bottles.sort((a, b) => Math.abs(bottleAmplifier(a) - preference) - Math.abs(bottleAmplifier(b) - preference))[0] || null
+  }
+  return null
+}
+async function consumeItem(bot, item) {
+  if (item.name !== 'ominous_bottle') return bot.consume()
+  // Mineflayer's consume() rejects bottles at full hunger, though the game allows them.
+  const type = item.type, count = item.count
+  await new Promise((resolve, reject) => {
+    const finish = error => { clearTimeout(timer); bot.removeListener('heldItemChanged', changed); bot.deactivateItem(); error ? reject(error) : resolve() }
+    const changed = held => { if (!held || held.type !== type || held.count !== count) finish() }
+    const timer = setTimeout(() => finish(new Error('Bottle consumption timed out')), 5000)
+    bot.on('heldItemChanged', changed)
+    try { bot.activateItem() } catch (error) { finish(error) }
+  })
 }
 function shouldLowHealthAct(account, health) {
   return Number.isFinite(health) && health > 0 && health <= (account.lowHealthThreshold ?? 6) && (account.lowHealthTotem === true || account.lowHealthDisconnect === true)
@@ -42,37 +121,60 @@ function deferSafety(manager, account, state) {
 }
 function installSafety(manager, account, session, state) {
   const bot = session.bot
+  let previousHealth = bot.health, lastDamage = null, lastBottle = null
+  let popPending = false, popTimer = null, disconnecting = false
+  const disconnect = reason => {
+    if (disconnecting || manager.sessions.get(account.id) !== session || !session.ready) return
+    disconnecting = true
+    state.cooldownUntil = Date.now() + (Number(session.account.lowHealthCooldownMinutes ?? 10) * 60000)
+    state.safetyPause = 'health'
+    manager.emit('safety-disconnect', account.id, { reason, health: bot.health, cooldownUntil: state.cooldownUntil, notify: session.account.safetyDisconnectNotify === true })
+    bot.end('Safety protection: ' + reason)
+  }
   const tick = async () => {
+    if (Number.isFinite(bot.health)) {
+      if (Number.isFinite(previousHealth) && bot.health < previousHealth) lastDamage = Date.now()
+      previousHealth = bot.health
+    }
     if (manager.sessions.get(account.id) !== session || session.safetyBusy) return
     const config = session.account
     if (!isWithinSchedule(config)) { state.safetyPause = 'schedule'; bot.end('Outside online hours'); return }
     if (!session.ready) return
+    if (config.lowHealthDisconnect && Number.isFinite(bot.health) && bot.health >= 0 && bot.health <= Number(config.lowHealthThreshold ?? 6)) { disconnect('low health'); return }
+    if (config.armorDisconnect && armorSlots.some(([, slot]) => {
+      const item = bot.inventory?.slots?.[slot], max = Number(item?.maxDurability), used = Number(item?.durabilityUsed ?? 0)
+      return Number.isFinite(max) && max > 0 && Number.isFinite(used) && 100 * (max - used) / max <= Number(config.armorDisconnectThreshold ?? 5)
+    })) { disconnect('low armor durability'); return }
     session.safetyBusy = true
     try {
-      if (shouldLowHealthAct(config, bot.health)) {
-        if (config.lowHealthTotem && !bot.currentWindow && !session.depositing && !session.inputClaims?.get('rightClick')?.size) {
+      if (config.autoTotem || shouldLowHealthAct(config, bot.health)) {
+        if ((config.autoTotem || config.lowHealthTotem && shouldLowHealthAct(config, bot.health)) && !bot.currentWindow && !session.depositing && !session.inputClaims?.get('rightClick')?.size) {
           await manager.withInventoryAction(account.id, async () => {
             const current = session.account
             const locks = new Set((current.lockedInventorySlots || []).map(Number))
-            if (manager.sessions.get(account.id) !== session || bot.currentWindow || session.depositing || session.inputClaims?.get('rightClick')?.size || !shouldLowHealthAct(current, bot.health) || !current.lowHealthTotem || locks.has(45) || bot.inventory?.slots?.[45]?.name === 'totem_of_undying') return
+            if (manager.sessions.get(account.id) !== session || bot.currentWindow || session.depositing || session.inputClaims?.get('rightClick')?.size || !(current.autoTotem || current.lowHealthTotem && shouldLowHealthAct(current, bot.health)) || locks.has(45) || bot.inventory?.slots?.[45]?.name === 'totem_of_undying') return
             const totem = bot.inventory?.items?.().find(item => item.name === 'totem_of_undying' && !locks.has(Number(item.slot)))
             if (totem) await bot.equip(totem, 'off-hand')
           })
         }
-        if (config.lowHealthDisconnect) {
-          state.cooldownUntil = Date.now() + (config.lowHealthCooldownMinutes ?? 10) * 60000
-          state.safetyPause = 'health'
-          manager.emit('safety-disconnect', account.id, { health: bot.health, cooldownUntil: state.cooldownUntil })
-          bot.end('Low health protection')
-          return
-        }
+
       }
-      if (shouldEat(config, bot) && !session.depositing && !session.inputClaims?.get('rightClick')?.size) {
+      if (config.autoArmor && !bot.currentWindow && !session.depositing && !session.inputClaims?.get('rightClick')?.size) {
+        await manager.withInventoryAction(account.id, async () => {
+          for (const [destination, slot, suffix] of armorSlots) {
+            const current = session.account
+            if (manager.sessions.get(account.id) !== session || !session.ready || !current.autoArmor || bot.currentWindow || session.depositing || session.inputClaims?.get('rightClick')?.size) return
+            const item = chooseArmor(bot, current, destination, slot, suffix)
+            if (item) await bot.equip(item, destination)
+          }
+        })
+      }
+      if ((pickConsumable(config, bot, lastDamage, lastBottle) || shouldEat(config, bot)) && !session.depositing && !session.inputClaims?.get('rightClick')?.size) {
         await manager.withInventoryAction(account.id, async () => {
           const current = session.account
-          if (manager.sessions.get(account.id) !== session || session.depositing || !shouldEat(current, bot) || session.inputClaims?.get('rightClick')?.size) return
+          if (manager.sessions.get(account.id) !== session || !session.ready || session.depositing || bot.currentWindow || session.inputClaims?.get('rightClick')?.size) return
           const locks = new Set((current.lockedInventorySlots || []).map(Number))
-          const food = pickFood(bot.inventory?.items?.(), bot.registry?.foodsByName, [...locks])
+          const food = pickConsumable(current, bot, lastDamage, lastBottle) || (shouldEat(current, bot) && pickFood(bot.inventory?.items?.(), bot.registry?.foodsByName, [...locks], current.autoEatPriority, current.autoEatAllowGoldenApples))
           if (!food) return
           const source = Number(food.slot)
           const target = source >= 36 && source <= 44 ? source : Array.from({ length: 9 }, (_, i) => i + 36).find(slot => !locks.has(slot))
@@ -84,7 +186,7 @@ function installSafety(manager, account, session, state) {
           try {
             if (source !== target) { await bot.moveSlotItem(source, target); swapped = true }
             bot.setQuickBarSlot(target - 36)
-            if (!bot.currentWindow && !session.depositing && manager.sessions.get(account.id) === session) await bot.consume()
+            if (!bot.currentWindow && !session.depositing && manager.sessions.get(account.id) === session) { await consumeItem(bot, food); if (food.name === 'ominous_bottle') lastBottle = Date.now(); if (food.name === 'golden_apple' || food.name === 'enchanted_golden_apple') lastDamage = null }
           } finally {
             try {
               while (swapped && manager.sessions.get(account.id) === session && bot.currentWindow) await new Promise(resolve => setTimeout(resolve, 50))
@@ -102,6 +204,19 @@ function installSafety(manager, account, session, state) {
   }
   session.safetyTimer = setInterval(tick, 2000)
   session.safetyTimer.unref?.()
+  bot._client?.on('entity_status', packet => {
+    if (packet.entityStatus !== 35 || packet.entityId !== bot.entity?.id || !session.account.totemDisconnect || manager.sessions.get(account.id) !== session || !session.ready) return
+    popPending = true
+    clearTimeout(popTimer)
+    // The status packet can precede the inventory packet that consumes the totem.
+    popTimer = setTimeout(() => {
+      if (!popPending) return
+      popPending = false
+      if (session.account.totemDisconnect && !(bot.inventory?.slots || []).some(item => item?.name === 'totem_of_undying' && (item.count ?? 1) > 0)) disconnect('totems exhausted')
+    }, 500)
+    popTimer.unref?.()
+  })
   bot.on('health', tick)
+  bot.inventory?.on?.('updateSlot', tick)
 }
-module.exports = { shouldEat, pickFood, shouldLowHealthAct, isWithinSchedule, deferSafety, installSafety }
+module.exports = { consumeItem, hasEffect, bottleAmplifier, pickConsumable, chooseArmor, armorStats, shouldEat, pickFood, shouldLowHealthAct, isWithinSchedule, deferSafety, installSafety }
