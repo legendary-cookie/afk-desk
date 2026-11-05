@@ -1,3 +1,4 @@
+const hud = require('./hud.cjs')
 const { isWithinSchedule, deferSafety, installSafety } = require('./safety.cjs')
 const path = require('node:path')
 const { sampleGrid, goalPosition, entityType, PALETTE } = require('./minimap.cjs')
@@ -304,6 +305,8 @@ class BotManager {
       session.telemetryKey = key
       this.emit('telemetry', account.id, snapshot)
     }
+
+    hud.installHud(bot, emitTelemetry)
 
     bot.on('login', () => {
       const dimension = bot.game?.dimension
@@ -2285,6 +2288,7 @@ function buildTelemetry(bot, nearestChest = null, environmentalMovement, fluidMo
     stalledCorrections: Math.max(0, Number(fluidMotion?.stalledCorrections) || 0)
   }
   return {
+    hud: hud.snapshot(bot),
     health: Math.max(0, Math.min(finite(bot?.health), 20)),
     food: Math.max(0, Math.min(finite(bot?.food), 20)),
     position: position ? {

@@ -959,3 +959,10 @@ dialog.macro-templates-dialog {
 .overview-module-bar { display: flex; background: var(--surface-raised); }
 .overview-module-handle { flex: 1; text-align: left; cursor: grab; touch-action: none; }
 .overview-module-resize { position: absolute; right: 0; bottom: 0; cursor: nwse-resize; touch-action: none; z-index: 2; }
+
+.game-hud { display:grid; gap:6px; padding:10px; font:12px monospace; }
+.hud-scoreboard { background:#000a; padding:8px; text-align:right; }
+.hud-title { text-align:center; font-weight:bold; }
+.hud-bar { height:7px; background-color:#222; position:relative; overflow:hidden; }
+.hud-bar div { height:100%; }
+.hud-bar.divided::after { content:''; position:absolute; inset:0; background:repeating-linear-gradient(to right, transparent 0, transparent calc(100% / var(--divisions) - 1px), #111 calc(100% / var(--divisions) - 1px), #111 calc(100% / var(--divisions))); }

@@ -1,0 +1,20 @@
+const {test} = require('node:test')
+const assert = require('node:assert/strict')
+const {EventEmitter} = require('node:events')
+const {segments, roman, duration, barModel, installHud, snapshot} = require('../electron/hud.cjs')
+test('formats bounded colored components and HUD models', () => {
+ assert.deepEqual(segments('{"text":"Hi","color":"red","extra":[{"text":"!","color":"gold"}]}'), [{text:'Hi',color:'#ff5555'},{text:'!',color:'#ffaa00'}])
+ assert.deepEqual(segments('§aGreen\u0000§cRed'), [{text:'Green',color:'#55ff55'},{text:'Red',color:'#ff5555'}])
+ assert.equal(segments('x'.repeat(300))[0].text.length,256)
+ assert.equal(roman(2),'II'); assert.equal(roman(14),'XIV'); assert.equal(duration(61),'1:01'); assert.equal(duration(null),'∞')
+ assert.deepEqual(barModel({entityUUID:'a', title:'§cBoss',health:2,color:'red',dividers:10}),{id:'a',title:[{text:'Boss',color:'#ff5555'}],health:1,color:'red',divisions:10})
+})
+test('tracks own effects and snapshots scoreboard and boss bars', () => {
+ const bot = new EventEmitter(); bot._client = new EventEmitter(); bot.entity = {id:1}; bot.registry = {effects:{1:{displayName:'Speed'}}}; bot.scoreboard = {sidebar:{name:'side',title:'Old',items:[{name:'line',displayName:'§aTeam',value:2}]}}; bot.bossBars = [{entityUUID:'bar',title:'Boss',health:.5,color:'blue',dividers:6}]
+ let changes = 0; installHud(bot, () => changes++)
+ bot._client.emit('scoreboard_objective',{name:'side',action:0,displayText:'{"text":"Title","color":"red"}'})
+ bot.emit('entityEffect',{id:2},{id:1,amplifier:1,duration:100}); assert.equal(changes,0)
+ bot.emit('entityEffect',bot.entity,{id:1,amplifier:1,duration:100}); const hud = snapshot(bot); assert.equal(hud.effects[0].label,'Speed II'); assert.equal(hud.effects[0].countdown,'0:05'); assert.equal(hud.scoreboard.title[0].color,'#ff5555'); assert.equal(hud.scoreboard.lines[0].text[0].text,'Team'); assert.equal(hud.bossBars[0].health,.5)
+ bot.emit('entityEffectEnd',bot.entity,{id:1}); assert.equal(snapshot(bot).effects.length,0)
+ bot._client.emit('scoreboard_display_objective',{position:1,name:''}); assert.equal(snapshot(bot).scoreboard,null)
+})

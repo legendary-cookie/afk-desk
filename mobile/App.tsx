@@ -28,7 +28,8 @@ type Log = {id: string; kind: string; message: string; at: number; segments?: Se
 type Item = {slot: number; name?: string; displayName: string; count: number; resourceIcon?: string; resourceModel?: string};
 type ResourceGlyph = {image?: string; sourceX?: number; sourceY?: number; sourceWidth?: number; sourceHeight?: number; imageWidth?: number; imageHeight?: number; renderHeight?: number; ascent?: number; advance?: number};
 type ServerMenu = {open: boolean; title: string; size: number; slots: Item[]; resourceTitle?: {text: string; glyphs: ResourceGlyph[]}};
-type Telemetry = {health: number; food: number; position: null | {x: number; y: number; z: number}; dimension: string; nearestChest?: null | {type: string; x: number; y: number; z: number; distance: number}; inventory: Item[]};
+type Hud = {scoreboard: null | {title: Segment[]; lines: {text: Segment[]; score: number}[]}; effects: {label: string; countdown: string}[]; bossBars: {id: string; title: Segment[]; health: number; color: string; divisions: number}[]};
+type Telemetry = {hud?: Hud;health: number; food: number; position: null | {x: number; y: number; z: number}; dimension: string; nearestChest?: null | {type: string; x: number; y: number; z: number; distance: number}; inventory: Item[]};
 type Session = {status: string; detail: string; logs: Log[]; telemetry?: Telemetry; serverWindow?: ServerMenu | null};
 
 const SUPPORTED_GAME_VERSIONS = ['1.21.11', '1.21.9', '1.21.8', '1.21.6', '1.21.5', '1.21.4', '1.21.3', '1.21.1', '1.20.6', '1.20.4', '1.20.2', '1.20.1', '1.20', '1.19.4', '1.19.3', '1.19.2', '1.19', '1.18.2', '1.17.1', '1.16.5', '1.15.2', '1.14.4', '1.13.2', '1.12.2', '1.11.2', '1.10.2', '1.9.4', '1.8.8'];
@@ -328,6 +329,11 @@ function App(): React.JSX.Element {
         <View style={styles.moveActions}><Move label="Jump" onPress={() => action('move', 'jump')} /><Move label="Look left" onPress={() => action('look', 'left')} /><Move label="Look right" onPress={() => action('look', 'right')} /></View>
       </View>
 
+      <View style={styles.panel}><Text style={styles.panelTitle}>Game HUD</Text>
+        {session?.telemetry?.hud?.bossBars.map((bar, i) => <View key={bar.id || i} style={{marginTop: 6}}><HudText parts={bar.title} mask={mask} masked={streamerMode} /><View style={{height: 6, backgroundColor: '#222'}}><View style={{height: 6, width: `${bar.health * 100}%`, backgroundColor: ({pink:'#ff80b5', blue:'#5555ff', red:'#ff5555', green:'#55cc55', yellow:'#eeee55', purple:'#aa55cc', white:'#eeeeee'} as Record<string, string>)[bar.color]}} />{Array.from({length: Math.max(0, bar.divisions - 1)}, (_, j) => <View key={j} style={{position:'absolute', left:`${(j + 1) * 100 / bar.divisions}%`, width:1, height:6, backgroundColor:'#222'}} />)}</View></View>)}
+        {session?.telemetry?.hud?.scoreboard && <View style={{backgroundColor:'#000a', padding:8, marginTop:6, alignItems:'flex-end'}}><HudText parts={session.telemetry.hud.scoreboard.title} mask={mask} masked={streamerMode} />{session.telemetry.hud.scoreboard.lines.map((line, i) => <HudText key={i} parts={line.text} mask={mask} masked={streamerMode} />)}</View>}
+        {session?.telemetry?.hud?.effects.map((effect, i) => <Text key={i} style={styles.muted}>{mask(`${effect.label} ${effect.countdown}`)}</Text>)}
+      </View>
       <View style={styles.panel}><View style={styles.panelHeader}><Text style={styles.panelTitle}>Inventory</Text><Text style={styles.muted}>{session?.telemetry?.inventory?.length || 0} occupied slots</Text></View>
         <View style={styles.inventoryAutomation}><Toggle label="Auto-deposit inventory" value={selected.autoDepositToChest === true} onChange={toggleAutoDeposit} /><Text style={styles.help}>Visible chests and barrels within {selected.autoDepositRange || '5'} blocks.</Text></View>
         <View style={styles.inventory}>{session?.telemetry?.inventory?.length ? session.telemetry.inventory.map(item => <View key={item.slot} style={styles.item}>{item.resourceIcon && <Image source={{uri: item.resourceIcon}} resizeMode="contain" style={styles.itemIcon} />}<View style={styles.itemCopy}><Text numberOfLines={1} style={styles.itemName}>{item.displayName}</Text><Text style={styles.muted}>Slot {item.slot} · ×{item.count}</Text></View><Pressable accessibilityLabel={`Drop ${item.displayName}`} style={styles.dropButton} onPress={() => dropItem(item)}><Text style={styles.dangerText}>Drop</Text></Pressable></View>) : <Text style={styles.emptyLog}>Connect to inspect inventory.</Text>}</View>
@@ -493,3 +499,5 @@ const styles = StyleSheet.create({
 });
 
 export default App;
+
+function HudText({parts, mask, masked}: {parts: Segment[]; mask: (text: string) => string; masked: boolean}) { return <Text style={{color:'#fff'}}>{masked ? mask(parts.map(p => p.text).join('')) : parts.map((p, i) => <Text key={i} style={{color:p.color}}>{p.text}</Text>)}</Text>; }

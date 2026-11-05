@@ -163,6 +163,8 @@
                 </dl>
               </section>
 
+              <section class="panel"><header class="panel-header"><h2>Game HUD</h2></header><div id="game-hud" class="game-hud"></div></section>
+
               <section id="movement-panel" class="panel movement-panel collapsible collapsed" aria-labelledby="movement-title">
                 <header class="panel-header">
                   <div><h2 id="movement-title">Movement</h2><p>Quick taps while online</p></div>
@@ -794,6 +796,7 @@
           <label>Refresh <select id="pov-refresh"><option value="250">0.25s</option><option value="500">0.5s</option><option value="1000">1s</option><option value="1500">1.5s</option><option value="3000">3s</option><option value="5000">5s</option></select></label>
           <label>Display <select id="pov-fps"><option value="30">30 FPS</option><option value="60">60 FPS</option></select></label>
           <label>View <select id="pov-view-mode"><option value="perspective">Perspective</option><option value="map">Map</option></select></label>
+          <label><input id="pov-game-hud" type="checkbox" checked /> Game HUD</label>
           <button id="pov-pause" class="button secondary" type="button" aria-pressed="false">Pause</button>
         </div>
         <div id="pov-grid" class="pov-grid" aria-live="polite"></div>
