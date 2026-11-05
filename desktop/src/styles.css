@@ -309,11 +309,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .count { display: grid; place-items: center; min-width: 20px; height: 20px; padding: 0 6px; background: var(--surface-raised); border-radius: 10px; font-size: 10px; }
 .account-list { display: flex; flex: 1; flex-direction: column; gap: 4px; overflow: auto; }
 .account-row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 22px; align-items: center; border-radius: var(--radius-sm); cursor: grab; }
-.upcoming-runs { grid-column: 1 / -1; padding: 0 9px 5px; color: var(--muted); font-size: 11px; }
-.upcoming-runs summary { cursor: pointer; }
-.upcoming-runs ul { margin: 4px 0 0; padding-left: 16px; }
-.upcoming-runs li { overflow-wrap: anywhere; }
-.sidebar-collapsed .upcoming-runs { display: none; }
 .account-row:active { cursor: grabbing; }
 .account-row.dragging { opacity: .42; }
 .account-row.drag-over::before, .account-row.drag-over.drop-after::after { content: ""; position: absolute; z-index: 2; right: 4px; left: 4px; height: 2px; background: var(--accent); border-radius: 2px; }
@@ -945,20 +940,71 @@ dialog.macro-templates-dialog {
 .settings-tools { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
 .share-import-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 4px; }
 .share-import-row small { flex: 1 1 220px; opacity: .75; }
-/* The overview owns its grid; other workspace views retain their original layout. */
-.dashboard[data-view="overview"], .dashboard:not([data-view]) { display: block; height: auto; min-height: 100%; }
+/* The overview uses the remaining window height, including while editing. */
+.dashboard[data-view="overview"], .dashboard:not([data-view]) { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .dashboard[data-view="overview"] > .workspace-grid, .dashboard[data-view="overview"] > .inventory-resizer, .dashboard:not([data-view]) > .workspace-grid, .dashboard:not([data-view]) > .inventory-resizer { display: none; }
-.overview-toolbar { margin: 8px 0; }
+.dashboard[data-view="overview"] > .topbar, .dashboard:not([data-view]) > .topbar { flex: 0 0 auto; flex-wrap: wrap; gap: 8px; }
+.dashboard[data-view="overview"] .topbar-actions { flex-wrap: wrap; gap: 6px; }
+.dashboard[data-view="overview"] .topbar-actions .button { min-height: 34px; padding-inline: 10px; font-size: 11px; }
+.dashboard[data-view="overview"] > .status-banner, .dashboard[data-view="overview"] > .workspace-tabs { flex-shrink: 0; }
+.overview-toolbar { flex: 0 0 auto; margin: 0 0 8px; }
+.overview-toolbar > .button { min-height: 30px; font-size: 11px; }
 .overview-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
 .overview-controls[hidden], .overview-module-bar[hidden], .overview-module-resize[hidden], .overview-modules[hidden], .overview-toolbar[hidden] { display: none; }
 .overview-controls span { color: var(--muted); font-size: 11px; }
-.overview-modules { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); grid-auto-rows: 52px; gap: 8px; }
+.overview-modules { flex: 1 1 0; min-height: 0; display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); grid-template-rows: repeat(var(--overview-rows, 12), minmax(0, 1fr)); gap: 8px; }
 .overview-module { min-width: 0; min-height: 0; position: relative; display: flex; flex-direction: column; }
-.overview-module > .panel, .overview-module > .macro-section { flex: 1; min-height: 0; overflow: auto; }
-.overview-module > .macro-section { background: var(--surface); border: 1px solid var(--border); padding: 12px; }
-.overview-module-bar { display: flex; background: var(--surface-raised); }
-.overview-module-handle { flex: 1; text-align: left; cursor: grab; touch-action: none; }
+.overview-module > .panel, .overview-module > .macro-section { flex: 1 1 auto; min-height: 0; overflow: hidden; }
+.overview-module > .macro-section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); }
+.overview-modules:not(.overview-fitted) > .overview-module:has(> .macro-section) { align-self: start; }
+.overview-modules:not(.overview-fitted) > .overview-module > .macro-section { flex: 0 0 auto; }
+.overview-module .macro-pad { flex-wrap: wrap; max-height: none; overflow: visible; }
+.overview-module .details-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.overview-module .details-list div { display: block; padding: 4px 6px; }
+.overview-module .details-list dt { font-size: 10px; }
+.overview-module .panel-header { min-height: 42px; padding: 6px 12px; flex-shrink: 0; }
+.overview-module .panel-header h2 { font-size: 12px; }
+.overview-module .inventory-header { min-height: 58px; }
+.overview-module-bar { flex: 0 0 auto; display: flex; background: var(--surface-raised); }
+.overview-module-handle { flex: 1; min-width: 0; text-align: left; cursor: grab; touch-action: none; }
 .overview-module-resize { position: absolute; right: 0; bottom: 0; cursor: nwse-resize; touch-action: none; z-index: 2; }
+/* Default: chat consumes spare height; the pad and inventory keep their natural height. */
+.overview-fitted { grid-template-columns: minmax(0, 2fr) minmax(320px, 1fr); grid-template-rows: minmax(0, 1fr); }
+.overview-primary, .overview-secondary { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; }
+.overview-primary > [data-module="console"] { flex: 1 1 0; min-height: 120px; }
+.overview-primary > [data-module="macro"] { flex: 0 0 auto; }
+.overview-primary > [data-module="inventory"] { flex: 0 1 auto; max-height: 55%; }
+.overview-primary > .inventory-resizer { flex: 0 0 6px; margin-block: -7px; }
+.overview-primary .inventory-panel { height: auto; }
+.overview-secondary > .overview-module { flex: 0 0 auto; }
+.overview-secondary > .overview-module > .panel { height: auto; }
+/* The shared map is tucked beside movement; adding Minimap lifts it into its own module. */
+.movement-panel:has(> .minimap) { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.movement-panel:has(> .minimap) > .panel-header { grid-column: 1 / -1; }
+.movement-panel:has(> .minimap) > .movement-grid { grid-column: 1; grid-row: 2; grid-template: repeat(2, 30px) / repeat(3, 30px); padding: 10px 4px 6px; }
+.movement-panel:has(> .minimap) > .movement-actions { grid-column: 1; grid-row: 3; padding: 0 6px 10px; }
+.movement-panel > .minimap { grid-column: 2; grid-row: 2 / 4; padding: 8px; border: 0; border-left: 1px solid var(--border); border-radius: 0; }
+.movement-panel > .minimap > .panel-header { display: none; }
+.movement-panel > .minimap .minimap-options { flex-wrap: wrap; gap: 4px; font-size: 10px; }
+.movement-panel > .minimap canvas { width: min(100%, 128px); height: auto; }
+.movement-panel > .minimap p { font-size: 10px; }
+.overview-module[data-module="minimap"] > .minimap { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; gap: 4px; padding: 0 8px 4px; }
+.overview-module[data-module="minimap"] canvas { width: 100%; height: 100%; min-height: 0; margin: 0; object-fit: contain; background: transparent; }
+.minimap canvas[hidden], .minimap.map-empty .minimap-options { display: none; }
+.minimap.map-empty p { color: var(--muted); }
+.module-empty { color: var(--muted); font-size: 11px; line-height: 1.4; }
+.overview-module.overview-empty { align-self: start; }
+.overview-module.overview-empty > .panel { flex: 0 0 auto; height: auto; }
+#overview-next-runs { margin: 0; padding: 10px 24px; font-size: 11px; }
+#overview-next-runs.module-empty { padding: 10px 12px; list-style: none; }
+@media (max-height: 850px) {
+  .movement-panel > .minimap canvas { width: min(100%, 96px); }
+  .movement-panel > .minimap p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
+/* Keep content collapsed without taking away the editor's resize target. */
+.overview-editing .overview-empty, .overview-editing .overview-modules > .overview-module:has(> .macro-section) { align-self: stretch; }
+.overview-editing .overview-modules > .overview-module > .macro-section { flex: 1 1 0; }
+.overview-editing .overview-module > .collapsed { flex: 0 0 auto; }
 
 .game-hud { display:grid; gap:6px; padding:10px; font:12px monospace; }
 .hud-scoreboard { background:#000a; padding:8px; text-align:right; }
