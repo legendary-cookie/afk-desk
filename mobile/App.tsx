@@ -27,7 +27,7 @@ type Account = {
   serverChangeMessage: string; messageDelay: string; autoDepositToChest: boolean;
   autoDepositRange: string; autoDepositMode: 'immediate' | 'interval' | 'inventoryFull' | 'intervalOrFull';
   autoDepositInterval: string; autoDepositFullThreshold: string; serverChangeRetryMinutes: string; proxy: ProxyConfig;
-  autoEat?: boolean; autoEatThreshold?: number; lowHealthTotem?: boolean; lowHealthDisconnect?: boolean; lowHealthThreshold?: number; lowHealthCooldownMinutes?: number;
+  autoEat?: boolean; autoEatThreshold?: number; lowHealthTotem?: boolean;
   scheduleEnabled?: boolean; scheduleStart?: string; scheduleEnd?: string; scheduleDays?: number[];
 };
 type ChatClick = {action: 'open_url' | 'run_command' | 'suggest_command' | 'copy_to_clipboard'; value: string};

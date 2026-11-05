@@ -2,6 +2,51 @@
 
 For the complete desktop history from 0.1.0 onward, including source tags, installers, and comparisons, see [HISTORY.md](HISTORY.md).
 
+## Desktop and Android 0.11.0-beta.4 — 2026-11-06
+
+### Added
+
+- Macro graph editor (n8n-style): a canvas of connectable node cards with typed ports, a searchable palette, an inspector, validation on nodes, undo/redo, copy/paste and a JSON view. Also:
+  - 8 premade recipes;
+  - custom nodes you can save, reuse, edit and share;
+  - a live run view.
+
+  Existing macros open as graphs, and the old editor stays available as "Simple view".
+- Customizable overview: move, resize, add and remove modules (console, inventory, macro pad, details, movement, minimap, next runs, scoreboard, effects, boss bars), with presets and per-account layouts.
+- Linked profiles: link groups share the setting categories you choose and stay in sync, with per-field unlink. Logins are never shared.
+- Combat safety (per account, off by default):
+  - auto totem;
+  - auto armor, including swapping out breaking pieces;
+  - auto Ominous Bottle, which skips during raids and active omens, with a highest-first or lowest-first order;
+  - auto golden and enchanted golden apples;
+  - food priority;
+  - auto-leave on low health, low armor durability or no totems left.
+- Game info: the scoreboard sidebar, active effects with level and timer, and boss bars including custom ones. Shown in the overview, as a POV overlay and on Android.
+- Bedrock: anti-AFK in place, inventory actions, opening containers and auto-deposit to a chest whose coordinates you set.
+- Android:
+  - next runs;
+  - safety settings;
+  - multi-account status;
+  - share links;
+  - a macro graph viewer with Run/Stop;
+  - macros running on the phone.
+
+### Fixed
+
+- Review fixes:
+  - graph evaluation can no longer freeze the engine;
+  - regex patterns that could hang are rejected;
+  - share links no longer leak text inside lists;
+  - graph action limits are enforced;
+  - Wait and Repeat node defaults are correct;
+  - the restart recipe respects safety cooldowns;
+  - browser editing saves graphs;
+  - Bedrock walking is disabled until there is proper collision;
+  - Bedrock deposits no longer duplicate;
+  - phone macros and safety take turns on input;
+  - phone triggers receive events.
+- Docker server image is slimmer: build-only and non-runtime files are pruned.
+
 ## Desktop and Android 0.11.0-beta.3 — 2026-11-04
 
 ### Added

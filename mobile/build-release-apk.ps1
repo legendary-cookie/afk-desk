@@ -18,8 +18,8 @@ try {
   Push-Location "$PSScriptRoot\android"
   .\gradlew.bat assembleRelease
   $apk = "$PSScriptRoot\android\app\build\outputs\apk\release\app-release.apk"
-  Copy-Item $apk "$PSScriptRoot\AFK-Desk-Android-0.11.0-beta.3.apk" -Force
-  Write-Host "`nDone: $PSScriptRoot\AFK-Desk-Android-0.11.0-beta.3.apk" -ForegroundColor Green
+  Copy-Item $apk "$PSScriptRoot\AFK-Desk-Android-0.11.0-beta.4.apk" -Force
+  Write-Host "`nDone: $PSScriptRoot\AFK-Desk-Android-0.11.0-beta.4.apk" -ForegroundColor Green
 } finally {
   Pop-Location
   'AFKDESK_ANDROID_STORE_PASSWORD','AFKDESK_ANDROID_KEY_PASSWORD' | % { Remove-Item "env:$_" -ErrorAction SilentlyContinue }
