@@ -1,0 +1,947 @@
+diff --git a/desktop/core/app-core.cjs b/desktop/core/app-core.cjs
+index ebdf04b..14794e2 100644
+--- a/desktop/core/app-core.cjs
++++ b/desktop/core/app-core.cjs
+@@ -792,6 +792,7 @@ class AppCore {
+       this.healthEdges.set(account.id, h)
+       this.previousInventoryFull.set(account.id, p.inventoryFull === true)
+     }
++    if (event.type === 'safety-disconnect') this._send({ kind: 'lowHealth', accountId: account.id, accountName: name, message: `${name} disconnected for low health.`, payload: event.payload, at: event.at })
+     if (event.type === 'death') this._send({ kind: 'death', accountId: account.id, accountName: name, message: `${name} died.`, at: event.at })
+   }
+ 
+@@ -1004,6 +1005,16 @@ function validateAccount(input, existing, secretBox, normalizeSkinUrl = defaultN
+     autoDepositMode: ['immediate', 'interval', 'inventoryFull', 'intervalOrFull'].includes(input?.autoDepositMode ?? existing?.autoDepositMode) ? (input?.autoDepositMode ?? existing?.autoDepositMode) : 'immediate',
+     autoDepositInterval: Math.round(bounded(input?.autoDepositInterval ?? existing?.autoDepositInterval, 1, 86400, 300)),
+     autoDepositFullThreshold: Math.round(bounded(input?.autoDepositFullThreshold ?? existing?.autoDepositFullThreshold, 0, 35, 0)),
++    autoEat: (input?.autoEat ?? existing?.autoEat) === true,
++    autoEatThreshold: bounded(input?.autoEatThreshold ?? existing?.autoEatThreshold, 0, 20, 14),
++    lowHealthTotem: (input?.lowHealthTotem ?? existing?.lowHealthTotem) === true,
++    lowHealthDisconnect: (input?.lowHealthDisconnect ?? existing?.lowHealthDisconnect) === true,
++    lowHealthThreshold: bounded(input?.lowHealthThreshold ?? existing?.lowHealthThreshold, 0, 20, 6),
++    lowHealthCooldownMinutes: bounded(input?.lowHealthCooldownMinutes ?? existing?.lowHealthCooldownMinutes, 1, 1440, 10),
++    scheduleEnabled: (input?.scheduleEnabled ?? existing?.scheduleEnabled) === true,
++    scheduleStart: /^([01]\d|2[0-3]):[0-5]\d$/.test(input?.scheduleStart ?? existing?.scheduleStart) ? (input?.scheduleStart ?? existing?.scheduleStart) : '00:00',
++    scheduleEnd: /^([01]\d|2[0-3]):[0-5]\d$/.test(input?.scheduleEnd ?? existing?.scheduleEnd) ? (input?.scheduleEnd ?? existing?.scheduleEnd) : '00:00',
++    scheduleDays: Array.isArray(input?.scheduleDays ?? existing?.scheduleDays) ? [...new Set((input?.scheduleDays ?? existing?.scheduleDays).filter(day => Number.isInteger(day) && day >= 0 && day <= 6))] : [0, 1, 2, 3, 4, 5, 6],
+     lockedInventorySlots: normalizeSlots(input?.lockedInventorySlots ?? existing?.lockedInventorySlots),
+     proxy: validateProxy(input?.proxy, existing?.proxy, secretBox),
+     proxyMode: ['direct', 'manual', 'smart'].includes(input?.proxyMode) ? input.proxyMode : (input?.proxy?.enabled ? 'manual' : 'direct'),
+diff --git a/desktop/electron/bot-manager.cjs b/desktop/electron/bot-manager.cjs
+index a53e64c..1869726 100644
+--- a/desktop/electron/bot-manager.cjs
++++ b/desktop/electron/bot-manager.cjs
+@@ -1,3 +1,4 @@
++const { isWithinSchedule, deferSafety, installSafety } = require('./safety.cjs')
+ const path = require('node:path')
+ const { sampleGrid, goalPosition, entityType, PALETTE } = require('./minimap.cjs')
+ const { randomUUID } = require('node:crypto')
+@@ -98,6 +99,12 @@ class BotManager {
+     reconnectState.manual = false
+     reconnectState.account = account
+     this.reconnects.set(account.id, reconnectState)
++    if (Date.now() < (reconnectState.cooldownUntil || 0) || !isWithinSchedule(account)) {
++      reconnectState.safetyPause ||= 'schedule'
++      deferSafety(this, account, reconnectState)
++      return { id: account.id }
++    }
++    reconnectState.safetyPause = false
+ 
+     const explicitVersion = normalizeVersionSelection(account.version)
+     // Auto must negotiate against the current server. A previously successful
+@@ -186,6 +193,7 @@ class BotManager {
+     })
+     bot.physicsEnabled = account.environmentalMovement !== false
+     this.sessions.set(account.id, session)
++    installSafety(this, account, session, reconnectState)
+     for (const event of ['blockUpdate', 'chunkColumnLoad', 'chunkColumnUnload', 'respawn']) {
+       bot.on(event, () => this.invalidateWorldSnapshot(account.id, session))
+     }
+@@ -431,7 +439,9 @@ class BotManager {
+       this.clearSession(account.id, session)
+       // Use the latest saved config, not the one captured at connect time (see updateAccountConfig).
+       const currentAccount = reconnectState.account || account
+-      if (currentAccount.autoReconnect !== false && !reconnectState.manual) {
++      if (reconnectState.safetyPause && !reconnectState.manual && (reconnectState.safetyPause !== 'health' || (reconnectState.account || account).autoReconnect !== false)) {
++        deferSafety(this, currentAccount, reconnectState)
++      } else if (currentAccount.autoReconnect !== false && !reconnectState.manual) {
+         this.scheduleReconnect(currentAccount, session.lastKickReason || session.lastNetworkReason || reason)
+       } else {
+         this.reconnects.delete(account.id)
+@@ -476,7 +486,7 @@ class BotManager {
+       if ((pendingMessage && pendingMessage !== account.joinMessage && pendingMessage !== account.serverChangeMessage) || account.serverChangeRetryMinutes === 0) this.clearServerChangeRetry(account.id, session)
+       session.account = { ...session.account, ...account }
+     }
+-    if (account.autoReconnect === false) {
++    if (account.autoReconnect === false && !state.safetyPause) {
+       if (state.timer) this.clearReconnectTimer(state.timer)
+       state.timer = null
+       if (!this.sessions.has(account.id)) {
+@@ -1528,6 +1538,7 @@ class BotManager {
+   clearSession(id, expectedSession) {
+     const session = this.sessions.get(id)
+     if (expectedSession && session !== expectedSession) return
++    if (session?.safetyTimer) clearInterval(session.safetyTimer)
+     this.sessions.delete(id)
+     if (session) this.clearTimers(session)
+   }
+diff --git a/desktop/electron/macro/bot-events.cjs b/desktop/electron/macro/bot-events.cjs
+index 0fa8a2b..3650a70 100644
+--- a/desktop/electron/macro/bot-events.cjs
++++ b/desktop/electron/macro/bot-events.cjs
+@@ -38,6 +38,7 @@ function createBotEventAdapter({ sessionId = () => null, isManualDisconnect = ()
+     if (type === 'window') return [make('windowOpen', { title: stripFormatting(payload.title || payload.name || '') })]
+     if (type === 'log' && payload.kind === 'error' && /kicked:/i.test(payload.message || '')) return []
+     if (type === 'playerAppears') return [make('playerAppears', { username: String(payload.username || '') })]
++    if (type === 'safety-disconnect') return [make('safety-disconnect', payload)]
+     if (type === 'death') return [make('death')]
+     if (type === 'respawn' || type === 'login' || type === 'serverSwitch') return [make(type, { dimension: payload.dimension, world: payload.world, backend: payload.backend })]
+     return []
+diff --git a/desktop/electron/main.cjs b/desktop/electron/main.cjs
+index c08026f..8fbe0a8 100644
+--- a/desktop/electron/main.cjs
++++ b/desktop/electron/main.cjs
+@@ -1,4 +1,6 @@
+-const { app, BrowserWindow, ipcMain, shell, safeStorage, Notification, dialog } = require('electron')
++const { app, BrowserWindow, ipcMain, shell, safeStorage, Notification, dialog, net } = require('electron')
++const { fetchWithPolicy } = require('./net-policy.cjs')
++const { compareVersions, shouldCheck, makeBundle } = require('./support-tools.cjs')
+ const path = require('node:path')
+ const fs = require('node:fs')
+ const os = require('node:os')
+@@ -16,6 +18,8 @@ const { BotManager, normalizeSkinUrl } = require('./bot-manager.cjs')
+ const { BedrockBotManager } = require('./bedrock-bot-manager.cjs')
+ const { MultiEditionBotManager } = require('./multi-edition-manager.cjs')
+ const { inventoryLayout } = require('./notify/inventory-image.cjs')
++const { createOffscreenPov } = require('./offscreen-pov.cjs')
++const { snapshotRadius } = require('../assets/pov-math.js')
+ const documentPath = path.join(__dirname, '..', 'src', 'index.html')
+ const documentUrl = pathToFileURL(documentPath).href
+ 
+@@ -23,6 +27,19 @@ let mainWindow
+ let core
+ let embeddedServer = null
+ let storageErrorShown = false
++const offscreenPov = createOffscreenPov({
++  createWindow: () => {
++    const win = new BrowserWindow({ show: false, width: 640, height: 360, webPreferences: {
++      offscreen: true, preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true
++    } })
++    restrictWindow(win)
++    return win
++  },
++  snapshot: (id, radius) => core.bots.worldSnapshot(id, radius),
++  radius: snapshotRadius
++})
++let updatePromise = null
++let updateCache = null
+ 
+ function createWindow() {
+   mainWindow = new BrowserWindow({
+@@ -177,6 +194,10 @@ app.whenReady().then(async () => {
+             if (typeof data === 'string' && data.startsWith('data:image/png;base64,')) images.push({ name: 'pov.png', data: Buffer.from(data.slice(22), 'base64') })
+           } catch {}
+         }
++        if (settings.notifyAttachPov && settings.notifyPovOffscreen && !images.length) {
++          const data = await offscreenPov.request(id, settings)
++          if (typeof data === 'string' && data.startsWith('data:image/png;base64,')) images.push({ name: 'pov.png', data: Buffer.from(data.slice(22), 'base64') })
++        }
+         if (settings.notifyAttachInventory) {
+           let win
+           try {
+@@ -232,10 +253,43 @@ app.on('window-all-closed', () => {
+ })
+ 
+ app.on('before-quit', () => {
++  offscreenPov.close()
+   void embeddedServer?.stop()
+   void core?.shutdown()
+ })
+ 
++async function checkUpdates(manual = false) {
++  if (!manual && !core.settings.get().updateCheckEnabled) return null
++  if (updatePromise) return updatePromise
++  const file = path.join(app.getPath('userData'), 'update-check.json')
++  if (!updateCache) { try { updateCache = JSON.parse(fs.readFileSync(file, 'utf8')) } catch { updateCache = {} } }
++  if (!shouldCheck(updateCache.checkedAt)) {
++    try {
++      const release = updateCache.release
++      const url = new URL(release.url)
++      if (url.protocol === 'https:' && url.hostname === 'github.com' && url.pathname.startsWith('/legendary-cookie/afk-desk/releases/') && compareVersions(release.version, app.getVersion()) === 1) return release
++    } catch {}
++    updateCache.release = null
++    return null
++  }
++  updateCache = { checkedAt: Date.now(), release: null }
++  try { fs.writeFileSync(file, JSON.stringify(updateCache)) } catch {}
++  updatePromise = (async () => {
++    try {
++      const response = await fetchWithPolicy('https://api.github.com/repos/legendary-cookie/afk-desk/releases/latest', { fetchImpl: net.fetch, signal: AbortSignal.timeout(15000), init: { headers: { Accept: 'application/vnd.github+json' } } })
++      if (!response.ok) return null
++      const data = await response.json()
++      const url = new URL(data.html_url)
++      if (url.protocol !== 'https:' || url.hostname !== 'github.com' || !url.pathname.startsWith('/legendary-cookie/afk-desk/releases/')) return null
++      if (compareVersions(data.tag_name, app.getVersion()) !== 1) return null
++      updateCache.release = { version: data.tag_name, url: url.href }
++      try { fs.writeFileSync(file, JSON.stringify(updateCache)) } catch {}
++      return updateCache.release
++    } catch { return null }
++  })()
++  try { return await updatePromise } finally { updatePromise = null }
++}
++
+ function registerIpc() {
+   const handle = (channel, callback) => registerTrustedHandler(ipcMain, () => mainWindow, documentUrl, channel, callback)
+   handle('share:export', (_event, input) => core.share.export(input))
+@@ -268,6 +322,16 @@ function registerIpc() {
+   handle('bot:world-snapshot', (_event, input) => core.bots.worldSnapshot(input))
+   handle('bot:world-action', (_event, input) => core.bots.worldAction(input))
+   handle('logs:list', (_event, input) => core.logs.list(input))
++  handle('logs:export', async () => {
++    const result = await dialog.showSaveDialog(mainWindow, { title: 'Export logs', defaultPath: 'afk-desk-logs.txt', filters: [{ name: 'Text files', extensions: ['txt'] }] })
++    if (result.canceled || !result.filePath) return false
++    const accounts = core.accounts.list()
++    const logs = Object.fromEntries(accounts.map(a => [a.id, { console: core.status(a.id).logs, events: core.logs.list(a.id, { limit: 500 }) }]))
++    await fs.promises.writeFile(result.filePath, makeBundle({ version: app.getVersion(), os: `${os.type()} ${os.release()} ${os.arch()}`, settings: core.settings.get(), accounts, logs }), 'utf8')
++    return true
++  })
++  handle('updates:check', (_event, manual) => checkUpdates(manual === true))
++  handle('updates:open', () => updateCache?.release ? shell.openExternal(updateCache.release.url) : undefined)
+   handle('logs:clear', (_event, id) => core.logs.clear(id))
+   handle(MACRO_IPC.contract, () => core.macros.contract())
+   handle(MACRO_IPC.list, () => core.macros.list())
+diff --git a/desktop/electron/offscreen-pov.cjs b/desktop/electron/offscreen-pov.cjs
+new file mode 100644
+index 0000000..31f254c
+--- /dev/null
++++ b/desktop/electron/offscreen-pov.cjs
+@@ -0,0 +1,43 @@
++// Serialize frames so a timed-out renderer can never overlap its replacement.
++function createOffscreenPov({ createWindow, snapshot, radius, timeoutMs = 5000, idleMs = 60000 }) {
++  let window = null, idleTimer = null, tail = Promise.resolve(), closed = false
++  function destroy() {
++    clearTimeout(idleTimer); idleTimer = null
++    const old = window; window = null
++    if (old && !old.isDestroyed()) old.destroy()
++  }
++  async function frame(id, settings) {
++    if (closed) return null
++    clearTimeout(idleTimer); idleTimer = null
++    let timer
++    try {
++      return await Promise.race([
++        (async () => {
++          if (!window || window.isDestroyed()) {
++            const created = createWindow()
++            window = created
++            await created.loadFile(require('node:path').join(__dirname, '..', 'src', 'offscreen-pov.html'))
++            if (created !== window || created.isDestroyed()) return null
++          }
++          const current = window
++          const world = await snapshot(id, radius(settings, 'perspective', settings.povRadius))
++          if (!world?.position || current !== window || current.isDestroyed()) return null
++          return await current.webContents.executeJavaScript(`window.renderOffscreenPov(${JSON.stringify(world)})`)
++        })(),
++        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('POV frame timed out')), timeoutMs) })
++      ])
++    } catch { destroy(); return null } finally {
++      clearTimeout(timer)
++      if (window && !closed) idleTimer = setTimeout(destroy, idleMs)
++    }
++  }
++  return {
++    request(id, settings) {
++      const result = tail.then(() => frame(id, settings))
++      tail = result.catch(() => null)
++      return result
++    },
++    close() { closed = true; destroy() }
++  }
++}
++module.exports = { createOffscreenPov }
+diff --git a/desktop/electron/preload.cjs b/desktop/electron/preload.cjs
+index 5e97f71..4df9707 100644
+--- a/desktop/electron/preload.cjs
++++ b/desktop/electron/preload.cjs
+@@ -31,6 +31,9 @@ contextBridge.exposeInMainWorld('afkDesk', {
+   getMinimapSnapshot: (id, radius, mode) => ipcRenderer.invoke('bot:minimap-snapshot', { id, radius, mode }),
+   getWorldSnapshot: (id, radius, blockRefreshMs) => ipcRenderer.invoke('bot:world-snapshot', { id, radius, blockRefreshMs }),
+   worldAction: (id, action, target) => ipcRenderer.invoke('bot:world-action', { id, action, target }),
++  checkUpdates: (manual = false) => ipcRenderer.invoke('updates:check', manual),
++  openUpdate: () => ipcRenderer.invoke('updates:open'),
++  exportLogs: () => ipcRenderer.invoke('logs:export'),
+   listLogs: (id, options = {}) => ipcRenderer.invoke('logs:list', { id, ...options }),
+   clearLogs: (id) => ipcRenderer.invoke('logs:clear', id),
+   runAutomation: (id, macroId) => ipcRenderer.invoke('macros:run', { accountId: id, macroId }),
+diff --git a/desktop/electron/safety.cjs b/desktop/electron/safety.cjs
+new file mode 100644
+index 0000000..0e50785
+--- /dev/null
++++ b/desktop/electron/safety.cjs
+@@ -0,0 +1,83 @@
++'use strict'
++
++function shouldEat(account, bot) {
++  return account.autoEat === true && Number.isFinite(bot.food) && bot.food <= (account.autoEatThreshold ?? 14) && !bot.currentWindow
++}
++function pickFood(items, foods, locked = []) {
++  const locks = new Set(locked.map(Number))
++  return (items || []).filter(item => !locks.has(Number(item.slot)) && foods?.[item.name]).sort((a, b) => {
++    const hot = (item) => item.slot >= 36 && item.slot <= 44 ? 1 : 0
++    const value = (item) => Number(foods[item.name].foodPoints || 0) + Number(foods[item.name].saturation || 0)
++    return hot(b) - hot(a) || value(b) - value(a)
++  })[0] || null
++}
++function shouldLowHealthAct(account, health) {
++  return Number.isFinite(health) && health > 0 && health <= (account.lowHealthThreshold ?? 6) && (account.lowHealthTotem === true || account.lowHealthDisconnect === true)
++}
++function isWithinSchedule(account, date = new Date()) {
++  if (!account.scheduleEnabled) return true
++  const parse = value => { const m = /^(\d{2}):(\d{2})$/.exec(value || ''); return m && +m[1] < 24 && +m[2] < 60 ? +m[1] * 60 + +m[2] : null }
++  const start = parse(account.scheduleStart), end = parse(account.scheduleEnd)
++  if (start === null || end === null) return false
++  const days = account.scheduleDays || [0, 1, 2, 3, 4, 5, 6]
++  const now = date.getHours() * 60 + date.getMinutes(), day = date.getDay()
++  if (start === end) return days.includes(day)
++  if (start < end) return days.includes(day) && now >= start && now < end
++  return now >= start ? days.includes(day) : now < end && days.includes((day + 6) % 7)
++}
++function deferSafety(manager, account, state) {
++  if (state.timer) manager.clearReconnectTimer(state.timer)
++  state.account = account
++  manager.reconnects.set(account.id, state)
++  manager.status(account.id, 'offline', 'Waiting for safety cooldown or online hours.')
++  state.timer = manager.scheduleReconnectTimer(() => {
++    state.timer = null
++    if (manager.reconnects.get(account.id) !== state || state.manual) return
++    const current = state.account
++    if (Date.now() < (state.cooldownUntil || 0) || !isWithinSchedule(current)) return deferSafety(manager, current, state)
++    try { manager.connect(current, { reconnecting: true }) } catch (error) { manager.scheduleReconnect(current, error.message) }
++  }, 30000)
++  state.timer?.unref?.()
++}
++function installSafety(manager, account, session, state) {
++  const bot = session.bot
++  const tick = async () => {
++    if (manager.sessions.get(account.id) !== session || session.safetyBusy) return
++    const config = session.account
++    if (!isWithinSchedule(config)) { state.safetyPause = 'schedule'; bot.end('Outside online hours'); return }
++    if (!session.ready) return
++    session.safetyBusy = true
++    try {
++      if (shouldLowHealthAct(config, bot.health)) {
++        if (config.lowHealthTotem && !bot.currentWindow && !(config.lockedInventorySlots || []).includes(45) && bot.inventory?.slots?.[45]?.name !== 'totem_of_undying') {
++          const totem = bot.inventory?.items?.().find(item => item.name === 'totem_of_undying' && !(config.lockedInventorySlots || []).includes(item.slot))
++          if (totem) {
++            try { await bot.equip(totem, 'off-hand') } catch (error) { manager.emit('log', account.id, { kind: 'error', message: `Totem equip failed: ${error.message}`, at: Date.now() }) }
++          }
++        }
++        if (config.lowHealthDisconnect) {
++          state.cooldownUntil = Date.now() + (config.lowHealthCooldownMinutes ?? 10) * 60000
++          state.safetyPause = 'health'
++          manager.emit('safety-disconnect', account.id, { health: bot.health, cooldownUntil: state.cooldownUntil })
++          bot.end('Low health protection')
++          return
++        }
++      }
++      if (shouldEat(config, bot) && !session.inventoryAction && !session.depositing) {
++        const food = pickFood(bot.inventory?.items?.(), bot.registry?.foodsByName, config.lockedInventorySlots || [])
++        if (food) {
++          const previous = bot.quickBarSlot
++          const target = food.slot >= 36 && food.slot <= 44 ? food.slot - 36 : Array.from({ length: 9 }, (_, slot) => slot).find(slot => !(config.lockedInventorySlots || []).includes(slot + 36))
++          if (target === undefined) return
++          session.inventoryAction = true
++          try { bot.setQuickBarSlot(target); await bot.equip(food, 'hand'); if (!bot.currentWindow) await bot.consume() } finally { if (Number.isInteger(previous)) bot.setQuickBarSlot(previous); session.inventoryAction = false }
++        }
++      }
++    } catch (error) { manager.emit('log', account.id, { kind: 'error', message: `Safety action failed: ${error.message}`, at: Date.now() }) }
++    finally { session.safetyBusy = false }
++  }
++  session.safetyTimer = setInterval(tick, 2000)
++  session.safetyTimer.unref?.()
++  bot.on('health', tick)
++}
++module.exports = { shouldEat, pickFood, shouldLowHealthAct, isWithinSchedule, deferSafety, installSafety }
+diff --git a/desktop/electron/store.cjs b/desktop/electron/store.cjs
+index 4d2388e..aaac526 100644
+--- a/desktop/electron/store.cjs
++++ b/desktop/electron/store.cjs
+@@ -133,6 +133,7 @@ function normalizeSettings(input = {}) {
+   return {
+     onboardingDone: input?.onboardingDone === true,
+     streamerMode: input?.streamerMode === true,
++    updateCheckEnabled: input?.updateCheckEnabled !== false,
+     notificationsEnabled: input?.notificationsEnabled === true,
+     staggerStartupConnections: input?.staggerStartupConnections !== false,
+     useLauncherPackCache: input?.useLauncherPackCache !== false,
+diff --git a/desktop/electron/support-tools.cjs b/desktop/electron/support-tools.cjs
+new file mode 100644
+index 0000000..36123ac
+--- /dev/null
++++ b/desktop/electron/support-tools.cjs
+@@ -0,0 +1,39 @@
++const { redactDiagnostic } = require('./diagnostic-log.cjs')
++const { redactSecrets } = require('./notify/notifier.cjs')
++const { maskText, label } = require('../src/streamer-mask.js')
++const INTERVAL = 12 * 60 * 60 * 1000
++function parseVersion(value) {
++  const m = /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z.-]+)?$/.exec(String(value))
++  if (!m) return null
++  const pre = m[4]?.split('.') || []
++  if (pre.some(x => /^\d+$/.test(x) && x.length > 1 && x[0] === '0')) return null
++  return { numbers: m.slice(1, 4).map(BigInt), pre }
++}
++function compareVersions(a, b) {
++  a = parseVersion(a); b = parseVersion(b)
++  if (!a || !b) return null
++  for (let i = 0; i < 3; i++) if (a.numbers[i] !== b.numbers[i]) return a.numbers[i] > b.numbers[i] ? 1 : -1
++  if (!a.pre.length || !b.pre.length) return Math.sign(b.pre.length - a.pre.length)
++  for (let i = 0; i < Math.max(a.pre.length, b.pre.length); i++) {
++    const x = a.pre[i], y = b.pre[i]
++    if (x === undefined || y === undefined) return x === undefined ? -1 : 1
++    if (x === y) continue
++    const xn = /^\d+$/.test(x), yn = /^\d+$/.test(y)
++    if (xn && yn) return BigInt(x) > BigInt(y) ? 1 : -1
++    if (xn !== yn) return xn ? -1 : 1
++    return x > y ? 1 : -1
++  }
++  return 0
++}
++function shouldCheck(last, now = Date.now()) { return !Number.isFinite(last) || last <= 0 || now < last || now - last >= INTERVAL }
++function makeBundle({ version, os, settings, accounts, logs }) {
++  function clean(value, key = '') {
++    if (/password|token|secret|authorization|credential|api.?key|webhook|chat.?id/i.test(key) || /^(?:code|user_?code|device_?code)$/i.test(key)) return '[redacted]'
++    if (typeof value === 'string') return redactSecrets(redactDiagnostic(maskText(value, accounts, true)))
++    if (Array.isArray(value)) return value.map(v => clean(v))
++    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [maskText(k, accounts, true), clean(v, k)]))
++    return value
++  }
++  return JSON.stringify({ version, os, settings: clean(settings), accounts: accounts.map(a => ({ name: label(a), console: clean(logs[a.id]?.console || []), events: clean(logs[a.id]?.events || []) })) }, null, 2)
++}
++module.exports = { compareVersions, shouldCheck, makeBundle, INTERVAL }
+diff --git a/desktop/src/index.html b/desktop/src/index.html
+index e83adb6..9530c32 100644
+--- a/desktop/src/index.html
++++ b/desktop/src/index.html
+@@ -54,6 +54,7 @@
+       </aside>
+ 
+       <main id="main-content" class="main-content">
++          <div id="update-banner" class="status-banner" role="status" hidden><span id="update-message"></span> <button id="update-open" class="button secondary" type="button">Open release</button> <button id="update-dismiss" class="icon-button" type="button" aria-label="Dismiss update">×</button></div>
+         <section id="empty-state" class="empty-state" aria-labelledby="empty-title">
+           <div class="empty-illustration" aria-hidden="true">
+             <span></span><span></span><span></span>
+@@ -323,6 +324,17 @@
+           <label class="field full"><span>Auto-deposit trigger</span><select id="auto-deposit-mode"><option value="immediate">Whenever a chest is in range</option><option value="interval">On an interval</option><option value="inventoryFull">When inventory is full</option><option value="intervalOrFull">On an interval or when full</option></select></label>
+           <div class="field full" id="auto-deposit-interval-wrap"><span>Deposit interval</span><div class="settings-visual-grid"><input id="auto-deposit-interval" type="number" min="1" max="86400" value="300" /><select id="auto-deposit-interval-unit"><option value="1">Seconds</option><option value="60">Minutes</option><option value="3600">Hours</option></select></div><small>Stored as seconds. The interval starts when you join or after a successful deposit.</small></div>
+           <label class="field full" id="auto-deposit-threshold-wrap"><span>Free slots remaining to count as full</span><input id="auto-deposit-full-threshold" type="number" min="0" max="35" value="0" /><small>Counts unlocked main-inventory slots only; armor and offhand are ignored. 0 means every unlocked main slot is occupied.</small></label>
++          <div class="form-section full"><h3>Safety</h3><p>Safety actions are off by default. Online hours use this device's local time.</p></div>
++          <label class="check-row"><input id="safety-eat" type="checkbox" /> Auto-eat</label>
++          <label class="field"><span>Eat at food level</span><input id="safety-food" type="number" min="0" max="20" value="14" /></label>
++          <label class="check-row"><input id="safety-totem" type="checkbox" /> Equip a totem at low health</label>
++          <label class="check-row"><input id="safety-disconnect" type="checkbox" /> Disconnect at low health</label>
++          <label class="field"><span>Low-health threshold</span><input id="safety-health" type="number" min="0" max="20" value="6" /></label>
++          <label class="field"><span>Reconnect cooldown (minutes)</span><input id="safety-cooldown" type="number" min="1" max="1440" value="10" /></label>
++          <label class="check-row full"><input id="safety-schedule" type="checkbox" /> Limit online hours</label>
++          <label class="field"><span>Start</span><input id="safety-start" type="time" value="00:00" /></label>
++          <label class="field"><span>End</span><input id="safety-end" type="time" value="00:00" /><small>Equal times mean all day. Overnight windows start on the selected day.</small></label>
++          <div class="action-grid full" role="group" aria-label="Online weekdays"><label class="check-row"><input id="safety-day-0" type="checkbox" /> Sun</label><label class="check-row"><input id="safety-day-1" type="checkbox" /> Mon</label><label class="check-row"><input id="safety-day-2" type="checkbox" /> Tue</label><label class="check-row"><input id="safety-day-3" type="checkbox" /> Wed</label><label class="check-row"><input id="safety-day-4" type="checkbox" /> Thu</label><label class="check-row"><input id="safety-day-5" type="checkbox" /> Fri</label><label class="check-row"><input id="safety-day-6" type="checkbox" /> Sat</label></div>
+           <div class="form-section full">
+             <h3>Automatic messages</h3>
+             <p>Send a chat message or command when this account joins or changes server/world.</p>
+@@ -364,7 +376,7 @@
+           <button id="close-settings" class="icon-button" type="button" aria-label="Close settings">×</button>
+         </header>
+         <div class="settings-body">
+-          <div class="settings-tools"><button id="bulk-appearance-open" class="button secondary" type="button">Bulk skins and capes…</button> <button id="open-help-tour" class="button secondary" type="button">Take the tour again</button></div>
++          <div class="settings-tools"><button id="check-updates" class="button secondary" type="button">Check for updates</button> <button id="export-logs" class="button secondary" type="button">Export logs</button> <button id="bulk-appearance-open" class="button secondary" type="button">Bulk skins and capes…</button> <button id="open-help-tour" class="button secondary" type="button">Take the tour again</button></div>
+           <label class="toggle-row">
+             <input id="start-with-windows" type="checkbox" />
+             <span class="toggle" aria-hidden="true"></span>
+@@ -377,7 +389,7 @@
+           </label>
+           <label class="check-row"><input id="notify-attach-pov" type="checkbox" /> Attach active POV to alerts</label>
+           <label class="check-row"><input id="notify-attach-inventory" type="checkbox" /> Attach inventory to alerts</label>
+-          <label class="check-row"><input id="notify-pov-offscreen" type="checkbox" disabled /> Offscreen POV capture (not yet available)</label>
++          <label class="check-row"><input id="notify-pov-offscreen" type="checkbox" /> Offscreen POV capture</label>
+           <label class="toggle-row">
+             <input id="stagger-startup-connections" type="checkbox" checked />
+             <span class="toggle" aria-hidden="true"></span>
+@@ -388,6 +400,7 @@
+             <span class="toggle" aria-hidden="true"></span>
+             <span><strong>Use Minecraft launcher resource pack cache</strong><small>Reuse verified packs from Minecraft, Modrinth, and CurseForge when available.</small></span>
+           </label>
++          <label class="toggle-row"><input id="update-check-enabled" type="checkbox" checked /><span class="toggle" aria-hidden="true"></span><span><strong>Check for updates on startup</strong><small>Checks at most once every 12 hours.</small></span></label>
+           <label class="toggle-row"><input id="streamer-mode" type="checkbox" /><span class="toggle" aria-hidden="true"></span><span><strong>Streamer mode</strong><small>Hide account names and email addresses in the interface.</small></span></label>
+           <label class="field settings-delay"><span>Delay between accounts (seconds)</span><input id="startup-connection-delay" type="number" min="1" max="300" value="3" /></label>
+           <label class="field settings-delay"><span>Interface scale</span><input id="ui-scale" type="range" min="50" max="125" step="5" value="100" /><small><output id="ui-scale-value" for="ui-scale">100%</output> — smaller values fit more controls on screen.</small></label>
+diff --git a/desktop/src/offscreen-pov.html b/desktop/src/offscreen-pov.html
+new file mode 100644
+index 0000000..cb28cc2
+--- /dev/null
++++ b/desktop/src/offscreen-pov.html
+@@ -0,0 +1,4 @@
++<!doctype html>
++<html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'"></head>
++<body><canvas id="pov" width="640" height="360"></canvas>
++<script src="../assets/pov-math.js"></script><script src="../assets/pov-renderer.js"></script><script src="offscreen-pov.js"></script></body></html>
+diff --git a/desktop/src/offscreen-pov.js b/desktop/src/offscreen-pov.js
+new file mode 100644
+index 0000000..d9d73df
+--- /dev/null
++++ b/desktop/src/offscreen-pov.js
+@@ -0,0 +1,16 @@
++'use strict'
++window.renderOffscreenPov = (snapshot) => {
++  const canvas = document.getElementById('pov')
++  const small = document.createElement('canvas')
++  small.width = 256; small.height = 144
++  const frame = new window.afkVoxelRenderer.VoxelRenderer().render(snapshot, small.width, small.height)
++  small.getContext('2d').putImageData(new ImageData(frame.data, small.width, small.height), 0, 0)
++  const context = canvas.getContext('2d')
++  context.imageSmoothingEnabled = false
++  context.drawImage(small, 0, 0, canvas.width, canvas.height)
++  const x = canvas.width / 2, y = canvas.height / 2
++  context.strokeStyle = '#ffffffdd'; context.beginPath()
++  context.moveTo(x - 6, y); context.lineTo(x + 6, y)
++  context.moveTo(x, y - 6); context.lineTo(x, y + 6); context.stroke()
++  return canvas.toDataURL('image/png')
++}
+diff --git a/desktop/src/renderer.js b/desktop/src/renderer.js
+index 35de5d2..6a141be 100644
+--- a/desktop/src/renderer.js
++++ b/desktop/src/renderer.js
+@@ -104,9 +104,10 @@ const state = {
+ }
+ 
+ const el = Object.fromEntries([
++  'safety-eat', 'safety-food', 'safety-totem', 'safety-disconnect', 'safety-health', 'safety-cooldown', 'safety-schedule', 'safety-start', 'safety-end', 'safety-day-0', 'safety-day-1', 'safety-day-2', 'safety-day-3', 'safety-day-4', 'safety-day-5', 'safety-day-6',
+   'account-list', 'account-count', 'add-account', 'import-profile-share', 'share-profile', 'open-settings', 'toggle-sidebar', 'open-command-center', 'command-dialog', 'command-search', 'command-results', 'close-command-center',
+   'quick-scale', 'quick-scale-number', 'reset-scale', 'quick-scale-value', 'quick-workspace-design', 'quick-color-theme', 'workspace-design', 'color-theme', 'display-menu', 'console-menu',
+-  'streamer-quick-toggle', 'streamer-mode', 'macro-menu', 'settings-dialog', 'close-settings', 'start-with-windows', 'notifications-enabled', 'notify-attach-pov', 'notify-attach-inventory', 'notify-pov-offscreen', 'stagger-startup-connections', 'use-launcher-pack-cache', 'startup-connection-delay', 'save-settings', 'empty-state',
++  'update-banner', 'update-message', 'update-open', 'update-dismiss', 'check-updates', 'export-logs', 'update-check-enabled', 'streamer-quick-toggle', 'streamer-mode', 'macro-menu', 'settings-dialog', 'close-settings', 'start-with-windows', 'notifications-enabled', 'notify-attach-pov', 'notify-attach-inventory', 'notify-pov-offscreen', 'stagger-startup-connections', 'use-launcher-pack-cache', 'startup-connection-delay', 'save-settings', 'empty-state',
+   'dashboard', 'account-title', 'app-version', 'settings-app-version', 'edit-account', 'open-logs', 'open-automations', 'open-pov', 'connection-button', 'status-banner',
+   'status-name', 'status-detail', 'server-address', 'detail-username', 'detail-server', 'detail-version', 'detail-antiafk', 'detail-environment', 'detail-water', 'detail-health',
+   'detail-hunger', 'detail-coordinates', 'detail-chest', 'detail-dimension', 'inventory-count', 'inventory-grid', 'auto-deposit-toggle', 'hold-selected', 'equip-destination', 'equip-selected',
+@@ -143,6 +144,7 @@ async function init() {
+   const [accounts, settings, appVersion, versions] = await Promise.all([api.listAccounts(), api.getSettings(), api.getAppVersion(), api.getSupportedVersions()])
+   state.accounts = accounts
+   state.settings = settings
++  void api.checkUpdates().then(showUpdate).catch(() => {})
+   state.supportedVersions = versions
+   populateVersionOptions(versions)
+   el['app-version'].textContent = `v${appVersion}`
+@@ -208,6 +210,10 @@ function bindEvents() {
+     el['settings-dialog'].close()
+   })
+   el['save-settings'].addEventListener('click', saveSettings)
++  el['check-updates'].addEventListener('click', async () => { const release = await api.checkUpdates(true).catch(() => null); showUpdate(release); if (release) el['settings-dialog'].close() })
++  el['export-logs'].addEventListener('click', async () => { try { if (await api.exportLogs()) toast('Logs exported') } catch (error) { toast(cleanError(error), 'error') } })
++  el['update-open'].addEventListener('click', () => { void api.openUpdate() })
++  el['update-dismiss'].addEventListener('click', () => { el['update-banner'].hidden = true })
+   el['streamer-quick-toggle'].addEventListener('click', async () => {
+     try {
+       state.settings = await api.saveSettings({ ...state.settings, streamerMode: !state.settings.streamerMode })
+@@ -978,6 +984,16 @@ function openAccountDialog(account, importing = false) {
+   el['anti-afk-swing'].checked = account?.antiAfkSwing === true
+   el['anti-afk-walk'].checked = account?.antiAfkWalk === true
+   el['environmental-movement'].checked = account?.environmentalMovement !== false
++  el['safety-eat'].checked = account?.autoEat === true
++  el['safety-food'].value = account?.autoEatThreshold ?? 14
++  el['safety-totem'].checked = account?.lowHealthTotem === true
++  el['safety-disconnect'].checked = account?.lowHealthDisconnect === true
++  el['safety-health'].value = account?.lowHealthThreshold ?? 6
++  el['safety-cooldown'].value = account?.lowHealthCooldownMinutes ?? 10
++  el['safety-schedule'].checked = account?.scheduleEnabled === true
++  el['safety-start'].value = account?.scheduleStart ?? '00:00'
++  el['safety-end'].value = account?.scheduleEnd ?? '00:00'
++  for (let day = 0; day < 7; day++) el[`safety-day-${day}`].checked = (account?.scheduleDays ?? [0, 1, 2, 3, 4, 5, 6]).includes(day)
+   el['auto-reconnect'].checked = account?.autoReconnect !== false
+   el['auto-reconnect-delay'].value = account?.autoReconnectDelay || 5
+   el['auto-reconnect-backoff'].value = account?.autoReconnectBackoffMultiplier ?? 2
+@@ -1063,6 +1079,16 @@ async function saveAccount(event) {
+     antiAfkSwing: el['anti-afk-swing'].checked,
+     antiAfkWalk: el['anti-afk-walk'].checked,
+     environmentalMovement: el['environmental-movement'].checked,
++    autoEat: el['safety-eat'].checked,
++    autoEatThreshold: Number(el['safety-food'].value),
++    lowHealthTotem: el['safety-totem'].checked,
++    lowHealthDisconnect: el['safety-disconnect'].checked,
++    lowHealthThreshold: Number(el['safety-health'].value),
++    lowHealthCooldownMinutes: Number(el['safety-cooldown'].value),
++    scheduleEnabled: el['safety-schedule'].checked,
++    scheduleStart: el['safety-start'].value,
++    scheduleEnd: el['safety-end'].value,
++    scheduleDays: Array.from({ length: 7 }, (_, day) => day).filter(day => el[`safety-day-${day}`].checked),
+     autoReconnect: el['auto-reconnect'].checked,
+     autoReconnectDelay: Number(el['auto-reconnect-delay'].value),
+     autoReconnectBackoffMultiplier: Number(el['auto-reconnect-backoff'].value),
+@@ -1794,6 +1820,12 @@ async function closeServerWindow() {
+   catch (error) { toast(cleanError(error), 'error') }
+ }
+ 
++function showUpdate(release) {
++  if (!release) return
++  el['update-message'].textContent = `AFK Desk ${release.version} is available.`
++  el['update-banner'].hidden = false
++}
++
+ async function openSettingsDialog() {
+   try {
+     const settings = await api.getSettings()
+@@ -1803,6 +1835,7 @@ async function openSettingsDialog() {
+     el['notify-attach-pov'].checked = settings.notifyAttachPov === true
+     el['notify-attach-inventory'].checked = settings.notifyAttachInventory === true
+     el['notify-pov-offscreen'].checked = settings.notifyPovOffscreen === true
++    el['update-check-enabled'].checked = settings.updateCheckEnabled !== false
+     el['streamer-mode'].checked = settings.streamerMode === true
+     el['stagger-startup-connections'].checked = settings.staggerStartupConnections !== false
+     el['use-launcher-pack-cache'].checked = settings.useLauncherPackCache !== false
+@@ -1837,6 +1870,7 @@ async function saveSettings() {
+       notifyAttachInventory: el['notify-attach-inventory'].checked,
+       notifyPovOffscreen: el['notify-pov-offscreen'].checked,
+       streamerMode: el['streamer-mode'].checked,
++      updateCheckEnabled: el['update-check-enabled'].checked,
+       staggerStartupConnections: el['stagger-startup-connections'].checked,
+       useLauncherPackCache: el['use-launcher-pack-cache'].checked,
+       startupConnectionDelay: Number(el['startup-connection-delay'].value),
+diff --git a/mobile/App.tsx b/mobile/App.tsx
+index 4999b25..e5223b5 100644
+--- a/mobile/App.tsx
++++ b/mobile/App.tsx
+@@ -7,11 +7,15 @@ import {loadAccounts, saveAccounts} from './account-storage';
+ import {syncForegroundSessions} from './foreground-service';
+ import {openExternalUrl, openMicrosoftSignIn} from './external-links';
+ import nodejs from 'nodejs-mobile-react-native';
++import AsyncStorage from '@react-native-async-storage/async-storage';
++// Version shown in the header comes from package.json so it can't go stale.
++const APP_VERSION: string = require('./package.json').version;
++const {maskNames, addRecent} = require('./mobile-ui-logic.cjs');
+ 
+ type ProxyConfig = {enabled: boolean; type: 'socks5' | 'http'; host: string; port: string; username: string; password: string};
+ type Account = {
+   id: string; username: string; minecraftName?: string; host: string; port: string; version: string; skinUrl?: string;
+-  antiAfk: boolean; antiAfkInterval: string; autoReconnect: boolean; autoReconnectDelay: string;
++  antiAfk: boolean; antiAfkInterval: string; antiAfkChatEnabled: boolean; antiAfkChatMessage: string; antiAfkChatIntervalSec: string; autoReconnect: boolean; autoReconnectDelay: string;
+   autoReconnectMaxAttempts: string; connectOnStartup: boolean; joinMessage: string;
+   serverChangeMessage: string; messageDelay: string; autoDepositToChest: boolean;
+   autoDepositRange: string; autoDepositMode: 'immediate' | 'interval' | 'inventoryFull' | 'intervalOrFull';
+@@ -31,7 +35,7 @@ const SUPPORTED_GAME_VERSIONS = ['1.21.11', '1.21.9', '1.21.8', '1.21.6', '1.21.
+ const EMPTY_PROXY: ProxyConfig = {enabled: false, type: 'socks5', host: '', port: '1080', username: '', password: ''};
+ const blankAccount = (): Account => ({
+   id: `${Date.now()}-${Math.random().toString(16).slice(2)}`, username: '', host: '', port: '25565', version: '',
+-  antiAfk: true, antiAfkInterval: '45', autoReconnect: true, autoReconnectDelay: '5', autoReconnectMaxAttempts: '0',
++  antiAfk: true, antiAfkInterval: '45', antiAfkChatEnabled: false, antiAfkChatMessage: '', antiAfkChatIntervalSec: '300', autoReconnect: true, autoReconnectDelay: '5', autoReconnectMaxAttempts: '0',
+   connectOnStartup: false, joinMessage: '', serverChangeMessage: '', messageDelay: '6',
+   autoDepositToChest: false, autoDepositRange: '5', autoDepositMode: 'immediate', autoDepositInterval: '300',
+   autoDepositFullThreshold: '0', serverChangeRetryMinutes: '30', proxy: {...EMPTY_PROXY},
+@@ -39,6 +43,8 @@ const blankAccount = (): Account => ({
+ 
+ const normalizeAccount = (account: Partial<Account>): Account => ({
+   ...blankAccount(), ...account,
++  antiAfkChatEnabled: account.antiAfkChatEnabled === true,
++  antiAfkChatIntervalSec: String(Math.max(10, Math.min(Math.round(Number(account.antiAfkChatIntervalSec) || 300), 86400))),
+   autoDepositToChest: account.autoDepositToChest === true,
+   autoDepositRange: String(Math.max(1, Math.min(Math.round(Number(account.autoDepositRange) || 5), 16))),
+   autoDepositMode: ['immediate', 'interval', 'inventoryFull', 'intervalOrFull'].includes(account.autoDepositMode as string) ? account.autoDepositMode! : 'immediate',
+@@ -74,6 +80,12 @@ function App(): React.JSX.Element {
+   const [editing, setEditing] = useState<Account | null>(null);
+   const [settingsOpen, setSettingsOpen] = useState(false);
+   const [chat, setChat] = useState('');
++  const [recent, setRecent] = useState<Record<string, string[]>>({});
++  const [recentOpen, setRecentOpen] = useState(false);
++  const [streamerMode, setStreamerMode] = useState(false);
++  const mask = (text: string) => maskNames(text, accounts, streamerMode) as string;
++  useEffect(() => { AsyncStorage.getItem('afkdesk.mobile.streamerMode').then(value => setStreamerMode(value === 'true')).catch(() => Alert.alert('Storage error', 'Privacy setting could not be loaded.')); }, []);
++  const changeStreamerMode = (value: boolean) => { setStreamerMode(value); AsyncStorage.setItem('afkdesk.mobile.streamerMode', String(value)).catch(() => Alert.alert('Storage error', 'Privacy setting could not be saved.')); };
+   const [chatSuggestions, setChatSuggestions] = useState<ChatSuggestion[]>([]);
+   const [followLatest, setFollowLatest] = useState(true);
+   const [loginCode, setLoginCode] = useState<{code: string; verificationUri?: string} | null>(null);
+@@ -150,6 +162,7 @@ function App(): React.JSX.Element {
+   useEffect(() => {
+     setFollowLatest(true);
+     setChatSuggestions([]);
++    setRecentOpen(false);
+   }, [selectedId]);
+ 
+   useEffect(() => {
+@@ -206,7 +219,7 @@ function App(): React.JSX.Element {
+     if (!selected || !value) return;
+     setChat('');
+     setChatSuggestions([]);
+-    try { await engineCommand({action: 'chat', accountId: selected.id, value}); }
++    try { await engineCommand({action: 'chat', accountId: selected.id, value}); setRecent(old => ({...old, [selected.id]: addRecent(old[selected.id] || [], value)})); }
+     catch (error: any) { Alert.alert('Cannot send', error.message); }
+   };
+   const action = (name: string, value?: string) => selected && engineCommand({action: name, accountId: selected.id, value}).catch((error: Error) => Alert.alert('Control unavailable', error.message));
+@@ -259,7 +272,7 @@ function App(): React.JSX.Element {
+   return <SafeAreaView style={styles.safe}>
+     <StatusBar barStyle="light-content" backgroundColor="#090c10" />
+     <View style={styles.header}>
+-      <View><Text style={styles.brand}>AFK Desk 0.9.2</Text><Text style={styles.muted}>{engineReady ? 'On-device Minecraft client' : 'Starting engine…'}</Text></View>
++      <View><Text style={styles.brand}>AFK Desk {APP_VERSION}</Text><Text style={styles.muted}>{engineReady ? 'On-device Minecraft client' : 'Starting engine…'}</Text></View>
+       <Pressable style={styles.smallButton} onPress={() => setSettingsOpen(true)}><Text style={styles.buttonText}>Settings</Text></Pressable>
+     </View>
+ 
+@@ -267,8 +280,8 @@ function App(): React.JSX.Element {
+       <FlatList horizontal data={accounts} keyExtractor={item => item.id} contentContainerStyle={styles.accountStripContent}
+         renderItem={({item, index}) => <View style={[styles.accountCard, item.id === selected?.id && styles.accountCardSelected]}>
+           <Pressable style={styles.accountSelect} onPress={() => setSelectedId(item.id)}>
+-            {item.skinUrl ? <Image source={{uri: item.skinUrl}} style={styles.avatar} /> : <View style={styles.avatarFallback}><Text style={styles.avatarLetter}>{item.username.slice(0, 1).toUpperCase()}</Text></View>}
+-            <View style={styles.accountCopy}><Text numberOfLines={1} style={styles.accountName}>{item.minecraftName || item.username}</Text><Text numberOfLines={1} style={styles.muted}>{item.host}</Text></View>
++            {!streamerMode && item.skinUrl ? <Image source={{uri: item.skinUrl}} style={styles.avatar} /> : <View style={styles.avatarFallback}><Text style={styles.avatarLetter}>{streamerMode ? '•' : item.username.slice(0, 1).toUpperCase()}</Text></View>}
++            <View style={styles.accountCopy}><Text numberOfLines={1} style={styles.accountName}>{streamerMode ? `Account ${index + 1}` : item.minecraftName || item.username}</Text><Text numberOfLines={1} style={styles.muted}>{mask(item.host)}</Text></View>
+             <View style={[styles.dot, (sessions[item.id]?.status === 'online') && styles.dotOnline]} />
+           </Pressable>
+           <View style={styles.orderRow}>
+@@ -281,13 +294,13 @@ function App(): React.JSX.Element {
+ 
+     {!selected ? <View style={styles.empty}><Text style={styles.title}>Add your first account</Text><Text style={styles.muted}>Microsoft sign-in opens in your browser and returns here.</Text><Pressable style={styles.primary} onPress={() => setEditing(blankAccount())}><Text style={styles.primaryText}>Add account</Text></Pressable></View> :
+     <ScrollView style={styles.page} contentContainerStyle={styles.pageContent} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
+-      <View style={styles.titleRow}><View style={styles.flex}><Text style={styles.title}>{selected.minecraftName || selected.username}</Text><Text style={styles.status}>{session?.status} · {session?.detail}</Text></View>
++      <View style={styles.titleRow}><View style={styles.flex}><Text style={styles.title}>{streamerMode ? `Account ${accounts.findIndex(item => item.id === selected.id) + 1}` : selected.minecraftName || selected.username}</Text><Text style={styles.status}>{session?.status} · {mask(session?.detail || '')}</Text></View>
+         <Pressable style={styles.smallButton} onPress={() => setEditing({...selected, proxy: {...selected.proxy}})}><Text style={styles.buttonText}>Edit</Text></Pressable>
+         {session?.status === 'offline' ? <Pressable style={styles.primarySmall} onPress={connect}><Text style={styles.primaryText}>Connect</Text></Pressable> : <Pressable style={styles.dangerSmall} onPress={disconnect}><Text style={styles.dangerText}>Disconnect</Text></Pressable>}
+       </View>
+ 
+       <View style={styles.console}>
+-        <View style={styles.panelHeader}><Text style={styles.panelTitle}>Console</Text><View style={styles.consoleHeaderActions}>{!followLatest && <Pressable style={styles.followButton} onPress={() => setFollowLatest(true)}><Text style={styles.link}>Follow latest</Text></Pressable>}<Text style={styles.muted}>{selected.host}:{selected.port}</Text></View></View>
++        <View style={styles.panelHeader}><Text style={styles.panelTitle}>Console</Text><View style={styles.consoleHeaderActions}>{!followLatest && <Pressable style={styles.followButton} onPress={() => setFollowLatest(true)}><Text style={styles.link}>Follow latest</Text></Pressable>}<Text style={styles.muted}>{mask(selected.host)}:{selected.port}</Text></View></View>
+         <ScrollView ref={logListRef} style={styles.logList} nestedScrollEnabled
+           onContentSizeChange={() => { if (followLatest) logListRef.current?.scrollToEnd({animated: false}); }}
+           onScroll={({nativeEvent}) => {
+@@ -295,11 +308,12 @@ function App(): React.JSX.Element {
+             setFollowLatest(distance < 32);
+           }} scrollEventThrottle={80}>
+           {session?.logs.length ? session.logs.map(item => <View key={item.id} style={styles.logLine}><Text style={styles.time}>{new Date(item.at).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}</Text>
+-            <Text style={[styles.logText, item.kind === 'error' && styles.error, item.kind === 'sent' && styles.sent]}>{item.segments?.length ? item.segments.map((segment, i) => <Text key={i} accessibilityRole={segment.click ? 'link' : undefined} onPress={segment.click ? () => activateChatClick(segment.click) : undefined} onLongPress={segment.click ? () => Share.share({message: segment.click!.value}) : undefined} style={{color: segment.color, fontWeight: segment.bold ? '800' : undefined, fontStyle: segment.italic ? 'italic' : undefined, textDecorationLine: segment.click || segment.underlined ? 'underline' : segment.strikethrough ? 'line-through' : undefined}}>{segment.text}</Text>) : item.message}</Text>
++            <Text style={[styles.logText, item.kind === 'error' && styles.error, item.kind === 'sent' && styles.sent]}>{!streamerMode && item.segments?.length ? item.segments.map((segment, i) => <Text key={i} accessibilityRole={segment.click ? 'link' : undefined} onPress={segment.click ? () => activateChatClick(segment.click) : undefined} onLongPress={segment.click ? () => Share.share({message: segment.click!.value}) : undefined} style={{color: segment.color, fontWeight: segment.bold ? '800' : undefined, fontStyle: segment.italic ? 'italic' : undefined, textDecorationLine: segment.click || segment.underlined ? 'underline' : segment.strikethrough ? 'line-through' : undefined}}>{segment.text}</Text>) : mask(item.message)}</Text>
+           </View>) : <Text style={styles.emptyLog}>Messages will appear here.</Text>}
+         </ScrollView>
+         {chatSuggestions.length > 0 && <ScrollView horizontal keyboardShouldPersistTaps="handled" contentContainerStyle={styles.chatSuggestions}>{chatSuggestions.map((suggestion, index) => <Pressable key={`${suggestion.value}-${index}`} style={styles.chatSuggestion} onPress={() => {setChat(suggestion.value); setChatSuggestions([]);}}><Text numberOfLines={1} style={styles.chatSuggestionText}>{suggestion.label || suggestion.value}</Text>{Boolean(suggestion.tooltip) && <Text numberOfLines={1} style={styles.muted}>{suggestion.tooltip}</Text>}</Pressable>)}</ScrollView>}
+-        <View style={styles.chatRow}><TextInput value={chat} onChangeText={setChat} onSubmitEditing={sendChat} placeholder="Message or /command" placeholderTextColor="#626d7b" style={styles.chatInput} /><Pressable style={styles.send} onPress={sendChat}><Text style={styles.buttonText}>Send</Text></Pressable></View>
++        {recentOpen && <ScrollView style={{maxHeight: 150}} keyboardShouldPersistTaps="handled">{(recent[selected.id] || []).length ? (recent[selected.id] || []).map(message => <Pressable key={message} style={styles.chatSuggestion} onPress={() => { setChat(message); setRecentOpen(false); }}><Text numberOfLines={1} style={styles.chatSuggestionText}>{mask(message)}</Text></Pressable>) : <Text style={styles.emptyLog}>No recent messages.</Text>}</ScrollView>}
++        <View style={styles.chatRow}><Pressable accessibilityLabel="Recent messages" style={styles.send} onPress={() => setRecentOpen(!recentOpen)}><Text style={styles.buttonText}>Recent</Text></Pressable><TextInput value={chat} onChangeText={setChat} onSubmitEditing={sendChat} placeholder="Message or /command" placeholderTextColor="#626d7b" style={styles.chatInput} /><Pressable style={styles.send} onPress={sendChat}><Text style={styles.buttonText}>Send</Text></Pressable></View>
+       </View>
+ 
+       <View style={styles.statsRow}>
+@@ -320,11 +334,11 @@ function App(): React.JSX.Element {
+       </View>
+     </ScrollView>}
+ 
+-    <AccountModal value={editing} onClose={() => setEditing(null)} onSave={saveAccount} onDelete={account => {
++    <AccountModal streamerMode={streamerMode} value={editing} onClose={() => setEditing(null)} onSave={saveAccount} onDelete={account => {
+       engineCommand({action: 'disconnect', accountId: account.id}).catch(() => {});
+       setAccounts(old => old.filter(item => item.id !== account.id)); setSelectedId(accounts.find(item => item.id !== account.id)?.id || ''); setEditing(null);
+     }} />
+-    <SettingsModal visible={settingsOpen} accounts={accounts} onClose={() => setSettingsOpen(false)} onChange={setAccounts} />
++    <SettingsModal streamerMode={streamerMode} onStreamerMode={changeStreamerMode} visible={settingsOpen} accounts={accounts} onClose={() => setSettingsOpen(false)} onChange={setAccounts} />
+     <ServerMenuModal value={session?.serverWindow || null} onClick={slot => selected && engineCommand({action: 'window-click', accountId: selected.id, slot}).catch((error: Error) => Alert.alert('Menu action failed', error.message))} onClose={() => selected && engineCommand({action: 'window-close', accountId: selected.id}).catch((error: Error) => Alert.alert('Close menu failed', error.message))} />
+     <Modal transparent visible={Boolean(loginCode)} animationType="fade"><View style={styles.backdrop}><View style={styles.modalCard}><Text style={styles.title}>Microsoft sign-in</Text><Text style={styles.modalHelp}>Open Microsoft, switch to the account you want, then enter this code:</Text><Text selectable style={styles.deviceCode}>{loginCode?.code}</Text><Pressable style={styles.primary} onPress={openMicrosoftSignIn}><Text style={styles.primaryText}>Open Microsoft sign-in</Text></Pressable><Pressable style={styles.modalButton} onPress={() => setLoginCode(null)}><Text style={styles.buttonText}>Close</Text></Pressable></View></View></Modal>
+   </SafeAreaView>;
+@@ -416,7 +430,7 @@ function ServerMenuModal({value, onClick, onClose}: {value: ServerMenu | null; o
+   </Modal>;
+ }
+ 
+-function AccountModal({value, onClose, onSave, onDelete}: {value: Account | null; onClose: () => void; onSave: (value: Account) => void; onDelete: (value: Account) => void}) {
++function AccountModal({streamerMode, value, onClose, onSave, onDelete}: {streamerMode: boolean; value: Account | null; onClose: () => void; onSave: (value: Account) => void; onDelete: (value: Account) => void}) {
+   const [draft, setDraft] = useState<Account | null>(value);
+   useEffect(() => setDraft(value ? {...value, proxy: {...value.proxy}} : null), [value]);
+   const set = (key: keyof Account, next: any) => draft && setDraft({...draft, [key]: next});
+@@ -425,7 +439,7 @@ function AccountModal({value, onClose, onSave, onDelete}: {value: Account | null
+     {draft && <SafeAreaView style={styles.safe}><View style={styles.modalHeader}><Pressable onPress={onClose}><Text style={styles.link}>Cancel</Text></Pressable><Text style={styles.panelTitle}>Account setup</Text><Pressable onPress={() => onSave(draft)}><Text style={styles.link}>Save</Text></Pressable></View>
+       <ScrollView contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled">
+         <Text style={styles.sectionTitle}>Connection</Text>
+-        <Field label="Account label or Microsoft email" value={draft.username} onChange={(v: string) => set('username', v)} />
++        <Field secret={streamerMode} label="Account label or Microsoft email" value={draft.username} onChange={(v: string) => set('username', v)} />
+         <Text style={styles.help}>After sign-in, the account card shows your Minecraft name and head. This login value is kept for future sign-ins.</Text>
+         <Field label="Server" value={draft.host} onChange={(v: string) => set('host', v)} />
+         <Field label="Port" value={draft.port} onChange={(v: string) => set('port', v)} keyboardType="number-pad" />
+@@ -437,6 +451,8 @@ function AccountModal({value, onClose, onSave, onDelete}: {value: Account | null
+         <Field label="Maximum attempts (0 = unlimited)" value={draft.autoReconnectMaxAttempts} onChange={(v: string) => set('autoReconnectMaxAttempts', v)} keyboardType="number-pad" />
+         <Toggle label="Anti-AFK movement" value={draft.antiAfk} onChange={v => set('antiAfk', v)} />
+         <Field label="Anti-AFK interval (seconds)" value={draft.antiAfkInterval} onChange={(v: string) => set('antiAfkInterval', v)} keyboardType="number-pad" />
++        <Toggle label="Anti-AFK chat message" value={draft.antiAfkChatEnabled} onChange={v => set('antiAfkChatEnabled', v)} />
++        {draft.antiAfkChatEnabled && <><Field label="Anti-AFK message" value={draft.antiAfkChatMessage} onChange={(v: string) => set('antiAfkChatMessage', v)} /><Field label="Chat interval (seconds; 10–86400)" value={draft.antiAfkChatIntervalSec} onChange={(v: string) => set('antiAfkChatIntervalSec', v)} keyboardType="number-pad" /><Text style={styles.help}>Requires anti-AFK movement to be enabled.</Text></>}
+         <Field label="Message after joining" value={draft.joinMessage} onChange={(v: string) => set('joinMessage', v)} />
+         <Field label="Message after changing servers" value={draft.serverChangeMessage} onChange={(v: string) => set('serverChangeMessage', v)} />
+         <Field label="Automatic message delay (seconds)" value={draft.messageDelay} onChange={(v: string) => set('messageDelay', v)} keyboardType="number-pad" />
+@@ -451,18 +467,18 @@ function AccountModal({value, onClose, onSave, onDelete}: {value: Account | null
+         <Text style={styles.sectionTitle}>Proxy</Text>
+         <Toggle label="Use a proxy for this account" value={draft.proxy.enabled} onChange={v => proxy('enabled', v)} />
+         {draft.proxy.enabled && <><View style={styles.segmented}><Pressable style={[styles.segment, draft.proxy.type === 'socks5' && styles.segmentSelected]} onPress={() => proxy('type', 'socks5')}><Text style={styles.buttonText}>SOCKS5</Text></Pressable><Pressable style={[styles.segment, draft.proxy.type === 'http' && styles.segmentSelected]} onPress={() => proxy('type', 'http')}><Text style={styles.buttonText}>HTTP</Text></Pressable></View>
+-          <Field label="Proxy host" value={draft.proxy.host} onChange={(v: string) => proxy('host', v)} /><Field label="Proxy port" value={draft.proxy.port} onChange={(v: string) => proxy('port', v)} keyboardType="number-pad" /><Field label="Proxy username (optional)" value={draft.proxy.username} onChange={(v: string) => proxy('username', v)} /><Field label="Proxy password (optional)" secret value={draft.proxy.password} onChange={(v: string) => proxy('password', v)} /></>}
++          <Field label="Proxy host" value={draft.proxy.host} onChange={(v: string) => proxy('host', v)} /><Field label="Proxy port" value={draft.proxy.port} onChange={(v: string) => proxy('port', v)} keyboardType="number-pad" /><Field secret={streamerMode} label="Proxy username (optional)" value={draft.proxy.username} onChange={(v: string) => proxy('username', v)} /><Field label="Proxy password (optional)" secret value={draft.proxy.password} onChange={(v: string) => proxy('password', v)} /></>}
+         {value && <Pressable style={styles.deleteButton} onPress={() => Alert.alert('Delete account?', 'This removes its local settings.', [{text: 'Cancel'}, {text: 'Delete', style: 'destructive', onPress: () => onDelete(draft)}])}><Text style={styles.dangerText}>Delete account</Text></Pressable>}
+       </ScrollView></SafeAreaView>}
+   </Modal>;
+ }
+ 
+-function SettingsModal({visible, accounts, onClose, onChange}: {visible: boolean; accounts: Account[]; onClose: () => void; onChange: (accounts: Account[]) => void}) {
++function SettingsModal({streamerMode, onStreamerMode, visible, accounts, onClose, onChange}: {streamerMode: boolean; onStreamerMode: (value: boolean) => void; visible: boolean; accounts: Account[]; onClose: () => void; onChange: (accounts: Account[]) => void}) {
+   const allStartup = accounts.length > 0 && accounts.every(account => account.connectOnStartup);
+   return <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}><SafeAreaView style={styles.safe}><View style={styles.modalHeader}><Text style={styles.panelTitle}>Settings</Text><Pressable onPress={onClose}><Text style={styles.link}>Done</Text></Pressable></View><View style={styles.form}>
+     <Text style={styles.sectionTitle}>Startup</Text><Toggle label="Connect every account on app start" value={allStartup} onChange={value => onChange(accounts.map(account => ({...account, connectOnStartup: value})))} />
+     <Text style={styles.sectionTitle}>Background operation</Text><Text style={styles.help}>Android keeps the AFK engine in a foreground service with a persistent notification. iOS can maintain sessions while open, but the operating system may suspend network connections in the background.</Text>
+-    <Text style={styles.sectionTitle}>Privacy</Text><Text style={styles.help}>Microsoft passwords are never requested or saved. Authentication tokens and account settings stay in this app's private storage.</Text>
++    <Text style={styles.sectionTitle}>Privacy</Text><Toggle label="Streamer mode" value={streamerMode} onChange={onStreamerMode} /><Text style={styles.help}>Hide account names in the app.</Text><Text style={styles.help}>Microsoft passwords are never requested or saved. Authentication tokens and account settings stay in this app's private storage.</Text>
+   </View></SafeAreaView></Modal>;
+ }
+ 
+diff --git a/mobile/mobile-ui-logic.cjs b/mobile/mobile-ui-logic.cjs
+new file mode 100644
+index 0000000..9d430f2
+--- /dev/null
++++ b/mobile/mobile-ui-logic.cjs
+@@ -0,0 +1,13 @@
++function maskNames(text, accounts, enabled) {
++  if (!enabled || !text) return text
++  const names = accounts.flatMap((account, index) => [account.username, account.minecraftName].filter(Boolean).map(name => ({name, label: `Account ${index + 1}`})))
++    .sort ( (a, b) => b.name.length - a.name.length )
++  if (!names.length) return text
++  const labels = new Map(names.map(({name, label}) => [name.toLowerCase(), label]))
++  const pattern = new RegExp(names.map(({name}) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'gi')
++  return String(text).replace(pattern, match => labels.get(match.toLowerCase()))
++}
++function addRecent(history, message) {
++  return [message, ...history.filter(item => item !== message)].slice(0, 20)
++}
++module.exports = {maskNames, addRecent}
+diff --git a/mobile/nodejs-assets/nodejs-project/bot-manager.cjs b/mobile/nodejs-assets/nodejs-project/bot-manager.cjs
+index 3985e53..04ffa58 100644
+--- a/mobile/nodejs-assets/nodejs-project/bot-manager.cjs
++++ b/mobile/nodejs-assets/nodejs-project/bot-manager.cjs
+@@ -1,3 +1,4 @@
++const { isWithinSchedule, deferSafety, installSafety } = require('./safety.cjs')
+ const path = require('node:path')
+ const { profilePath } = require('./profile-path.cjs')
+ const { applyProtocolFixes } = require('./protocol-fixes.cjs')
+@@ -48,6 +49,12 @@ class BotManager {
+     reconnectState.manual = false
+     reconnectState.account = account
+     this.reconnects.set(account.id, reconnectState)
++    if (Date.now() < (reconnectState.cooldownUntil || 0) || !isWithinSchedule(account)) {
++      reconnectState.safetyPause ||= 'schedule'
++      deferSafety(this, account, reconnectState)
++      return { id: account.id }
++    }
++    reconnectState.safetyPause = false
+ 
+     const selectedVersion = normalizeVersionSelection(account.version)
+     let session
+@@ -81,6 +88,7 @@ class BotManager {
+       serverChangeRetryAttempts: 0, serverChangeRetryStartedAt: 0, serverChangeRetryMessage: '', lastDimension: null
+     }
+     this.sessions.set(account.id, session)
++    installSafety(this, account, session, reconnectState)
+     this.status(account.id, 'connecting', reconnecting ? `Reconnect attempt ${reconnectState.attempts}…` : `Connecting to ${account.host}…`)
+     this.armConnectionWatchdog(account.id, session, loginCodeRequested ? DEVICE_LOGIN_TIMEOUT_MS : CONNECTION_TIMEOUT_MS)
+ 
+@@ -241,7 +249,9 @@ class BotManager {
+     bot.on('end', (reason) => {
+       if (this.sessions.get(account.id) !== session) return
+       this.clearSession(account.id)
+-      if (account.autoReconnect !== false && !reconnectState.manual) {
++      if (reconnectState.safetyPause && !reconnectState.manual && (reconnectState.safetyPause !== 'health' || (reconnectState.account || account).autoReconnect !== false)) {
++        deferSafety(this, reconnectState.account || account, reconnectState)
++      } else if (account.autoReconnect !== false && !reconnectState.manual) {
+         this.scheduleReconnect(account, session.lastKickReason || reason)
+       } else {
+         this.reconnects.delete(account.id)
+@@ -588,6 +598,7 @@ class BotManager {
+   }
+ 
+   clearSession(id) {
++    if (this.sessions.get(id)?.safetyTimer) clearInterval(this.sessions.get(id).safetyTimer)
+     const session = this.sessions.get(id)
+     if (session) this.clearTimers(session)
+     this.sessions.delete(id)
+diff --git a/mobile/nodejs-assets/nodejs-project/safety.cjs b/mobile/nodejs-assets/nodejs-project/safety.cjs
+new file mode 100644
+index 0000000..0e50785
+--- /dev/null
++++ b/mobile/nodejs-assets/nodejs-project/safety.cjs
+@@ -0,0 +1,83 @@
++'use strict'
++
++function shouldEat(account, bot) {
++  return account.autoEat === true && Number.isFinite(bot.food) && bot.food <= (account.autoEatThreshold ?? 14) && !bot.currentWindow
++}
++function pickFood(items, foods, locked = []) {
++  const locks = new Set(locked.map(Number))
++  return (items || []).filter(item => !locks.has(Number(item.slot)) && foods?.[item.name]).sort((a, b) => {
++    const hot = (item) => item.slot >= 36 && item.slot <= 44 ? 1 : 0
++    const value = (item) => Number(foods[item.name].foodPoints || 0) + Number(foods[item.name].saturation || 0)
++    return hot(b) - hot(a) || value(b) - value(a)
++  })[0] || null
++}
++function shouldLowHealthAct(account, health) {
++  return Number.isFinite(health) && health > 0 && health <= (account.lowHealthThreshold ?? 6) && (account.lowHealthTotem === true || account.lowHealthDisconnect === true)
++}
++function isWithinSchedule(account, date = new Date()) {
++  if (!account.scheduleEnabled) return true
++  const parse = value => { const m = /^(\d{2}):(\d{2})$/.exec(value || ''); return m && +m[1] < 24 && +m[2] < 60 ? +m[1] * 60 + +m[2] : null }
++  const start = parse(account.scheduleStart), end = parse(account.scheduleEnd)
++  if (start === null || end === null) return false
++  const days = account.scheduleDays || [0, 1, 2, 3, 4, 5, 6]
++  const now = date.getHours() * 60 + date.getMinutes(), day = date.getDay()
++  if (start === end) return days.includes(day)
++  if (start < end) return days.includes(day) && now >= start && now < end
++  return now >= start ? days.includes(day) : now < end && days.includes((day + 6) % 7)
++}
++function deferSafety(manager, account, state) {
++  if (state.timer) manager.clearReconnectTimer(state.timer)
++  state.account = account
++  manager.reconnects.set(account.id, state)
++  manager.status(account.id, 'offline', 'Waiting for safety cooldown or online hours.')
++  state.timer = manager.scheduleReconnectTimer(() => {
++    state.timer = null
++    if (manager.reconnects.get(account.id) !== state || state.manual) return
++    const current = state.account
++    if (Date.now() < (state.cooldownUntil || 0) || !isWithinSchedule(current)) return deferSafety(manager, current, state)
++    try { manager.connect(current, { reconnecting: true }) } catch (error) { manager.scheduleReconnect(current, error.message) }
++  }, 30000)
++  state.timer?.unref?.()
++}
++function installSafety(manager, account, session, state) {
++  const bot = session.bot
++  const tick = async () => {
++    if (manager.sessions.get(account.id) !== session || session.safetyBusy) return
++    const config = session.account
++    if (!isWithinSchedule(config)) { state.safetyPause = 'schedule'; bot.end('Outside online hours'); return }
++    if (!session.ready) return
++    session.safetyBusy = true
++    try {
++      if (shouldLowHealthAct(config, bot.health)) {
++        if (config.lowHealthTotem && !bot.currentWindow && !(config.lockedInventorySlots || []).includes(45) && bot.inventory?.slots?.[45]?.name !== 'totem_of_undying') {
++          const totem = bot.inventory?.items?.().find(item => item.name === 'totem_of_undying' && !(config.lockedInventorySlots || []).includes(item.slot))
++          if (totem) {
++            try { await bot.equip(totem, 'off-hand') } catch (error) { manager.emit('log', account.id, { kind: 'error', message: `Totem equip failed: ${error.message}`, at: Date.now() }) }
++          }
++        }
++        if (config.lowHealthDisconnect) {
++          state.cooldownUntil = Date.now() + (config.lowHealthCooldownMinutes ?? 10) * 60000
++          state.safetyPause = 'health'
++          manager.emit('safety-disconnect', account.id, { health: bot.health, cooldownUntil: state.cooldownUntil })
++          bot.end('Low health protection')
++          return
++        }
++      }
++      if (shouldEat(config, bot) && !session.inventoryAction && !session.depositing) {
++        const food = pickFood(bot.inventory?.items?.(), bot.registry?.foodsByName, config.lockedInventorySlots || [])
++        if (food) {
++          const previous = bot.quickBarSlot
++          const target = food.slot >= 36 && food.slot <= 44 ? food.slot - 36 : Array.from({ length: 9 }, (_, slot) => slot).find(slot => !(config.lockedInventorySlots || []).includes(slot + 36))
++          if (target === undefined) return
++          session.inventoryAction = true
++          try { bot.setQuickBarSlot(target); await bot.equip(food, 'hand'); if (!bot.currentWindow) await bot.consume() } finally { if (Number.isInteger(previous)) bot.setQuickBarSlot(previous); session.inventoryAction = false }
++        }
++      }
++    } catch (error) { manager.emit('log', account.id, { kind: 'error', message: `Safety action failed: ${error.message}`, at: Date.now() }) }
++    finally { session.safetyBusy = false }
++  }
++  session.safetyTimer = setInterval(tick, 2000)
++  session.safetyTimer.unref?.()
++  bot.on('health', tick)
++}
++module.exports = { shouldEat, pickFood, shouldLowHealthAct, isWithinSchedule, deferSafety, installSafety }

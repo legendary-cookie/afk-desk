@@ -67,6 +67,8 @@ class BedrockBotManager {
       this.emit('version', account.id, { version: client.version || account.version || 'auto', stable: true, edition: 'bedrock', at: Date.now() })
       this.emitTelemetry(account.id)
       this.startMovementLoop(account.id, session)
+      session.joinedAt = Date.now()
+      this.setAutoDeposit(account.id, session.account.autoDepositToChest, null, session.account)
       this.setAntiAfk(account.id, session.account)
       const joinMessage = session.account.joinMessage
       if (joinMessage) {
@@ -193,7 +195,7 @@ class BedrockBotManager {
   clearSessionTimers(session) {
     session.ready = false
     if (session.pendingRequest) { const pending = session.pendingRequest; session.pendingRequest = null; this.timers.clearTimeout(pending.timer); pending.reject(new Error('Bedrock connection closed.')) }
-    for (const name of ['connectTimer', 'resetTimer', 'joinTimer', 'respawnTimer', 'movementTimer', 'antiAfkTimer']) {
+    for (const name of ['connectTimer', 'resetTimer', 'joinTimer', 'respawnTimer', 'movementTimer', 'antiAfkTimer', 'depositTimer']) {
       if (session[name] != null) this.timers.clearTimeout(session[name])
       session[name] = null
     }
@@ -576,7 +578,66 @@ class BedrockBotManager {
     session.openWindow = null
     this.emit('window', id, { open: false, kind: 'container', at: Date.now() })
   }
-  setAutoDeposit() {}
+  setAutoDeposit(id, enabled, range, account) {
+    const session = this.sessions.get(id); const state = this.reconnects.get(id)
+    if (state) state.account = { ...state.account, ...(account || {}), autoDepositToChest: enabled === true }
+    if (!session) return
+    session.account = { ...session.account, ...(account || {}), autoDepositToChest: enabled === true }
+    session.depositRevision = (session.depositRevision || 0) + 1
+    if (session.depositTimer != null) this.timers.clearTimeout(session.depositTimer)
+    session.depositTimer = null
+    this.releaseOwner(id, 'autoDeposit')
+    if (enabled && session.ready) this.scheduleDeposit(id, session, 0)
+  }
+  scheduleDeposit(id, session, delay = 5000) {
+    if (!session.ready || session.closing || !session.account.autoDepositToChest || this.sessions.get(id) !== session) return
+    session.depositTimer = this.timers.setTimeout(async () => {
+      session.depositTimer = null
+      try { if (bedrockShouldDeposit(session)) await this.autoDeposit(id, session) }
+      catch (error) { if (session.account.autoDepositToChest && session.ready) this.emit('log', id, { kind: 'error', message: `Auto-deposit failed: ${error.message}`, at: Date.now() }) }
+      this.scheduleDeposit(id, session)
+    }, delay)
+  }
+  async autoDeposit(id, session) {
+    const revision = session.depositRevision
+    const active = () => this.sessions.get(id) === session && session.ready && !session.closing && session.account.autoDepositToChest && session.depositRevision === revision
+    const check = () => { if (!active()) throw new Error('Auto-deposit cancelled.') }
+    const wait = ms => new Promise(resolve => this.timers.setTimeout(resolve, ms))
+    const target = session.account.bedrockDepositTarget
+    if (!target || !['x', 'y', 'z'].every(k => Number.isInteger(target[k]))) throw new Error('Set a Bedrock deposit target in account settings.')
+    if (!session.position) throw new Error('Current position is unavailable.')
+    if (session.openWindow) throw new Error('Close the current window before auto-deposit.')
+    if (!session.inventory.some(item => item.slot >= 9 && item.slot <= 44 && !session.itemLocks.has(item.slot) && !(session.account.lockedInventorySlots || []).includes(item.slot))) return
+    const distance = () => Math.hypot(target.x + 0.5 - session.position.x, target.y + 0.5 - (session.position.y + EYE_HEIGHT), target.z + 0.5 - session.position.z)
+    let requestedWindow = false
+    try {
+      if (distance() > 4.5) {
+        if (distance() > 16 || Math.abs(target.y + 0.5 - (session.position.y + EYE_HEIGHT)) > 4) throw new Error('Deposit target is out of reach; move closer.')
+        const dx = target.x + 0.5 - session.position.x, dz = target.z + 0.5 - session.position.z
+        this.lookAbsolute(id, Math.atan2(-dx, dz), 0)
+        this.claimInput(id, 'forward', 'autoDeposit')
+        for (let i = 0; i < 100 && distance() > 4.5; i++) { await wait(100); check() }
+        this.releaseOwner(id, 'autoDeposit')
+        if (distance() > 4.5) throw new Error('Deposit target is out of reach; move closer.')
+      }
+      check()
+      const item = session.rawInventory[session.selectedHotbarSlot] || { network_id: 0 }
+      requestedWindow = true
+      session.client.queue('inventory_transaction', { transaction: { legacy: { legacy_request_id: 0 }, transaction_type: 'item_use', actions: [], transaction_data: { action_type: 'click_block', trigger_type: 'player_input', block_position: target, face: 1, hotbar_slot: session.selectedHotbarSlot, held_item: item, player_pos: eyePosition(session.position), click_pos: { x: 0.5, y: 0.5, z: 0.5 }, block_runtime_id: 0, client_prediction: 'failure', client_cooldown_state: 'off' } } })
+      for (let i = 0; i < 50 && (!session.openWindow || !session.openWindow.slots.length); i++) { await wait(100); check() }
+      if (!session.openWindow || !session.openWindow.slots.length) throw new Error('No container window opened at the Bedrock deposit target.')
+      if (!['container', 0].includes(session.openWindow.windowType)) throw new Error('The target did not open a chest or barrel.')
+      for (const item of [...session.inventory]) {
+        check()
+        if (item.slot < 9 || item.slot > 44 || session.itemLocks.has(item.slot) || (session.account.lockedInventorySlots || []).includes(item.slot)) continue
+        await this.depositSlot(id, item.slot, item.count)
+      }
+      session.lastDepositAt = Date.now()
+    } finally {
+      this.releaseOwner(id, 'autoDeposit')
+      if (requestedWindow && this.sessions.get(id) === session && session.ready && session.openWindow) this.closeWindow(id)
+    }
+  }
   setItemLocks(id, slots) { const session = this.sessions.get(id); if (session) session.itemLocks = new Set((Array.isArray(slots) ? slots : []).map(Number).filter(Number.isInteger)) }
   respondForm(id, formId, response) {
     const session = this.requireOnline(id); const form = session.forms.get(Number(formId))
@@ -709,6 +770,18 @@ class BedrockBotManager {
   status(id, status, detail) { this.emit('status', id, { status, detail, edition: 'bedrock', at: Date.now() }) }
 }
 
+function bedrockShouldDeposit(session, now = Date.now()) {
+  const account = session.account
+  const locked = new Set([...(account.lockedInventorySlots || []), ...session.itemLocks])
+  let free = 0
+  for (let slot = 9; slot <= 44; slot++) if (!locked.has(slot) && !session.rawInventory[inventoryWireSlot(slot)]?.network_id) free++
+  const full = free <= bound(account.autoDepositFullThreshold, 0, 35, 0)
+  const interval = now - (session.lastDepositAt || session.joinedAt || now) >= bound(account.autoDepositInterval, 1, 86400, 300) * 1000
+  if (account.autoDepositMode === 'interval') return interval
+  if (account.autoDepositMode === 'inventoryFull') return full
+  if (account.autoDepositMode === 'intervalOrFull') return interval || full
+  return true
+}
 function inventoryWireSlot(value) { const slot = Number(value); if (!Number.isInteger(slot) || slot < 9 || slot > 44) throw new Error('Invalid player inventory slot.'); return slot >= 36 ? slot - 36 : slot }
 function assertUnlocked(session, slot) { if (session.itemLocks.has(slot) || (session.account.lockedInventorySlots || []).map(Number).includes(slot)) throw new Error('That inventory stack is locked.') }
 function stackSlot(slot, item) { const id = item?.stack_id; return { slot_type: { container_id: 'hotbar_and_inventory' }, slot, stack_id: Number(typeof id === 'object' ? id?.id : id) || 0 } }

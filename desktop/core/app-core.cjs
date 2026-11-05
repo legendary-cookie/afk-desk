@@ -1053,6 +1053,7 @@ function validateAccount(input, existing, secretBox, normalizeSkinUrl = defaultN
     autoDepositMode: ['immediate', 'interval', 'inventoryFull', 'intervalOrFull'].includes(input?.autoDepositMode ?? existing?.autoDepositMode) ? (input?.autoDepositMode ?? existing?.autoDepositMode) : 'immediate',
     autoDepositInterval: Math.round(bounded(input?.autoDepositInterval ?? existing?.autoDepositInterval, 1, 86400, 300)),
     autoDepositFullThreshold: Math.round(bounded(input?.autoDepositFullThreshold ?? existing?.autoDepositFullThreshold, 0, 35, 0)),
+    bedrockDepositTarget: normalizeBedrockDepositTarget(input?.bedrockDepositTarget === undefined ? existing?.bedrockDepositTarget : input.bedrockDepositTarget),
     autoArmor: (input?.autoArmor ?? existing?.autoArmor) === true,
     autoArmorThreshold: bounded(input?.autoArmorThreshold ?? existing?.autoArmorThreshold, 0, 100, 5),
     autoOminousBottle: (input?.autoOminousBottle ?? existing?.autoOminousBottle) === true,
@@ -1098,3 +1099,9 @@ function validateAccount(input, existing, secretBox, normalizeSkinUrl = defaultN
 }
 
 module.exports = { AppCore, publicAccount, displayName, validateAccount }
+
+function normalizeBedrockDepositTarget(value) {
+  if (value == null) return null
+  if (!['x', 'y', 'z'].every(k => Number.isInteger(value[k]) && Math.abs(value[k]) <= 30000000)) throw new Error('Bedrock deposit target must contain integer x, y, and z coordinates.')
+  return { x: value.x, y: value.y, z: value.z }
+}
