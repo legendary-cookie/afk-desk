@@ -24,3 +24,6 @@
 **/minecraft-profiles
 **/data
 **/secret.key
+desktop/src/offscreen-pov.*
+desktop/assets/afk-desk.ico
+desktop/assets/*.md
