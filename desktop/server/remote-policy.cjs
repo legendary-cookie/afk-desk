@@ -13,6 +13,7 @@ const slot = integer(0, 44)
 const controls = oneOf('forward', 'back', 'left', 'right', 'jump', 'sprint', 'sneak', 'swing')
 const proxy = object({ enabled: bool, type: oneOf('http', 'socks5'), host: text(255), port: integer(1, 65535), username: text(128), password: text(512), clearPassword: bool, hasPassword: bool })
 const accountFields = {
+  linkGroup: v => v === null || object({id, name: text(60), categories: array(text(32), 9), excluded: array(text(80), 100)})(v),
   id, username: text(254), profileName: text(60), label: text(50), host: text(255), port: integer(1, 65535), edition: oneOf('java', 'bedrock'),
   minecraftName: text(16), minecraftUuid: text(36), skinUrl: text(2048), version: text(80), tags: array(text(24), 10), proxy,
   antiAfk: bool, antiAfkJump: bool, antiAfkLook: bool, antiAfkSneak: bool, antiAfkSwing: bool, antiAfkWalk: bool,

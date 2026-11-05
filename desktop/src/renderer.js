@@ -930,8 +930,55 @@ window.askShareLink = () => new Promise((resolve) => {
   input.focus()
 })
 
+const linkCategories = {
+  server: ['Server, port and version', {host: 'host', port: 'port', version: 'version'}],
+  deposit: ['Auto-deposit', {'auto-deposit-setting': 'autoDepositToChest', 'auto-deposit-range': 'autoDepositRange', 'auto-deposit-mode': 'autoDepositMode', 'auto-deposit-interval': 'autoDepositInterval', 'auto-deposit-full-threshold': 'autoDepositFullThreshold'}],
+  antiAfk: ['Anti-AFK and chat', {'anti-afk': 'antiAfk', 'anti-afk-chat-enabled': 'antiAfkChatEnabled', 'anti-afk-chat-message': 'antiAfkChatMessage', 'anti-afk-chat-interval': 'antiAfkChatIntervalSec', 'anti-afk-jump': 'antiAfkJump', 'anti-afk-look': 'antiAfkLook', 'anti-afk-sneak': 'antiAfkSneak', 'anti-afk-swing': 'antiAfkSwing', 'anti-afk-walk': 'antiAfkWalk', 'anti-afk-min-delay': 'antiAfkMinDelay', 'anti-afk-max-delay': 'antiAfkMaxDelay', 'anti-afk-duration': 'antiAfkActionDuration', 'anti-afk-look-degrees': 'antiAfkLookDegrees', 'anti-afk-walk-distance': 'antiAfkWalkDistance', 'environmental-movement': 'environmentalMovement'}],
+  macros: ['Macro assignment', {}], messages: ['Timed messages', {'join-message': 'joinMessage', 'server-change-message': 'serverChangeMessage', 'message-delay': 'messageDelay', 'server-change-retry-minutes': 'serverChangeRetryMinutes'}],
+  notifications: ['Notifications', {'alert-disconnect': 'alerts', 'alert-errors': 'alerts', 'alert-health': 'alerts'}],
+  reconnect: ['Reconnect policy', {'auto-reconnect': 'autoReconnect', 'auto-reconnect-delay': 'autoReconnectDelay', 'auto-reconnect-max': 'autoReconnectMaxAttempts', 'auto-reconnect-backoff': 'autoReconnectBackoffMultiplier', 'auto-reconnect-max-delay': 'autoReconnectMaxDelay', 'auto-reconnect-rate-limit-delay': 'autoReconnectRateLimitDelay', 'connect-timeout': 'connectTimeoutSeconds', 'reconnect-reset-delay': 'reconnectResetDelay'}],
+  safety: ['Safety', {'safety-eat': 'autoEat', 'safety-food': 'autoEatThreshold', 'safety-totem': 'lowHealthTotem', 'safety-disconnect': 'lowHealthDisconnect', 'safety-health': 'lowHealthThreshold', 'safety-cooldown': 'lowHealthCooldownMinutes', 'safety-schedule': 'scheduleEnabled', 'safety-start': 'scheduleStart', 'safety-end': 'scheduleEnd', ...Object.fromEntries(Array.from({length: 7}, (_, day) => [`safety-day-${day}`, 'scheduleDays']))}], display: ['POV/display', {}]
+}
+let editingLink = null
+function setupLinkEditor(account) {
+  const select = document.getElementById('link-group-select')
+  const name = document.getElementById('link-group-name')
+  const box = document.getElementById('link-group-categories')
+  editingLink = account?.linkGroup ? structuredClone(account.linkGroup) : null
+  select.replaceChildren()
+  for (const [value, label] of [['', 'No group / leave group'], ['new', 'Create a group'], ...Array.from(new Map(state.accounts.filter(a => a.linkGroup).map(a => [a.linkGroup.id, a.linkGroup.name])).entries())]) {
+    const option = document.createElement('option'); option.value = value; option.textContent = state.settings.streamerMode && value && value !== 'new' ? 'Link group' : label; select.append(option)
+  }
+  select.value = editingLink?.id || ''
+  name.type = state.settings.streamerMode ? 'password' : 'text'
+  name.value = editingLink?.name || ''
+  function draw() {
+    document.querySelectorAll('.linked-field-badge').forEach(node => node.remove())
+    box.replaceChildren()
+    const selected = select.value
+    if (!selected) return
+    const peer = state.accounts.find(a => a.linkGroup?.id === selected)
+    if (selected !== 'new' && editingLink?.id !== selected && peer) editingLink = structuredClone(peer.linkGroup), editingLink.excluded = []
+    if (selected === 'new' && editingLink?.id !== 'new') editingLink = {id: 'new', name: '', categories: [], excluded: []}
+    for (const [category, [label, inputs]] of Object.entries(linkCategories)) {
+      const row = document.createElement('label'), check = document.createElement('input')
+      check.type = 'checkbox'; check.checked = editingLink.categories.includes(category)
+      row.append(check, document.createTextNode(' ' + label + ' ')); box.append(row)
+      check.onchange = () => { editingLink.categories = check.checked ? [...editingLink.categories, category] : editingLink.categories.filter(x => x !== category); draw() }
+      if (!check.checked) continue
+      for (const [id, field] of Object.entries(inputs)) {
+        const input = document.getElementById(id); if (!input || editingLink.excluded.includes(field)) continue
+        const badge = document.createElement('button'); badge.type = 'button'; badge.className = 'linked-field-badge'; badge.textContent = 'Linked · Unlink this field'
+        badge.onclick = () => { editingLink.excluded.push(field); draw() }; input.parentElement.append(badge)
+      }
+    }
+  }
+  select.onchange = draw; draw()
+}
+
 function openAccountDialog(account, importing = false) {
   el['account-form'].reset()
+  setupLinkEditor(account)
   for (const input of [el['profile-name'], el.label, el.username, el['proxy-username']]) input.type = state.settings.streamerMode ? 'password' : (input === el.username ? 'email' : 'text')
   el['form-error'].hidden = true
   el['account-id'].value = account?.id || ''
@@ -1027,6 +1074,7 @@ async function saveAccount(event) {
   event.preventDefault()
   const existing = state.accounts.find((account) => account.id === el['account-id'].value)
   const input = {
+    linkGroup: document.getElementById('link-group-select').value ? {...editingLink, id: editingLink.id === 'new' ? crypto.randomUUID() : editingLink.id, name: document.getElementById('link-group-name').value.trim() || editingLink.name || 'Link group'} : null,
     id: el['account-id'].value || undefined,
     identityId: el['identity-id'].value || undefined,
     profileName: el['profile-name'].value,
@@ -1109,9 +1157,7 @@ async function saveAccount(event) {
   }
   try {
     const saved = await api.saveAccount(input)
-    const index = state.accounts.findIndex((account) => account.id === saved.id)
-    if (index === -1) state.accounts.push(saved)
-    else state.accounts[index] = saved
+    state.accounts = await api.listAccounts()
     state.selectedId = saved.id
     state.selectedInventorySlot = null
     el['account-dialog'].close()

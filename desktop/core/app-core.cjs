@@ -1,4 +1,5 @@
 'use strict'
+const linkedProfiles = require('./linked-profiles.cjs')
 const shareLinks = require('../electron/share-links.cjs')
 const { bulkChange } = require('../electron/appearance.cjs')
 // Electron-free owner of durable/application services. Platform effects enter through hooks.
@@ -190,8 +191,7 @@ class AppCore {
       disconnect: (id) => this.disconnect(id),
       setAntiAfk: (id, enabled) => {
         const a = this._require(id)
-        const saved = this.store.save({ ...a, antiAfk: enabled === true })
-        this.botManager.setAntiAfk?.(id, saved)
+        const saved = this._persistLinked({ ...a, antiAfk: enabled === true })
         return publicAccount(saved)
       }
     }
@@ -566,25 +566,24 @@ class AppCore {
 
   _saveAccount(input) {
     const existing = this.store.list().find((a) => a.id === input?.id)
-    const saved = this.store.save(validateAccount(input, existing, this.secretBox, this._normalizeSkinUrl))
-    this.macroEngine?.setLibrary(this.macroLibrary.list())
-    if (existing && (existing.autoDepositToChest !== saved.autoDepositToChest || existing.autoDepositRange !== saved.autoDepositRange || existing.autoDepositMode !== saved.autoDepositMode || existing.autoDepositInterval !== saved.autoDepositInterval || existing.autoDepositFullThreshold !== saved.autoDepositFullThreshold)) {
-      this.botManager.setAutoDeposit?.(saved.id, saved.autoDepositToChest, saved.autoDepositRange, saved)
-    }
-    if (existing && existing.environmentalMovement !== saved.environmentalMovement) {
-      this.botManager.setEnvironmentalMovement?.(saved.id, saved.environmentalMovement)
-    }
-    if (existing && antiAfkChanged(existing, saved)) {
-      this.botManager.setAntiAfk?.(saved.id, saved)
-    }
-    if (existing) {
-      try {
-        this.botManager.updateAccountConfig?.(this._retryConfig(saved))
-      } catch (e) {
-        this.diagnosticLog.write({ event: 'error', at: this.now(), accountId: saved.id, message: `Could not refresh live config: ${String(e?.message || e).slice(0, 200)}` })
-      }
-    }
+    const saved = this._persistLinked(validateAccount(input, existing, this.secretBox, this._normalizeSkinUrl))
     return publicAccount(saved)
+  }
+
+  _persistLinked(account) {
+    const before = this.store.list()
+    const after = linkedProfiles.apply(before, account)
+    this.store.write(after)
+    this.macroEngine?.setLibrary(this.macroLibrary.list())
+    for (const saved of after) {
+      const existing = before.find(a => a.id === saved.id)
+      if (!existing || JSON.stringify(existing) === JSON.stringify(saved)) continue
+      if (existing.autoDepositToChest !== saved.autoDepositToChest || existing.autoDepositRange !== saved.autoDepositRange || existing.autoDepositMode !== saved.autoDepositMode || existing.autoDepositInterval !== saved.autoDepositInterval || existing.autoDepositFullThreshold !== saved.autoDepositFullThreshold) this.botManager.setAutoDeposit?.(saved.id, saved.autoDepositToChest, saved.autoDepositRange, saved)
+      if (existing.environmentalMovement !== saved.environmentalMovement) this.botManager.setEnvironmentalMovement?.(saved.id, saved.environmentalMovement)
+      if (antiAfkChanged(existing, saved)) this.botManager.setAntiAfk?.(saved.id, saved)
+      try { this.botManager.updateAccountConfig?.(this._retryConfig(saved)) } catch (e) { this.diagnosticLog.write({ event: 'error', at: this.now(), accountId: saved.id, message: `Could not refresh live config: ${String(e?.message || e).slice(0, 200)}` }) }
+    }
+    return after.find(a => a.id === account.id)
   }
 
   _duplicateAccount(id) {
@@ -592,6 +591,7 @@ class AppCore {
     if (!source) throw new Error('Account profile not found.')
     const copy = this.store.save({
       ...source,
+      linkGroup: null,
       id: crypto.randomUUID(),
       profileName: `${source.profileName || source.label || source.host} copy`.slice(0, 60),
       connectOnStartup: false,
@@ -625,8 +625,7 @@ class AppCore {
 
   async _setAutoDeposit({ id, enabled }) {
     const a = this._require(id)
-    const updated = this.store.save({ ...a, autoDepositToChest: enabled === true })
-    this.botManager.setAutoDeposit?.(id, updated.autoDepositToChest, updated.autoDepositRange, updated)
+    const updated = this._persistLinked({ ...a, autoDepositToChest: enabled === true })
     return publicAccount(updated)
   }
 
@@ -953,6 +952,7 @@ function validateAccount(input, existing, secretBox, normalizeSkinUrl = defaultN
     throw new Error('Select at least one anti-AFK action or turn anti-AFK off.')
   }
   return {
+    linkGroup: linkedProfiles.normalizeLink(Object.hasOwn(input || {}, 'linkGroup') ? input.linkGroup : existing?.linkGroup),
     id: validateProfileId(input?.id || crypto.randomUUID()),
     identityId: validateProfileId(existing?.identityId || identityIdFor(edition, username)),
     edition,

@@ -1,3 +1,4 @@
+const linkedProfiles = require('./nodejs-assets/nodejs-project/linked-profiles.cjs');
 import React, {useCallback, useEffect, useRef, useState} from 'react';
 import {
   Alert, FlatList, Image, Modal, Pressable, SafeAreaView, ScrollView, Share,
@@ -14,6 +15,7 @@ const {maskNames, addRecent} = require('./mobile-ui-logic.cjs');
 
 type ProxyConfig = {enabled: boolean; type: 'socks5' | 'http'; host: string; port: string; username: string; password: string};
 type Account = {
+  linkGroup?: {id: string; name: string; categories: string[]; excluded: string[]} | null;
   id: string; username: string; minecraftName?: string; host: string; port: string; version: string; skinUrl?: string;
   antiAfk: boolean; antiAfkInterval: string; antiAfkChatEnabled: boolean; antiAfkChatMessage: string; antiAfkChatIntervalSec: string; autoReconnect: boolean; autoReconnectDelay: string;
   autoReconnectMaxAttempts: string; connectOnStartup: boolean; joinMessage: string;
@@ -194,12 +196,17 @@ function App(): React.JSX.Element {
       Alert.alert('Missing details', 'Enter an account label/email and server address.');
       return;
     }
-    const existing = accountsRef.current.find(item => item.id === account.id);
-    setAccounts(old => old.some(item => item.id === account.id) ? old.map(item => item.id === account.id ? account : item) : [...old, account]);
-    if (existing && (existing.autoDepositToChest !== account.autoDepositToChest || existing.autoDepositRange !== account.autoDepositRange || existing.autoDepositMode !== account.autoDepositMode || existing.autoDepositInterval !== account.autoDepositInterval || existing.autoDepositFullThreshold !== account.autoDepositFullThreshold)) {
-      engineCommand({action: 'set-auto-deposit', accountId: account.id, enabled: account.autoDepositToChest, range: Number(account.autoDepositRange), config: account}).catch(error => Alert.alert('Auto-deposit update failed', error.message));
+    const previous = accountsRef.current;
+    const next: Account[] = linkedProfiles.apply(previous, account);
+    setAccounts(next);
+    for (const updated of next) {
+      const existing = previous.find(item => item.id === updated.id);
+      if (!existing || JSON.stringify(existing) === JSON.stringify(updated)) continue;
+      if (existing.autoDepositToChest !== updated.autoDepositToChest || existing.autoDepositRange !== updated.autoDepositRange || existing.autoDepositMode !== updated.autoDepositMode || existing.autoDepositInterval !== updated.autoDepositInterval || existing.autoDepositFullThreshold !== updated.autoDepositFullThreshold) {
+        engineCommand({action: 'set-auto-deposit', accountId: updated.id, enabled: updated.autoDepositToChest, range: Number(updated.autoDepositRange), config: updated}).catch(error => Alert.alert('Auto-deposit update failed', error.message));
+      }
+      engineCommand({action: 'update-account-config', account: updated}).catch(error => Alert.alert('Account update failed', error.message));
     }
-    if (existing) engineCommand({action: 'update-account-config', account}).catch(error => Alert.alert('Account update failed', error.message));
     setSelectedId(account.id);
     setEditing(null);
   };
@@ -225,11 +232,15 @@ function App(): React.JSX.Element {
   const action = (name: string, value?: string) => selected && engineCommand({action: name, accountId: selected.id, value}).catch((error: Error) => Alert.alert('Control unavailable', error.message));
   const toggleAutoDeposit = async (enabled: boolean) => {
     if (!selected) return;
-    const previous = selected.autoDepositToChest;
-    setAccounts(old => old.map(item => item.id === selected.id ? {...item, autoDepositToChest: enabled} : item));
-    try { await engineCommand({action: 'set-auto-deposit', accountId: selected.id, enabled, range: Number(selected.autoDepositRange), config: selected}); }
-    catch (error: any) {
-      setAccounts(old => old.map(item => item.id === selected.id ? {...item, autoDepositToChest: previous} : item));
+    const previous = accountsRef.current;
+    const next: Account[] = linkedProfiles.apply(previous, {...selected, autoDepositToChest: enabled});
+    setAccounts(next);
+    try {
+      for (const account of next) {
+        if (previous.find(item => item.id === account.id)?.autoDepositToChest === account.autoDepositToChest) continue;
+        await engineCommand({action: 'set-auto-deposit', accountId: account.id, enabled: account.autoDepositToChest, range: Number(account.autoDepositRange), config: account});
+      }
+    } catch (error: any) {
       Alert.alert('Auto-deposit update failed', error.message);
     }
   };
@@ -438,6 +449,7 @@ function AccountModal({streamerMode, value, onClose, onSave, onDelete}: {streame
   return <Modal visible={Boolean(value && draft)} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
     {draft && <SafeAreaView style={styles.safe}><View style={styles.modalHeader}><Pressable onPress={onClose}><Text style={styles.link}>Cancel</Text></Pressable><Text style={styles.panelTitle}>Account setup</Text><Pressable onPress={() => onSave(draft)}><Text style={styles.link}>Save</Text></Pressable></View>
       <ScrollView contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled">
+        {draft.linkGroup && <View><Text style={styles.sectionTitle}>Link group: {streamerMode ? 'Link group' : draft.linkGroup.name}</Text><Pressable onPress={() => set('linkGroup', null)}><Text style={styles.link}>Leave group</Text></Pressable></View>}
         <Text style={styles.sectionTitle}>Connection</Text>
         <Field secret={streamerMode} label="Account label or Microsoft email" value={draft.username} onChange={(v: string) => set('username', v)} />
         <Text style={styles.help}>After sign-in, the account card shows your Minecraft name and head. This login value is kept for future sign-ins.</Text>

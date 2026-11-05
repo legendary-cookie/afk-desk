@@ -224,3 +224,16 @@ test('D6: device-code style keys are redacted from any persisted event', (t) => 
   assert.ok(!raw.includes('login-code'))
   assert.ok(raw.includes('visible'))
 })
+
+test('linked account saves and quick anti-AFK updates persist and refresh every member', async (t) => {
+  const linkGroup = {id: 'friends', name: 'Friends', categories: ['server', 'antiAfk'], excluded: []}
+  const app = await launch(t, [account({linkGroup}), account({id: 'acct-two', identityId: 'acct-two', username: 'other@example.com', linkGroup})])
+  const configs = []
+  patchPrototype(t, {updateAccountConfig: config => configs.push(config), setAntiAfk: () => {}})
+  await app.call('accounts:save', {id: 'acct-one', username: 'a@b.co', host: 'new.example', antiAfk: false})
+  const stored = app.readAccounts()
+  assert.equal(stored[1].host, 'new.example')
+  assert.equal(stored[1].antiAfk, false)
+  assert.equal(stored[1].username, 'other@example.com')
+  assert.ok(configs.some(config => config.id === 'acct-two'))
+})
