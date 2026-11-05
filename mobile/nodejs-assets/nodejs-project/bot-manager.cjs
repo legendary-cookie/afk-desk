@@ -83,7 +83,7 @@ class BotManager {
       containerScanTimer: null, messageTimers: new Set(), ready: false, switching: false,
       joinMessageSent: false, identityKey: '', telemetryKey: '', nearestChest: null,
       depositing: false, depositRevision: 0, activeDepositContainer: null,
-      inventoryAction: false, resourcePack: null, joinedAt: Date.now(), lastDepositAt: 0,
+      inventoryAction: false, inventoryQueue: Promise.resolve(), resourcePack: null, joinedAt: Date.now(), lastDepositAt: 0,
       pendingMessageConfirmation: null, serverChangeRetryTimer: null, messageConfirmationTimer: null,
       serverChangeRetryAttempts: 0, serverChangeRetryStartedAt: 0, serverChangeRetryMessage: '', lastDimension: null
     }
@@ -251,8 +251,8 @@ class BotManager {
       this.clearSession(account.id)
       if (reconnectState.safetyPause && !reconnectState.manual && (reconnectState.safetyPause !== 'health' || (reconnectState.account || account).autoReconnect !== false)) {
         deferSafety(this, reconnectState.account || account, reconnectState)
-      } else if (account.autoReconnect !== false && !reconnectState.manual) {
-        this.scheduleReconnect(account, session.lastKickReason || reason)
+      } else if ((reconnectState.account || account).autoReconnect !== false && !reconnectState.manual) {
+        this.scheduleReconnect(reconnectState.account || account, session.lastKickReason || reason)
       } else {
         this.reconnects.delete(account.id)
         this.status(account.id, 'offline', reason ? `Disconnected: ${reason}` : 'Disconnected')
@@ -375,13 +375,16 @@ class BotManager {
     const session = this.sessions.get(id)
     const bot = this.requireOnline(id)
     if (bot.currentWindow) throw new Error('Close the server menu before managing player inventory.')
-    if (session.depositing || session.inventoryAction) throw new Error('Another inventory action is still running.')
-    session.inventoryAction = true
-    try { return await action(bot, session) }
-    finally {
-      session.inventoryAction = false
-      this.emitTelemetry(id)
+    const execute = async () => {
+      while (session.depositing) await new Promise(resolve => setTimeout(resolve, 50))
+      if (this.sessions.get(id) !== session || bot.currentWindow) throw new Error('Inventory is no longer available.')
+      session.inventoryAction = true
+      try { return await action(bot, session) }
+      finally { session.inventoryAction = false; this.emitTelemetry(id) }
     }
+    const queued = (session.inventoryQueue || Promise.resolve()).then(execute, execute)
+    session.inventoryQueue = queued.catch(() => {})
+    return queued
   }
 
   async clickWindowSlot(id, slot) {
@@ -507,6 +510,11 @@ class BotManager {
     const reconnect = this.reconnects.get(account.id)
     if (reconnect) reconnect.account = { ...account }
     const session = this.sessions.get(account.id)
+    if (reconnect && account.autoReconnect === false && (!reconnect.safetyPause || reconnect.safetyPause === 'health')) {
+      if (reconnect.timer) this.clearReconnectTimer(reconnect.timer)
+      reconnect.timer = null
+      if (!session) { this.reconnects.delete(account.id); this.status(account.id, 'offline', 'Auto-reconnect disabled.') }
+    }
     if (!session) return Boolean(reconnect)
     const message = session.pendingMessageConfirmation?.message || session.serverChangeRetryMessage
     if ((message && message !== account.joinMessage && message !== account.serverChangeMessage) || account.serverChangeRetryMinutes === 0) this.clearServerChangeRetry(session)

@@ -29,11 +29,12 @@ function deferSafety(manager, account, state) {
   if (state.timer) manager.clearReconnectTimer(state.timer)
   state.account = account
   manager.reconnects.set(account.id, state)
-  manager.status(account.id, 'offline', 'Waiting for safety cooldown or online hours.')
+  manager.status(account.id, 'reconnecting', 'Waiting for safety cooldown or online hours.')
   state.timer = manager.scheduleReconnectTimer(() => {
     state.timer = null
     if (manager.reconnects.get(account.id) !== state || state.manual) return
     const current = state.account
+    if (state.safetyPause === 'health' && current.autoReconnect === false) { manager.reconnects.delete(account.id); manager.status(account.id, 'offline', 'Auto-reconnect disabled.'); return }
     if (Date.now() < (state.cooldownUntil || 0) || !isWithinSchedule(current)) return deferSafety(manager, current, state)
     try { manager.connect(current, { reconnecting: true }) } catch (error) { manager.scheduleReconnect(current, error.message) }
   }, 30000)
@@ -49,11 +50,14 @@ function installSafety(manager, account, session, state) {
     session.safetyBusy = true
     try {
       if (shouldLowHealthAct(config, bot.health)) {
-        if (config.lowHealthTotem && !bot.currentWindow && !(config.lockedInventorySlots || []).includes(45) && bot.inventory?.slots?.[45]?.name !== 'totem_of_undying') {
-          const totem = bot.inventory?.items?.().find(item => item.name === 'totem_of_undying' && !(config.lockedInventorySlots || []).includes(item.slot))
-          if (totem) {
-            try { await bot.equip(totem, 'off-hand') } catch (error) { manager.emit('log', account.id, { kind: 'error', message: `Totem equip failed: ${error.message}`, at: Date.now() }) }
-          }
+        if (config.lowHealthTotem && !bot.currentWindow && !session.depositing && !session.inputClaims?.get('rightClick')?.size) {
+          await manager.withInventoryAction(account.id, async () => {
+            const current = session.account
+            const locks = new Set((current.lockedInventorySlots || []).map(Number))
+            if (manager.sessions.get(account.id) !== session || bot.currentWindow || session.depositing || session.inputClaims?.get('rightClick')?.size || !shouldLowHealthAct(current, bot.health) || !current.lowHealthTotem || locks.has(45) || bot.inventory?.slots?.[45]?.name === 'totem_of_undying') return
+            const totem = bot.inventory?.items?.().find(item => item.name === 'totem_of_undying' && !locks.has(Number(item.slot)))
+            if (totem) await bot.equip(totem, 'off-hand')
+          })
         }
         if (config.lowHealthDisconnect) {
           state.cooldownUntil = Date.now() + (config.lowHealthCooldownMinutes ?? 10) * 60000
@@ -63,15 +67,35 @@ function installSafety(manager, account, session, state) {
           return
         }
       }
-      if (shouldEat(config, bot) && !session.inventoryAction && !session.depositing) {
-        const food = pickFood(bot.inventory?.items?.(), bot.registry?.foodsByName, config.lockedInventorySlots || [])
-        if (food) {
-          const previous = bot.quickBarSlot
-          const target = food.slot >= 36 && food.slot <= 44 ? food.slot - 36 : Array.from({ length: 9 }, (_, slot) => slot).find(slot => !(config.lockedInventorySlots || []).includes(slot + 36))
+      if (shouldEat(config, bot) && !session.depositing && !session.inputClaims?.get('rightClick')?.size) {
+        await manager.withInventoryAction(account.id, async () => {
+          const current = session.account
+          if (manager.sessions.get(account.id) !== session || session.depositing || !shouldEat(current, bot) || session.inputClaims?.get('rightClick')?.size) return
+          const locks = new Set((current.lockedInventorySlots || []).map(Number))
+          const food = pickFood(bot.inventory?.items?.(), bot.registry?.foodsByName, [...locks])
+          if (!food) return
+          const source = Number(food.slot)
+          const target = source >= 36 && source <= 44 ? source : Array.from({ length: 9 }, (_, i) => i + 36).find(slot => !locks.has(slot))
           if (target === undefined) return
-          session.inventoryAction = true
-          try { bot.setQuickBarSlot(target); await bot.equip(food, 'hand'); if (!bot.currentWindow) await bot.consume() } finally { if (Number.isInteger(previous)) bot.setQuickBarSlot(previous); session.inventoryAction = false }
-        }
+          const previous = bot.quickBarSlot
+          let swapped = false
+          let release
+          session.safetyInputDone = new Promise(resolve => { release = resolve })
+          try {
+            if (source !== target) { await bot.moveSlotItem(source, target); swapped = true }
+            bot.setQuickBarSlot(target - 36)
+            if (!bot.currentWindow && !session.depositing && manager.sessions.get(account.id) === session) await bot.consume()
+          } finally {
+            try {
+              while (swapped && manager.sessions.get(account.id) === session && bot.currentWindow) await new Promise(resolve => setTimeout(resolve, 50))
+              if (swapped && manager.sessions.get(account.id) === session) {
+                if (bot.inventory?.slots?.[target]) await bot.moveSlotItem(target, source)
+                else if (bot.inventory?.slots?.[source]) await bot.moveSlotItem(source, target)
+              }
+              if (Number.isInteger(previous) && manager.sessions.get(account.id) === session) bot.setQuickBarSlot(previous)
+            } finally { session.safetyInputDone = null; release() }
+          }
+        })
       }
     } catch (error) { manager.emit('log', account.id, { kind: 'error', message: `Safety action failed: ${error.message}`, at: Date.now() }) }
     finally { session.safetyBusy = false }

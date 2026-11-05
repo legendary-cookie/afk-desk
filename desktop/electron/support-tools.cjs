@@ -29,11 +29,11 @@ function shouldCheck(last, now = Date.now()) { return !Number.isFinite(last) || 
 function makeBundle({ version, os, settings, accounts, logs }) {
   function clean(value, key = '') {
     if (/password|token|secret|authorization|credential|api.?key|webhook|chat.?id/i.test(key) || /^(?:code|user_?code|device_?code)$/i.test(key)) return '[redacted]'
-    if (typeof value === 'string') return redactSecrets(redactDiagnostic(maskText(value, accounts, true)))
+    if (typeof value === 'string') return redactSecrets(redactDiagnostic(maskText(value, accounts, true).replace(/(^|[\s:>])\/?(login|l|register|reg|changepassword|cp|2fa|auth|authenticate|password|passwd|pass|otp|verify)(?=\s)\s+[^\r\n]*/gim, '$1$2 [redacted]'))) 
     if (Array.isArray(value)) return value.map(v => clean(v))
-    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [maskText(k, accounts, true), clean(v, k)]))
+    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [clean(k), clean(v, k)]))
     return value
   }
-  return JSON.stringify({ version, os, settings: clean(settings), accounts: accounts.map(a => ({ name: label(a), console: clean(logs[a.id]?.console || []), events: clean(logs[a.id]?.events || []) })) }, null, 2)
+  return JSON.stringify({ version: clean(version), os: clean(os), settings: clean(settings), accounts: accounts.map(a => ({ name: clean(label(a)), console: clean(logs[a.id]?.console || []), events: clean(logs[a.id]?.events || []) })) }, null, 2)
 }
 module.exports = { compareVersions, shouldCheck, makeBundle, INTERVAL }

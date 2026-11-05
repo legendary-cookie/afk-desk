@@ -486,7 +486,7 @@ class BotManager {
       if ((pendingMessage && pendingMessage !== account.joinMessage && pendingMessage !== account.serverChangeMessage) || account.serverChangeRetryMinutes === 0) this.clearServerChangeRetry(account.id, session)
       session.account = { ...session.account, ...account }
     }
-    if (account.autoReconnect === false && !state.safetyPause) {
+    if (account.autoReconnect === false && (!state.safetyPause || state.safetyPause === 'health')) {
       if (state.timer) this.clearReconnectTimer(state.timer)
       state.timer = null
       if (!this.sessions.has(account.id)) {
@@ -892,8 +892,9 @@ class BotManager {
     const bot = this.requireOnline(id)
     if (bot.currentWindow) throw new Error('Close the server menu before managing player inventory.')
     const execute = async () => {
-      if (!this.sessions.has(id)) throw new Error('This account is no longer online.')
+      if (this.sessions.get(id) !== session) throw new Error('This account is no longer online.')
       while (session.depositing) await delay(50)
+      if (this.sessions.get(id) !== session || bot.currentWindow) throw new Error('Inventory is no longer available.')
       session.inventoryAction = true
       try { return await action(bot, session) }
       finally { session.inventoryAction = false; this.emitTelemetry(id) }
