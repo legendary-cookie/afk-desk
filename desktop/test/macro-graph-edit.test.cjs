@@ -36,3 +36,41 @@ test('copy and paste remaps only internal connections and snaps positions', () =
   assert.throws(() => edit.pasteSelection(graph(), selection, () => 'a'), /unique/)
   assert.equal(edit.snap(-29), -20)
 })
+
+test('palette search groups contract kinds and matches labels, kinds and categories', () => {
+  const all = edit.searchPalette(NODE_KINDS)
+  assert.deepEqual(all.flatMap(group => group.kinds).sort(), Object.keys(NODE_KINDS).sort())
+  assert.ok(edit.searchPalette(NODE_KINDS, ' TRIGGER.manual ').some(g => g.kinds.includes('trigger.manual')))
+  assert.ok(edit.searchPalette(NODE_KINDS, 'health').some(g => g.kinds.includes('health')))
+  assert.ok(edit.searchPalette(NODE_KINDS, 'data').every(g => g.category === 'Data'))
+  assert.deepEqual(edit.searchPalette(NODE_KINDS, 'no such node'), [])
+})
+
+test('validation messages map to nodes by id or index without treating graph errors as node errors', () => {
+  const errors = edit.nodeErrors(graph(), [
+    { path: '/nodes/b/message', message: 'Missing message' },
+    { path: 'nodes.0.kind', message: 'Bad kind' },
+    { path: '/edges', message: 'Bad edge' },
+    { path: '/nodes/missing', message: 'Missing node' }
+  ])
+  assert.deepEqual({ ...errors }, { a: ['Bad kind'], b: ['Missing message'] })
+})
+
+test('history snapshots support first edit, redo branches, limits and isolation', () => {
+  const original = graph(), history = edit.createHistory(original, 3)
+  const changed = graph(); changed.nodes[0].params.value = 1
+  assert.equal(history.commit(changed), true)
+  changed.nodes[0].params.value = 99
+  assert.equal(history.canUndo(), true)
+  assert.deepEqual(history.undo(), original)
+  assert.equal(history.redo().nodes[0].params.value, 1)
+  history.undo()
+  const replacement = graph(); replacement.nodes[0].params.value = 2
+  history.commit(replacement)
+  assert.equal(history.canRedo(), false)
+  assert.equal(history.commit(replacement), false)
+  for (let i = 3; i < 6; i++) { replacement.nodes[0].params.value = i; history.commit(replacement) }
+  assert.equal(history.undo().nodes[0].params.value, 4)
+  assert.equal(history.undo().nodes[0].params.value, 3)
+  assert.equal(history.canUndo(), false)
+})

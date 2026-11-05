@@ -55,7 +55,56 @@
     }
     return result
   }
-  const api = { snap, compatible, connect, insertOnEdge, copySelection, pasteSelection }
+  // Keep the contract as the source of truth for both categories and labels.
+  function searchPalette(kinds, query = '') {
+    const needle = query.trim().toLocaleLowerCase()
+    const groups = new Map()
+    for (const [kind, spec] of Object.entries(kinds)) {
+      const category = spec.category || 'Other'
+      if (needle && !`${kind} ${spec.label || ''} ${category}`.toLocaleLowerCase().includes(needle)) continue
+      if (!groups.has(category)) groups.set(category, [])
+      groups.get(category).push(kind)
+    }
+    return [...groups].map(([category, kinds]) => ({ category, kinds }))
+  }
+  // Validation paths can identify a node by its array index or its id.
+  function nodeErrors(graph, errors) {
+    const result = Object.create(null)
+    for (const error of errors) {
+      const path = String(error.path || '').replace(/^\//, '').replace(/\./g, '/')
+      if (!path.startsWith('nodes/')) continue
+      const rest = path.slice(6)
+      const node = graph.nodes.filter(item => typeof item?.id === 'string').sort((a, b) => b.id.length - a.id.length).find(item => {
+        const id = item.id.replace(/\./g, '/').replace(/~/g, '~0')
+        return rest === id || rest.startsWith(`${id}/`)
+      }) || (/^\d+(?:\/|$)/.test(rest) ? graph.nodes[Number(rest.split('/')[0])] : null)
+      if (!node) continue
+      ;(result[node.id] ||= []).push(error.message)
+    }
+    return result
+  }
+  // A transaction is recorded after the edit, so the first edit can be undone
+  // and a new edit after undo discards the abandoned redo branch.
+  function createHistory(initial, limit = 50) {
+    let snapshots = [clone(initial)], index = 0
+    return {
+      current: () => clone(snapshots[index]),
+      canUndo: () => index > 0,
+      canRedo: () => index < snapshots.length - 1,
+      commit(value) {
+        const next = clone(value)
+        if (JSON.stringify(next) === JSON.stringify(snapshots[index])) return false
+        snapshots = snapshots.slice(0, index + 1)
+        snapshots.push(next)
+        if (snapshots.length > Math.max(2, limit)) snapshots.shift()
+        index = snapshots.length - 1
+        return true
+      },
+      undo() { if (index > 0) index--; return clone(snapshots[index]) },
+      redo() { if (index < snapshots.length - 1) index++; return clone(snapshots[index]) }
+    }
+  }
+  const api = { snap, compatible, connect, insertOnEdge, copySelection, pasteSelection, searchPalette, nodeErrors, createHistory }
   if (typeof module === 'object' && module.exports) module.exports = api
   else root.afkMacroGraphEdit = api
 })(typeof window === 'undefined' ? globalThis : window)
