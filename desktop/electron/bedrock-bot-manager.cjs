@@ -49,7 +49,7 @@ class BedrockBotManager {
       onMsaCode: (code) => this.emit('login-code', account.id, normalizeLoginCode(code))
     })
     const session = { client, account: { ...account }, ready: false, closing: false, runtimeEntityId: null, position: null, yaw: 0, pitch: 0, health: 20, food: 20, saturation: 5, players: new Map(), inventory: [], itemNames: new Map(), itemLocks: new Set(), forms: new Map(), lastForm: null, lastTelemetry: '', disconnectReason: '', connectTimer: null, resetTimer: null }
-    Object.assign(session, { movementTimer: null, tick: 0n, inputClaims: new Map(), previousInputs: {}, jumpArc: null, swingTicks: 0, handledTeleport: false, lastMovement: null, antiAfkTimer: null, antiAfkActionTimers: new Set(), manualControlTimers: new Map() })
+    Object.assign(session, { movementTimer: null, tick: 0n, inputClaims: new Map(), previousInputs: {}, jumpArc: null, swingTicks: 0, handledTeleport: false, lastMovement: null, rawInventory: [], selectedHotbarSlot: 0, inventoryQueue: Promise.resolve(), nextRequestId: -1, pendingRequest: null, inventoryUncertain: false, antiAfkTimer: null, antiAfkActionTimers: new Set(), manualControlTimers: new Map() })
     this.sessions.set(account.id, session)
     const timeoutSeconds = bound(account.connectTimeoutSeconds, 5, 300, 60)
     session.connectTimer = this.timers.setTimeout(() => { if (!session.ready && this.sessions.get(account.id) === session) { session.disconnectReason = `Connection timed out after ${timeoutSeconds}s`; try { client.close() } catch {} } }, timeoutSeconds * 1000)
@@ -143,7 +143,9 @@ class BedrockBotManager {
     })
     client.on('inventory_content', (packet) => {
       if (!isPlayerInventory(packet.window_id)) return
-      session.inventory = (packet.input || packet.items || []).slice(0, 41).flatMap((item, slot) => bedrockItem(session, item, mapPlayerSlot(slot)))
+      session.rawInventory = (packet.input || packet.items || []).slice(0, 41)
+      session.inventoryUncertain = false
+      this.refreshInventory(account.id, session)
       this.emitTelemetry(account.id)
     })
     client.on('item_registry', (packet) => this.rememberItems(session, packet.itemstates))
@@ -151,9 +153,11 @@ class BedrockBotManager {
       if (!isPlayerInventory(packet.window_id)) return
       const slot = mapPlayerSlot(Number(packet.slot))
       if (slot < 0) return
-      session.inventory = session.inventory.filter((item) => item.slot !== slot).concat(bedrockItem(session, packet.item, slot))
+      session.rawInventory[Number(packet.slot)] = packet.item
+      this.refreshInventory(account.id, session)
       this.emitTelemetry(account.id)
     })
+    client.on('item_stack_response', (packet) => this.handleStackResponse(account.id, session, packet))
     client.on('modal_form_request', (packet) => this.openForm(account.id, session, packet))
     client.on('container_open', (packet) => {
       session.openWindow = { windowId: packet.window_id, windowType: packet.window_type }
@@ -177,6 +181,7 @@ class BedrockBotManager {
 
   clearSessionTimers(session) {
     session.ready = false
+    if (session.pendingRequest) { const pending = session.pendingRequest; session.pendingRequest = null; this.timers.clearTimeout(pending.timer); pending.reject(new Error('Bedrock connection closed.')) }
     for (const name of ['connectTimer', 'resetTimer', 'joinTimer', 'respawnTimer', 'movementTimer', 'antiAfkTimer']) {
       if (session[name] != null) this.timers.clearTimeout(session[name])
       session[name] = null
@@ -422,10 +427,90 @@ class BedrockBotManager {
     if (session.runtimeEntityId == null) return
     session.client.queue('animate', { action_id: 'swing_arm', runtime_entity_id: session.runtimeEntityId, data: 0, has_swing_source: false })
   }
-  dropStack() { throw experimental('inventory transactions') }
-  dropItems() { throw experimental('inventory transactions') }
-  moveInventorySlot() { throw experimental('inventory transactions') }
-  equipInventoryItem() { throw experimental('equipment transactions') }
+  refreshInventory(id, session) {
+    session.inventory = session.rawInventory.flatMap((item, slot) => bedrockItem(session, item, mapPlayerSlot(slot)))
+  }
+
+  queueInventory(id, build) {
+    const session = this.requireOnline(id)
+    const run = () => {
+      if (this.sessions.get(id) !== session || !session.ready || session.closing) throw new Error('Bedrock connection closed.')
+      if (session.inventoryUncertain) throw new Error('Inventory is awaiting server synchronization.')
+      if (session.openWindow) throw new Error('Close the server menu before managing player inventory.')
+      const { action, predict, result } = build(session)
+      const requestId = session.nextRequestId
+      session.nextRequestId = requestId <= -2147483647 ? -1 : requestId - 2
+      return new Promise((resolve, reject) => {
+        const timer = this.timers.setTimeout(() => {
+          if (session.pendingRequest?.requestId !== requestId) return
+          session.pendingRequest = null; session.inventoryUncertain = true
+          reject(new Error('Bedrock inventory request timed out.'))
+        }, 10000)
+        session.pendingRequest = { requestId, predict, result, resolve, reject, timer }
+        try { session.client.queue('item_stack_request', { requests: [{ request_id: requestId, actions: [action], custom_names: [], cause: 'chat_public' }] }) }
+        catch (error) { this.timers.clearTimeout(timer); session.pendingRequest = null; reject(error) }
+      })
+    }
+    const queued = session.inventoryQueue.then(run, run)
+    session.inventoryQueue = queued.catch(() => {})
+    return queued
+  }
+
+  handleStackResponse(id, session, packet) {
+    if (this.sessions.get(id) !== session || session.closing) return
+    const pending = session.pendingRequest
+    if (!pending) return
+    const response = (packet.responses || []).find((entry) => Number(entry.request_id) === pending.requestId)
+    if (!response) return
+    session.pendingRequest = null
+    this.timers.clearTimeout(pending.timer)
+    if (response.status !== 'ok' && response.status !== 0) { pending.reject(new Error('Bedrock inventory request rejected.')); return }
+    pending.predict(session.rawInventory)
+    for (const container of response.containers || []) {
+      const type = container.slot_type?.container_id ?? container.slot_type
+      if (!['hotbar_and_inventory', 'hotbar', 'inventory', 12, 28, 29].includes(type)) continue
+      for (const entry of container.slots || []) {
+        const slot = Number(entry.slot)
+        if (slot < 0 || slot > 35 || !Number.isInteger(slot)) continue
+        const item = session.rawInventory[slot]
+        if (!entry.count) session.rawInventory[slot] = { network_id: 0 }
+        else if (item?.network_id) session.rawInventory[slot] = { ...item, count: entry.count, stack_id: entry.item_stack_id, has_stack_id: 1 }
+      }
+    }
+    this.refreshInventory(id, session); this.emitTelemetry(id); pending.resolve(pending.result)
+  }
+
+  dropStack(id, slot) { return this.dropItems(id, slot, Infinity) }
+  dropItems(id, slot, requestedCount = 1) {
+    return this.queueInventory(id, (session) => {
+      const rawSlot = inventoryWireSlot(slot); assertUnlocked(session, Number(slot))
+      const item = session.rawInventory[rawSlot]
+      if (!item?.network_id || !item.count) throw new Error('That inventory stack is no longer available.')
+      const count = Math.min(item.count, Math.max(1, Math.floor(Number(requestedCount) || 1)))
+      return { action: { type_id: 'drop', count, source: stackSlot(rawSlot, item), randomly: false }, result: { slot: Number(slot), count }, predict: (slots) => { const current = slots[rawSlot]; if (current === item) slots[rawSlot] = count === item.count ? { network_id: 0 } : { ...item, count: item.count - count } } }
+    })
+  }
+  moveInventorySlot(id, sourceSlot, destinationSlot) {
+    return this.queueInventory(id, (session) => {
+      const source = inventoryWireSlot(sourceSlot); const destination = inventoryWireSlot(destinationSlot)
+      if (source === destination) throw new Error('Choose a different destination slot.')
+      assertUnlocked(session, Number(sourceSlot)); assertUnlocked(session, Number(destinationSlot))
+      const item = session.rawInventory[source]; const target = session.rawInventory[destination]
+      if (!item?.network_id || !item.count) throw new Error('The source inventory slot is empty.')
+      const occupied = Boolean(target?.network_id && target.count)
+      return { action: { type_id: occupied ? 'swap' : 'place', ...(occupied ? {} : { count: item.count }), source: stackSlot(source, item), destination: stackSlot(destination, target) }, result: { sourceSlot: Number(sourceSlot), targetSlot: Number(destinationSlot) }, predict: (slots) => { if (slots[source] === item && slots[destination] === target) { slots[source] = target || { network_id: 0 }; slots[destination] = item } } }
+    })
+  }
+  async equipInventoryItem(id, slot, destination) {
+    if (destination && destination !== 'hand') throw experimental('equipment transactions')
+    const source = Number(slot); inventoryWireSlot(source)
+    const session = this.requireOnline(id); assertUnlocked(session, source)
+    if (!session.rawInventory[inventoryWireSlot(source)]?.network_id) throw new Error('That inventory stack is no longer available.')
+    const targetSlot = source >= 36 ? source : 36 + session.selectedHotbarSlot
+    if (targetSlot !== source) await this.moveInventorySlot(id, source, targetSlot)
+    this.worldAction(id, 'select-hotbar', { slot: targetSlot - 36 })
+    return { sourceSlot: source, targetSlot, destination: 'hand' }
+  }
   depositSlot() { throw experimental('container transactions') }
   clickWindowSlot() { throw experimental('server GUI interaction') }
   closeWindow(id) {
@@ -532,12 +617,26 @@ class BedrockBotManager {
     return { edition: 'bedrock', radius: Math.max(2, Math.min(Number(radius) || 6, 12)), position: session.position, yaw: session.yaw, pitch: session.pitch, blocks: [], entities: [...session.players.values()], limited: true, at: Date.now() }
   }
 
-  worldAction() { throw experimental('world interaction') }
+  worldAction(id, action, target = {}) {
+    const session = this.requireOnline(id)
+    if (action === 'select-hotbar') {
+      const slot = target.slot
+      if (!Number.isInteger(slot) || slot < 0 || slot > 8) throw new Error('Hotbar slot must be an integer from 0 to 8.')
+      session.client.queue('mob_equipment', { runtime_entity_id: session.runtimeEntityId, item: session.rawInventory[slot] || { network_id: 0 }, slot, selected_slot: slot, window_id: 'inventory' })
+      session.selectedHotbarSlot = slot; this.emitTelemetry(id); return { slot }
+    }
+    if (action === 'use-held' || action === 'use-crosshair') {
+      const item = session.rawInventory[session.selectedHotbarSlot] || { network_id: 0 }
+      session.client.queue('inventory_transaction', { transaction: { legacy: { legacy_request_id: 0 }, transaction_type: 'item_use', actions: [], transaction_data: { action_type: 'click_air', trigger_type: 'player_input', block_position: { x: 0, y: 0, z: 0 }, face: 0, hotbar_slot: session.selectedHotbarSlot, held_item: item, player_pos: session.position ? eyePosition(session.position) : { x: 0, y: 0, z: 0 }, click_pos: { x: 0, y: 0, z: 0 }, block_runtime_id: 0, client_prediction: 'failure', client_cooldown_state: 'off' } } })
+      return { used: true }
+    }
+    throw experimental('world interaction')
+  }
 
   emitTelemetry(id) {
     const session = this.sessions.get(id)
     if (!session) return
-    const telemetry = { health: session.health, food: session.food, saturation: session.saturation, position: session.position, dimension: 'bedrock', inventory: session.inventory, selectedHotbarSlot: 0, capabilities: bedrockCapabilities(), at: Date.now() }
+    const telemetry = { health: session.health, food: session.food, saturation: session.saturation, position: session.position, dimension: 'bedrock', inventory: session.inventory, selectedHotbarSlot: session.selectedHotbarSlot, capabilities: bedrockCapabilities(), at: Date.now() }
     const key = JSON.stringify({ ...telemetry, at: 0 })
     if (key === session.lastTelemetry) return
     session.lastTelemetry = key
@@ -553,6 +652,9 @@ class BedrockBotManager {
   status(id, status, detail) { this.emit('status', id, { status, detail, edition: 'bedrock', at: Date.now() }) }
 }
 
+function inventoryWireSlot(value) { const slot = Number(value); if (!Number.isInteger(slot) || slot < 9 || slot > 44) throw new Error('Invalid player inventory slot.'); return slot >= 36 ? slot - 36 : slot }
+function assertUnlocked(session, slot) { if (session.itemLocks.has(slot) || (session.account.lockedInventorySlots || []).map(Number).includes(slot)) throw new Error('That inventory stack is locked.') }
+function stackSlot(slot, item) { const id = item?.stack_id; return { slot_type: { container_id: 'hotbar_and_inventory' }, slot, stack_id: Number(typeof id === 'object' ? id?.id : id) || 0 } }
 function bedrockCapabilities() { return { chat: true, reconnect: true, position: true, players: true, health: true, hunger: true, death: true, autoRespawn: true, serverSwitch: true, inventoryView: true, itemLocksStored: true, forms: true, containerWindows: true, movement: 'stationary', antiAfk: ['look', 'jump', 'sneak', 'swing'], inventoryActions: false, worldBlocks: false, macros: 'chat/wait/notify only' } }
 function assertStationaryInput(input) {
   if (!STATIONARY_INPUTS.has(input)) throw new MacroActionError('UNSUPPORTED', `Bedrock input ${input} is not supported yet`)
