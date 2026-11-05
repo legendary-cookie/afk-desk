@@ -53,30 +53,7 @@ function validateGraph(graph) {
   if ([...nodes.keys()].some(visit)) error('CYCLE_WITHOUT_WAIT', 'edges', 'Control cycle must pass through a wait node.')
   return errors
 }
-function migrateV2(macro) {
-  const source = clone(macro), nodes = [], edges = []
-  let count = 0, edgeCount = 0
-  function add(kind, params) { const id = `n${++count}`; nodes.push({ id, kind, params, position: { x: count * 200, y: 0 } }); return id }
-  function link(from, port, to) { if (to) edges.push({ id: `e${++edgeCount}`, from: { node: from, port }, to: { node: to, port: 'in' } }) }
-  function steps(items, continuation) {
-    let next = continuation
-    for (let i = items.length - 1; i >= 0; i--) {
-      const step = items[i], { type, then, else: otherwise, steps: body, ...params } = step
-      const id = add(type, params)
-      if (type === 'if' || type === 'repeat') nodes[nodes.length - 1].migration = { then: Object.hasOwn ? Object.hasOwn(step, 'then') : Object.prototype.hasOwnProperty.call(step, 'then'), else: Object.prototype.hasOwnProperty.call(step, 'else'), steps: Object.prototype.hasOwnProperty.call(step, 'steps') }
-      if (type === 'if') { link(id, 'true', steps(then || [], null)); link(id, 'false', steps(otherwise || [], null)); link(id, 'out', next) }
-      else if (type === 'repeat') { link(id, 'each', steps(body || [], null)); link(id, 'done', next) }
-      else link(id, 'out', next)
-      next = id
-    }
-    return next
-  }
-  const { type, ...triggerParams } = source.trigger || { type: 'manual' }
-  const trigger = add(`trigger.${type}`, triggerParams)
-  link(trigger, 'out', steps(source.steps || [], null))
-  delete source.trigger; delete source.steps
-  return { ...source, version: 3, nodes, edges, vars: [], migration: { hadVersion: Object.prototype.hasOwnProperty.call(source, 'version'), version: source.version } }
-}
+const { migrateV2 } = require('../../src/macro-graph-edit.js')
 function toV2(graph) {
   const source = clone(graph), byId = new Map(source.nodes.map(n => [n.id, n]))
   const next = (id, port) => source.edges.find(e => e.from.node === id && e.from.port === port)?.to.node

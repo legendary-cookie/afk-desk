@@ -6,6 +6,65 @@
   const clone = value => JSON.parse(JSON.stringify(value))
   const snap = (value, grid = 20) => Math.round(value / grid) * grid
   const compatible = (output, input) => Boolean(output && input && (output.type === input.type || (output.type !== 'control' && input.type !== 'control' && (output.type === 'any' || input.type === 'any'))))
+  // Shared by the renderer and graph model, so opening and saving use the same
+  // branch/loop migration as the engine.
+  function migrateV2(macro) {
+    const source = clone(macro), nodes = [], edges = []
+    let count = 0, edgeCount = 0
+    function add(kind, params) { const id = `n${++count}`; nodes.push({ id, kind, params, position: { x: count * 280, y: 0 } }); return id }
+    function link(from, port, to) { if (to) edges.push({ id: `e${++edgeCount}`, from: { node: from, port }, to: { node: to, port: 'in' } }) }
+    function steps(items, continuation) {
+      let next = continuation
+      for (let i = items.length - 1; i >= 0; i--) {
+        const step = items[i], { type, then, else: otherwise, steps: body, ...params } = step
+        const id = add(type, params)
+        if (type === 'if' || type === 'repeat') nodes[nodes.length - 1].migration = Object.fromEntries(['then', 'else', 'steps'].map(key => [key, Object.prototype.hasOwnProperty.call(step, key)]))
+        if (type === 'if') { link(id, 'true', steps(then || [], null)); link(id, 'false', steps(otherwise || [], null)); link(id, 'out', next) }
+        else if (type === 'repeat') { link(id, 'each', steps(body || [], null)); link(id, 'done', next) }
+        else link(id, 'out', next)
+        next = id
+      }
+      return next
+    }
+    const { type, ...triggerParams } = source.trigger || { type: 'manual' }
+    const trigger = add(`trigger.${type}`, triggerParams)
+    link(trigger, 'out', steps(source.steps || [], null))
+    delete source.trigger; delete source.steps
+    return { ...source, version: 3, nodes, edges, vars: [], migration: { hadVersion: Object.prototype.hasOwnProperty.call(source, 'version'), version: source.version } }
+  }
+  // Simple view can only express a single structured control tree. Refuse any
+  // lossy projection (data wires, fan-out, cycles, orphan/disabled nodes).
+  function toSimple(graph, stepKinds) {
+    const source = clone(graph), seen = new Set(), used = new Set()
+    const fail = () => { throw new Error('This graph needs Canvas view (data wires, multiple paths, or unconnected nodes).') }
+    const next = (id, port) => {
+      const edges = source.edges.filter(edge => edge.from.node === id && edge.from.port === port)
+      if (edges.length > 1) fail()
+      if (edges[0]) { if (edges[0].to.port !== 'in') fail(); used.add(edges[0].id) }
+      return edges[0]?.to.node
+    }
+    function steps(id) {
+      const result = []
+      while (id) {
+        const node = source.nodes.find(node => node.id === id)
+        if (!node || seen.has(id) || node.disabled || !stepKinds[node.kind]) fail()
+        seen.add(id)
+        const step = { type: node.kind, ...node.params }
+        if (node.kind === 'if') { step.then = steps(next(id, 'true')); step.else = steps(next(id, 'false')) }
+        if (node.kind === 'repeat') step.steps = steps(next(id, 'each'))
+        result.push(step); id = next(id, node.kind === 'repeat' ? 'done' : 'out')
+      }
+      return result
+    }
+    const triggers = source.nodes.filter(node => node.kind.startsWith('trigger.'))
+    if (triggers.length !== 1 || triggers[0].disabled || source.vars?.length) fail()
+    const trigger = triggers[0]; seen.add(trigger.id)
+    source.trigger = { type: trigger.kind.slice(8), ...trigger.params }
+    source.steps = steps(next(trigger.id, 'out'))
+    if (seen.size !== source.nodes.length || used.size !== source.edges.length) fail()
+    delete source.nodes; delete source.edges; delete source.vars; delete source.migration; delete source.version
+    return source
+  }
   function connect(graph, kinds, edge) {
     const from = graph.nodes.find(node => node.id === edge.from.node)
     const to = graph.nodes.find(node => node.id === edge.to.node)
@@ -104,7 +163,7 @@
       redo() { if (index < snapshots.length - 1) index++; return clone(snapshots[index]) }
     }
   }
-  const api = { snap, compatible, connect, insertOnEdge, copySelection, pasteSelection, searchPalette, nodeErrors, createHistory }
+  const api = { snap, compatible, connect, insertOnEdge, copySelection, pasteSelection, searchPalette, nodeErrors, createHistory, migrateV2, toSimple }
   if (typeof module === 'object' && module.exports) module.exports = api
   else root.afkMacroGraphEdit = api
 })(typeof window === 'undefined' ? globalThis : window)

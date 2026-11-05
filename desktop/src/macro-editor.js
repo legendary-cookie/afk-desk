@@ -92,8 +92,10 @@
   // Contract metadata is provided by the preload; the browser bridge can use
   // the local fallback definitions when the desktop contract is unavailable.
   const contract = typeof window !== 'undefined' ? null : (typeof module === 'object' && module.exports ? (() => { const c = require('../electron/macro/contract.cjs'); return { triggers: c.TRIGGER_TYPES, steps: c.STEP_TYPES, conditions: c.CONDITION_METADATA } })() : null)
+  let graphKinds = {}
   function applyContract(contract) {
     if (!contract) return
+    if (contract.graphKinds) graphKinds = contract.graphKinds
     for (const [type, meta] of Object.entries(contract.triggers)) if (TRIGGER_TYPES[type]) Object.assign(TRIGGER_TYPES[type], meta)
     for (const [type, meta] of Object.entries(contract.steps)) if (STEP_TYPES[type]) Object.assign(STEP_TYPES[type], meta)
     for (const item of CONDITION_TYPES) if (contract.conditions[item.value]) Object.assign(item, contract.conditions[item.value])
@@ -439,6 +441,10 @@
     let draggedStepPath = null
     let activeTab = 'editor'
     let rawJson = false
+    let canvas = null
+    let graphHistory = null
+    let simpleSource = null
+    let simpleInitial = null
     // Live run tracking: key `${macroId}:${accountId}` -> RunEvent, and macroId -> latest status summary
     const liveByMacroAccount = new Map()
     const lastStatusByMacro = new Map()
@@ -492,6 +498,7 @@
       el['macro-json-close']?.addEventListener('click', () => { el['macro-json-panel'].hidden = true })
 
       el['macro-json-toggle']?.addEventListener('click', toggleRawJson)
+      el['macro-simple-toggle']?.addEventListener('click', toggleSimpleView)
       el['macro-tab-editor']?.addEventListener('click', () => switchTab('editor'))
       el['macro-tab-runs']?.addEventListener('click', () => switchTab('runs'))
       el['macro-undo-btn']?.addEventListener('click', undoDraft)
@@ -510,6 +517,7 @@
       el['macro-name-input']?.addEventListener('input', () => {
         if (!draft) return
         draft.name = el['macro-name-input'].value
+        canvas?.setGraph(draft)
         pushHistoryDebounced()
       })
       el['macro-editor-enabled']?.addEventListener('change', () => {
@@ -589,6 +597,9 @@
         toggleStepPicker()
       })
 
+      el['automation-dialog']?.addEventListener('change', () => {
+        if (draft?.version === 3) pushHistory()
+      })
       el['automation-dialog']?.addEventListener('keydown', handleDialogKeyDown)
       el['automation-dialog']?.addEventListener('cancel', (event) => {
         if (!el['macro-step-picker']?.hidden) {
@@ -739,7 +750,9 @@
     }
 
     async function open() {
+      if (api.macros.contract) applyContract(await api.macros.contract())
       populateWatchAccounts()
+      if (!el['automation-dialog'].open) el['automation-dialog'].showModal()
       await refreshLibrary()
       if (!selectedMacroId && macros.length) {
         selectMacro(macros[0].id)
@@ -994,7 +1007,7 @@
     async function duplicateSelectedMacro() {
       const source = draft || macros.find((m) => m.id === selectedMacroId)
       if (!source) return toast('Select a macro to duplicate.', 'error')
-      const copy = clone(source)
+      const copy = source.version === 3 ? clone(source) : window.afkMacroGraphEdit.migrateV2(source)
       copy.id = newMacroId()
       copy.name = `${copy.name || 'Macro'} copy`.slice(0, 60)
       delete copy.origin
@@ -1107,9 +1120,14 @@
     }
 
     function setDraft(nextDraft) {
-      draft = nextDraft
+      clearTimeout(historyTimer)
+      canvas?.destroy(); canvas = null
+      simpleSource = null; simpleInitial = null
+      draft = nextDraft && nextDraft.version !== 3 ? window.afkMacroGraphEdit.migrateV2(nextDraft) : nextDraft
+      nextDraft = draft
+      graphHistory = draft ? window.afkMacroGraphEdit.createHistory(draft) : null
       if (rawJson && el['macro-draft-json']) el['macro-draft-json'].value = nextDraft ? serializeDraft(nextDraft) : ''
-      if (el['macro-draft-json-panel']) el['macro-draft-json-panel'].hidden = !rawJson || !nextDraft
+      if (el['macro-draft-json-panel']) el['macro-draft-json-panel'].hidden = !rawJson || !nextDraft || state.settings.streamerMode
       history = nextDraft ? [clone(nextDraft)] : []
       historyIndex = nextDraft ? 0 : -1
       selectedStepPath = nextDraft?.steps?.length ? [0] : []
@@ -1126,6 +1144,12 @@
 
     function pushHistory() {
       if (!draft) return
+      if (draft.version === 3) {
+        graphHistory?.commit(draft)
+        canvas?.setGraph(draft)
+        syncUndoRedoButtons()
+        return
+      }
       const snap = clone(draft)
       if (historyIndex >= 0 && JSON.stringify(history[historyIndex]) === JSON.stringify(snap)) return
       history = history.slice(0, historyIndex + 1)
@@ -1136,6 +1160,12 @@
     }
 
     function undoDraft() {
+      if (draft?.version === 3) {
+        graphHistory.commit(draft)
+        draft = graphHistory.undo()
+        canvas?.setGraph(draft)
+        syncUndoRedoButtons(); renderEditor(); return
+      }
       if (historyIndex <= 0) return
       historyIndex -= 1
       draft = clone(history[historyIndex])
@@ -1144,6 +1174,11 @@
     }
 
     function redoDraft() {
+      if (draft?.version === 3) {
+        draft = graphHistory.redo()
+        canvas?.setGraph(draft)
+        syncUndoRedoButtons(); renderEditor(); return
+      }
       if (historyIndex < 0 || historyIndex >= history.length - 1) return
       historyIndex += 1
       draft = clone(history[historyIndex])
@@ -1152,6 +1187,11 @@
     }
 
     function syncUndoRedoButtons() {
+      if (draft?.version === 3 && graphHistory) {
+        if (el['macro-undo-btn']) el['macro-undo-btn'].disabled = !graphHistory.canUndo()
+        if (el['macro-redo-btn']) el['macro-redo-btn'].disabled = !graphHistory.canRedo()
+        return
+      }
       if (el['macro-undo-btn']) el['macro-undo-btn'].disabled = historyIndex <= 0
       if (el['macro-redo-btn']) el['macro-redo-btn'].disabled = historyIndex < 0 || historyIndex >= history.length - 1
     }
@@ -1160,7 +1200,15 @@
       if (!rawJson || !draft) return true
       try {
         const parsed = parseDraft(el['macro-draft-json'].value)
-        draft = parsed
+        if (parsed.version === 3 && (!Array.isArray(parsed.nodes) || !Array.isArray(parsed.edges) ||
+          parsed.nodes.some(node => !node || typeof node.id !== 'string' || typeof node.kind !== 'string' || !node.params || typeof node.params !== 'object') ||
+          parsed.edges.some(edge => !edge || !edge.from || !edge.to))) throw new Error('Graph JSON needs nodes with id, kind and params, and edges with from/to ports.')
+        draft = parsed.version === 3 ? parsed : window.afkMacroGraphEdit.migrateV2(parsed)
+        simpleSource = null; simpleInitial = null
+        graphHistory ||= window.afkMacroGraphEdit.createHistory(draft)
+        graphHistory.commit(draft)
+        canvas?.setGraph(draft)
+        syncUndoRedoButtons()
         el['macro-draft-json-error'].hidden = true
         return true
       } catch (error) {
@@ -1170,14 +1218,53 @@
       }
     }
 
+    function graphDraft() {
+      if (!draft || draft.version === 3) return draft
+      if (simpleSource) {
+        const initial = JSON.parse(simpleInitial)
+        if (JSON.stringify([draft.trigger, draft.steps]) === JSON.stringify([initial.trigger, initial.steps])) {
+          const result = { ...clone(simpleSource), ...clone(draft) }
+          delete result.trigger; delete result.steps
+          result.version = 3
+          return result
+        }
+      }
+      return window.afkMacroGraphEdit.migrateV2(draft)
+    }
+
+    function toggleSimpleView() {
+      if (!draft || rawJson) return
+      if (draft.version === 3) {
+        try {
+          const simple = window.afkMacroGraphEdit.toSimple(draft, STEP_TYPES)
+          graphHistory.commit(draft)
+          simpleSource = clone(draft); simpleInitial = JSON.stringify(simple)
+          canvas?.destroy(); canvas = null
+          draft = simple
+          history = [clone(draft)]; historyIndex = 0
+        } catch (error) { toast(cleanError(error), 'error'); return }
+      } else {
+        draft = graphDraft()
+        graphHistory.commit(draft)
+        simpleSource = null; simpleInitial = null
+      }
+      syncUndoRedoButtons(); renderEditor()
+    }
+
     function toggleRawJson() {
       if (!draft) return
+      if (state.settings.streamerMode && !rawJson) { toast('Turn off streamer mode to edit macro JSON.', 'error'); return }
+      if (!rawJson && draft.version !== 3) {
+        draft = graphDraft(); graphHistory.commit(draft)
+        simpleSource = null; simpleInitial = null
+      }
       if (rawJson && !applyRawJson()) return
       rawJson = !rawJson
       if (rawJson) el['macro-draft-json'].value = serializeDraft(draft)
       el['macro-draft-json-panel'].hidden = !rawJson
       el['macro-editor-view'].hidden = rawJson
       el['macro-json-toggle'].setAttribute('aria-pressed', String(rawJson))
+      if (el['macro-simple-toggle']) el['macro-simple-toggle'].disabled = rawJson
       if (!rawJson) renderEditor()
     }
 
@@ -1190,7 +1277,7 @@
       if (el['macro-tab-runs']) el['macro-tab-runs'].setAttribute('aria-selected', String(activeTab === 'runs'))
       if (el['macro-editor-view']) el['macro-editor-view'].hidden = (activeTab !== 'editor' || !draft || rawJson)
       if (el['macro-runs-view']) el['macro-runs-view'].hidden = activeTab !== 'runs' || !draft
-      if (el['macro-draft-json-panel']) el['macro-draft-json-panel'].hidden = !rawJson || activeTab !== 'editor' || !draft
+      if (el['macro-draft-json-panel']) el['macro-draft-json-panel'].hidden = !rawJson || activeTab !== 'editor' || !draft || state.settings.streamerMode
       if (activeTab === 'runs' && draft) void loadRunsForSelected()
     }
 
@@ -1222,6 +1309,19 @@
         return
       }
 
+      const isGraph = draft.version === 3
+      if (el['macro-simple-toggle']) {
+        el['macro-simple-toggle'].textContent = isGraph ? 'Simple view' : 'Canvas view'
+        el['macro-simple-toggle'].disabled = rawJson
+      }
+      if (el['macro-canvas']) el['macro-canvas'].hidden = !isGraph
+      if (el['macro-steps-card']) el['macro-steps-card'].hidden = isGraph
+      if (el['macro-trigger-heading']) el['macro-trigger-heading'].textContent = isGraph ? 'Macro identity' : 'WHEN · Trigger & identity'
+      for (const id of ['macro-trigger-type', 'macro-trigger-cooldown']) {
+        const field = el[id]?.closest('label')
+        if (field) field.hidden = isGraph
+      }
+      if (el['macro-trigger-fields']) el['macro-trigger-fields'].hidden = isGraph
       el['macro-name-input'].value = draft.name || ''
       const hasBlockingErrors = draftValidationErrors.length > 0
       el['macro-editor-enabled'].checked = draft.enabled !== false && !hasBlockingErrors
@@ -1233,7 +1333,7 @@
       syncEditionCapabilities()
       el['macro-trigger-type'].value = draft.trigger?.type || 'manual'
       el['macro-trigger-cooldown'].value = Number(((draft.trigger?.cooldownMs || 0) / 1000).toFixed(2))
-      renderTriggerFields()
+      if (!isGraph) renderTriggerFields()
 
       el['macro-target-mode'].value = draft.targets?.mode || 'all'
       el['macro-concurrency'].value = draft.concurrency === 'override' ? 'override' : 'skip'
@@ -1248,6 +1348,7 @@
     }
 
     function renderTriggerFields() {
+      if (draft?.version === 3) return
       const container = el['macro-trigger-fields']
       if (container && draft && TRIGGER_TYPES[draft.trigger?.type]?.params) {
         const trigger = draft.trigger
@@ -1474,7 +1575,7 @@
     function renderStopConditions() {
       const container = el['macro-stop-when-list']
       if (!container || !draft) return
-      const list = Array.isArray(draft.stopWhen) ? draft.stopWhen : (draft.stopWhen = [])
+      const list = Array.isArray(draft.stopWhen) ? draft.stopWhen : []
       if (!list.length) {
         const empty = document.createElement('p')
         empty.className = 'macro-muted-hint'
@@ -1787,7 +1888,22 @@
       const container = el['macro-step-list']
       if (!container || !draft) return
       const accountId = el['macro-watch-account']?.value || state.selectedId || ''
-      window.afkMacroGraphLive.render(el['macro-graph-live'], draft, graphLive.get(JSON.stringify([draft.id, accountId])), maskText)
+      if (el['macro-graph-live']) el['macro-graph-live'].hidden = true
+      if (draft.version === 3) {
+        if (!canvas && el['macro-canvas']) {
+          canvas = window.afkMacroCanvas.create(el['macro-canvas'], {
+            graph: draft, kinds: graphKinds, history: graphHistory, mask: maskText,
+            isMasked: () => state.settings.streamerMode,
+            createSchemaFields, conditionEditor: createConditionEditor,
+            onChange(next) { draft = next; draftValidationErrors = []; syncUndoRedoButtons(); renderEditor() }
+          })
+        }
+        canvas?.setGraph(draft)
+        canvas?.setErrors(draftValidationErrors)
+        canvas?.setLive(graphLive.get(JSON.stringify([draft.id, accountId])))
+        if (el['macro-steps-count']) el['macro-steps-count'].textContent = String(draft.nodes.length)
+        return
+      }
       const steps = Array.isArray(draft.steps) ? draft.steps : (draft.steps = [])
       if (el['macro-steps-count']) el['macro-steps-count'].textContent = String(countStepsRecursive(steps))
 
@@ -2706,7 +2822,7 @@
         return
       }
 
-      banner.textContent = draftValidationErrors.map((e) => `${e.path ? `${e.path}: ` : ''}${e.message}`).join(' · ')
+      banner.textContent = maskText(draftValidationErrors.map((e) => `${e.path ? `${e.path}: ` : ''}${e.message}`).join(' · '))
       banner.hidden = false
 
       const triggerMsgs = draftValidationErrors.filter((e) => e.path.startsWith('/trigger')).map((e) => e.message)
@@ -2732,7 +2848,7 @@
       if (!draft || !applyRawJson()) return
       if (!rawJson) draft.name = el['macro-name-input']?.value.trim() || 'Untitled macro'
       try {
-        const saved = await api.macros.save(draft)
+        const saved = await api.macros.save(graphDraft())
         draftValidationErrors = []
         selectedMacroId = saved.id
         await refreshLibrary()
@@ -2923,7 +3039,8 @@
       if (ctrlOrMeta && event.key.toLowerCase() === 'k' && draft) {
         event.preventDefault()
         event.stopPropagation()
-        toggleStepPicker(true)
+        if (draft.version === 3) el['macro-canvas']?.querySelector('input[type="search"]')?.focus()
+        else toggleStepPicker(true)
         return
       }
 
@@ -2941,7 +3058,7 @@
       }
 
       // Duplicate step with Ctrl+D
-      if (ctrlOrMeta && event.key.toLowerCase() === 'd' && draft) {
+      if (ctrlOrMeta && event.key.toLowerCase() === 'd' && draft && draft.version !== 3) {
         event.preventDefault()
         duplicateStepAtPath(selectedStepPath)
         return
@@ -2963,7 +3080,7 @@
         }
       }
 
-      if (inInput || !draft || activeTab !== 'editor' || rawJson) return
+      if (inInput || !draft || activeTab !== 'editor' || rawJson || draft.version === 3) return
 
       if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
         const delta = event.key === 'ArrowDown' ? 1 : -1
@@ -3012,6 +3129,10 @@
     return {
       open,
       refreshLibrary,
+      refreshDisplay() {
+        if (rawJson) el['macro-draft-json-panel'].hidden = state.settings.streamerMode || activeTab !== 'editor'
+        canvas?.refresh()
+      },
       handleMacroRunEvent
     }
   }

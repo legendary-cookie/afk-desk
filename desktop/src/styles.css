@@ -979,3 +979,47 @@ dialog.macro-templates-dialog {
 .macro-graph-node.live-failed { border-color: var(--danger); }
 .macro-graph-error { color: var(--danger); font-size: 11px; }
 .macro-graph-wire-label { position: absolute; z-index: 1; background: var(--surface); color: var(--text); font-size: 10px; max-width: 150px; overflow-wrap: anywhere; }
+
+/* Graph editing stays inside the macro detail pane. */
+.macro-canvas { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface); }
+.macro-canvas-toolbar { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px; align-items: center; border-bottom: 1px solid var(--border); }
+.macro-canvas-message { font-size: 12px; color: var(--muted); padding: 4px 10px; min-height: 22px; }
+.macro-canvas-body { display: grid; grid-template-columns: 150px minmax(260px, 1fr) 220px; height: 520px; }
+.macro-canvas-palette, .macro-canvas-inspector { padding: 10px; overflow: auto; min-width: 0; }
+.macro-canvas-palette { border-right: 1px solid var(--border); }
+.macro-canvas-palette input { width: 100%; min-width: 0; }
+.macro-canvas-palette button { display: block; width: 100%; text-align: left; margin: 4px 0; white-space: normal; }
+.macro-canvas-palette h4, .macro-canvas-inspector h4 { margin: 8px 0; font-size: 12px; }
+.macro-canvas-inspector { border-left: 1px solid var(--border); }
+.macro-canvas-inspector .macro-form-grid { grid-template-columns: minmax(0, 1fr); margin-top: 12px; }
+.macro-canvas-inspector input, .macro-canvas-inspector select { min-width: 0; width: 100%; }
+.macro-canvas-viewport { overflow: hidden; position: relative; touch-action: none; cursor: grab; background-color: var(--bg); background-image: radial-gradient(var(--border-strong) 1px, transparent 1px); outline-offset: -2px; }
+.macro-canvas-viewport:active { cursor: grabbing; }
+.macro-canvas-surface { position: absolute; inset: 0; transform-origin: 0 0; }
+.macro-canvas-wires { position: absolute; left: 0; top: 0; overflow: visible; }
+.macro-canvas-wire, .macro-canvas-preview { fill: none; stroke: var(--accent); stroke-width: 2; pointer-events: none; }
+.macro-canvas-wire.selected { stroke: var(--text); stroke-width: 4; }
+.macro-canvas-preview { stroke-dasharray: 6 4; }
+.macro-canvas-wire-hit { fill: none; stroke: transparent; stroke-width: 16; pointer-events: stroke; cursor: pointer; }
+.macro-canvas-cards, .macro-canvas-labels { position: absolute; inset: 0; pointer-events: none; }
+.macro-canvas-node { position: absolute; width: 220px; box-sizing: border-box; border: 2px solid var(--border-strong); border-radius: 7px; background: var(--surface-raised); user-select: none; pointer-events: auto; cursor: move; }
+.macro-canvas-node.selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+.macro-canvas-node.live-running { box-shadow: 0 0 0 4px #53d68a; }
+.macro-canvas-node.live-failed { border-color: var(--danger); }
+.macro-canvas-node-header { height: 30px; display: flex; gap: 8px; align-items: center; padding: 0 8px; border-radius: 4px 4px 0 0; color: white; font-size: 12px; }
+.macro-canvas-node-header strong { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.macro-canvas-summary { padding: 6px 8px; font-size: 11px; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; color: var(--muted); }
+.macro-canvas-port { position: absolute; width: 14px; height: 14px; min-height: 0; border: 2px solid var(--surface); border-radius: 50%; padding: 0; background: var(--accent); transform: translateY(-50%); cursor: crosshair; z-index: 2; }
+.macro-canvas-port.input { left: -8px; }
+.macro-canvas-port.output { right: -8px; }
+.macro-canvas-port.incompatible { background: #737373; opacity: .35; cursor: no-drop; }
+.macro-canvas-port-label { position: absolute; font-size: 11px; max-width: 95px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.macro-canvas-port-label.input { left: 10px; }
+.macro-canvas-port-label.output { right: 10px; }
+.macro-canvas-node .macro-graph-error { position: absolute; top: 100%; left: 0; right: 0; background: var(--surface); padding: 4px; overflow-wrap: anywhere; }
+.macro-canvas-selection { position: absolute; border: 1px solid var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); pointer-events: none; }
+.macro-canvas-labels .macro-graph-wire-label { pointer-events: none; }
+@media (max-width: 1100px) {
+  .macro-canvas-body { grid-template-columns: 120px minmax(220px, 1fr); height: 650px; grid-template-rows: 440px 210px; }
+  .macro-canvas-inspector { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--border); }
+}

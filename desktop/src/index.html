@@ -650,6 +650,7 @@
             <div class="macro-detail-topbar">
               <div class="segmented" role="tablist" aria-label="Macro view">
                 <button id="macro-tab-editor" class="segment active" type="button" role="tab" aria-selected="true" data-macro-tab="editor">Editor</button>
+                <button id="macro-simple-toggle" class="segment" type="button">Simple view</button>
                 <button id="macro-json-toggle" class="segment" type="button" aria-pressed="false">JSON</button>
                 <button id="macro-tab-runs" class="segment" type="button" role="tab" aria-selected="false" data-macro-tab="runs">Runs <span id="macro-runs-badge" class="badge">0</span></button>
               </div>
@@ -670,6 +671,7 @@
 
             <div id="macro-draft-json-panel" class="macro-card" hidden><label class="field"><span>Macro JSON</span><textarea id="macro-draft-json" rows="22" spellcheck="false"></textarea></label><p id="macro-draft-json-error" class="form-error" role="alert" hidden></p></div>
             <div id="macro-editor-view" class="macro-editor-view">
+              <section id="macro-canvas" aria-label="Interactive macro graph editor" hidden></section>
               <section id="macro-graph-live" aria-label="Graph run view" hidden></section>
               <section id="macro-trigger-card" class="macro-card" aria-labelledby="macro-trigger-heading">
                 <div class="macro-card-header">
@@ -846,7 +848,9 @@
     <script src="../assets/compatibility-capabilities.js"></script>
     <script src="../server/browser-bridge.js"></script>
     <script src="streamer-mask.js"></script>
+    <script src="macro-graph-edit.js"></script>
     <script src="macro-graph-live.js"></script>
+    <script src="macro-canvas.js"></script>
     <script src="macro-editor.js"></script>
     <script src="notifications-panel.js"></script>
     <script src="chat-history.js"></script>

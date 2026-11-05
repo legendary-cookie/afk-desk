@@ -248,7 +248,7 @@ class AppCore {
     this.bots = this.botsApi = botsDomain
 
     this.macros = {
-      contract: () => ({ triggers: TRIGGER_TYPES, steps: STEP_TYPES, conditions: CONDITION_METADATA }),
+      contract: () => ({ triggers: TRIGGER_TYPES, steps: STEP_TYPES, conditions: CONDITION_METADATA, graphKinds: require('../electron/macro/graph-contract.cjs').NODE_KINDS }),
       list: () => {
         const validation = {}
         for (const m of this.macroLibrary.list()) validation[m.id] = macroModel.validateMacro(m, this._macroOptions())

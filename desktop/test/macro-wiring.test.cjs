@@ -64,6 +64,8 @@ test('registered macro IPC enforces payload limits and validation and runs throu
   await new Promise((resolve) => setImmediate(resolve))
   const event = { sender: windows[0].webContents, senderFrame: windows[0].webContents.mainFrame }
   const invoke = (channel, payload) => handlers.get(channel)(event, payload)
+  const graphKinds = invoke('macros:contract').graphKinds
+  assert.deepEqual(graphKinds, require('../electron/macro/graph-contract.cjs').NODE_KINDS)
   invoke('accounts:save', { id: 'a', host: 'localhost', username: 'a@example.com', antiAfk: false })
   const graph = { id: 'graph', name: 'Graph', version: 3, targets: { mode: 'all' }, nodes: [{ id: 'start', kind: 'trigger.manual', params: {}, position: { x: 10, y: 20 } }], edges: [], vars: [{ name: 'value', value: 1 }] }
   const graphSaved = invoke('macros:save', graph)
