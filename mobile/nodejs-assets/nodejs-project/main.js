@@ -1,5 +1,6 @@
 const path = require('node:path')
 const bridge = require('rn-bridge')
+const { exportShare, previewShare } = require('./share-bridge.cjs')
 const { BotManager } = require('./bot-manager.cjs')
 const { validateCommand, isRequestId, getUpcomingRuns } = require('./bridge-command.cjs')
 
@@ -31,6 +32,8 @@ bridge.channel.on('engine-command', async (rawCommand) => {
       case 'window-close': manager.closeWindow(accountId); break
       case 'set-auto-deposit': manager.setAutoDeposit(accountId, enabled, range, config); break
       case 'update-account-config': manager.updateAccountConfig(account); break
+      case 'share-export': result = exportShare(command.kind, command.data); break
+      case 'share-preview': result = previewShare(value); break
       case 'getUpcomingRuns': result = getUpcomingRuns(manager, accountId); break
       case 'shutdown':
         for (const id of [...manager.sessions.keys()]) manager.disconnect(id)

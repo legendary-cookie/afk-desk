@@ -46,6 +46,11 @@ const blankAccount = (): Account => ({
 
 const normalizeAccount = (account: Partial<Account>): Account => ({
   ...blankAccount(), ...account,
+  port: String(account.port ?? '25565'),
+  version: String(account.version ?? ''),
+  antiAfkInterval: String(account.antiAfkInterval ?? '45'),
+  autoReconnectDelay: String(account.autoReconnectDelay ?? '5'),
+  autoReconnectMaxAttempts: String(account.autoReconnectMaxAttempts ?? '0'),
   antiAfkChatEnabled: account.antiAfkChatEnabled === true,
   antiAfkChatIntervalSec: String(Math.max(10, Math.min(Math.round(Number(account.antiAfkChatIntervalSec) || 300), 86400))),
   autoDepositToChest: account.autoDepositToChest === true,
@@ -83,6 +88,7 @@ function App(): React.JSX.Element {
   const [upcomingRuns, setUpcomingRuns] = useState<{kind: string; at: number}[]>([]);
   const [editing, setEditing] = useState<Account | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
   const [chat, setChat] = useState('');
   const [recent, setRecent] = useState<Record<string, string[]>>({});
   const [recentOpen, setRecentOpen] = useState(false);
@@ -353,7 +359,8 @@ function App(): React.JSX.Element {
       engineCommand({action: 'disconnect', accountId: account.id}).catch(() => {});
       setAccounts(old => old.filter(item => item.id !== account.id)); setSelectedId(accounts.find(item => item.id !== account.id)?.id || ''); setEditing(null);
     }} />
-    <SettingsModal streamerMode={streamerMode} onStreamerMode={changeStreamerMode} visible={settingsOpen} accounts={accounts} onClose={() => setSettingsOpen(false)} onChange={setAccounts} />
+    <ShareModal visible={shareOpen} accounts={accounts} selected={selected} streamerMode={streamerMode} onClose={() => setShareOpen(false)} onProfile={data => { setShareOpen(false); setSettingsOpen(false); setEditing(normalizeAccount({...blankAccount(), ...data, port: String(data.port ?? '25565')})); }} />
+    <SettingsModal onShare={() => setShareOpen(true)} streamerMode={streamerMode} onStreamerMode={changeStreamerMode} visible={settingsOpen} accounts={accounts} onClose={() => setSettingsOpen(false)} onChange={setAccounts} />
     <ServerMenuModal value={session?.serverWindow || null} onClick={slot => selected && engineCommand({action: 'window-click', accountId: selected.id, slot}).catch((error: Error) => Alert.alert('Menu action failed', error.message))} onClose={() => selected && engineCommand({action: 'window-close', accountId: selected.id}).catch((error: Error) => Alert.alert('Close menu failed', error.message))} />
     <Modal transparent visible={Boolean(loginCode)} animationType="fade"><View style={styles.backdrop}><View style={styles.modalCard}><Text style={styles.title}>Microsoft sign-in</Text><Text style={styles.modalHelp}>Open Microsoft, switch to the account you want, then enter this code:</Text><Text selectable style={styles.deviceCode}>{loginCode?.code}</Text><Pressable style={styles.primary} onPress={openMicrosoftSignIn}><Text style={styles.primaryText}>Open Microsoft sign-in</Text></Pressable><Pressable style={styles.modalButton} onPress={() => setLoginCode(null)}><Text style={styles.buttonText}>Close</Text></Pressable></View></View></Modal>
   </SafeAreaView>;
@@ -499,9 +506,52 @@ function AccountModal({streamerMode, value, onClose, onSave, onDelete}: {streame
   </Modal>;
 }
 
-function SettingsModal({streamerMode, onStreamerMode, visible, accounts, onClose, onChange}: {streamerMode: boolean; onStreamerMode: (value: boolean) => void; visible: boolean; accounts: Account[]; onClose: () => void; onChange: (accounts: Account[]) => void}) {
+type SharePreview = {kind: 'profile' | 'macro'; data: any; errors: {message: string}[]};
+const MACRO_STORAGE_KEY = 'afkdesk.mobile.sharedMacros.v1';
+function ShareModal({visible, accounts, selected, streamerMode, onClose, onProfile}: {visible: boolean; accounts: Account[]; selected?: Account; streamerMode: boolean; onClose: () => void; onProfile: (data: Partial<Account>) => void}) {
+  const [link, setLink] = useState('');
+  const [preview, setPreview] = useState<SharePreview | null>(null);
+  const [macros, setMacros] = useState<any[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    if (!visible) return;
+    setLoaded(false); setPreview(null); setLink('');
+    AsyncStorage.getItem(MACRO_STORAGE_KEY).then(raw => {
+      const value = raw === null ? [] : JSON.parse(raw);
+      if (!Array.isArray(value)) throw new Error('Invalid macro storage');
+      setMacros(value); setLoaded(true);
+    }).catch(() => Alert.alert('Storage error', 'Shared macros could not be loaded.'));
+  }, [visible]);
+  const exportItem = async (kind: string, data: unknown) => {
+    try { const message = await engineCommand<string>({action: 'share-export', kind, data}); await Share.share({message}); }
+    catch (error: any) { Alert.alert('Export failed', error.message); }
+  };
+  const inspect = async () => {
+    setPreview(null);
+    try { setPreview(await engineCommand<SharePreview>({action: 'share-preview', value: link})); }
+    catch (error: any) { Alert.alert('Invalid share link', error.message); }
+  };
+  const save = async () => {
+    if (!preview) return;
+    if (preview.kind === 'profile') { onProfile(preview.data); return; }
+    if (!loaded) return;
+    const next = [...macros, preview.data];
+    try { await AsyncStorage.setItem(MACRO_STORAGE_KEY, JSON.stringify(next)); setMacros(next); setPreview(null); setLink(''); Alert.alert('Macro saved', 'The macro is disabled and stored for sharing. Macro execution is not available on mobile.'); }
+    catch { Alert.alert('Storage error', 'The macro could not be saved.'); }
+  };
+  return <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}><SafeAreaView style={styles.safe}><View style={styles.modalHeader}><Text style={styles.panelTitle}>Share links</Text><Pressable onPress={onClose}><Text style={styles.link}>Done</Text></Pressable></View><ScrollView contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled">
+    <Text style={styles.sectionTitle}>Export</Text><Text style={styles.help}>Links omit account identities, credentials and macro text.</Text>
+    {selected && <Pressable style={styles.modalButton} onPress={() => exportItem('profile', selected)}><Text style={styles.buttonText}>Share selected profile</Text></Pressable>}
+    {macros.map((macro, index) => <Pressable key={macro.id || index} style={styles.modalButton} onPress={() => exportItem('macro', macro)}><Text style={styles.buttonText}>Share macro {index + 1}</Text></Pressable>)}
+    <Text style={styles.sectionTitle}>Import</Text><TextInput accessibilityLabel="Share link" value={link} onChangeText={value => {setLink(value); setPreview(null);}} autoCapitalize="none" autoCorrect={false} multiline style={styles.input} placeholder="Paste an AFK Desk share link" placeholderTextColor="#626d7b" /><Pressable style={styles.modalButton} onPress={inspect}><Text style={styles.buttonText}>Preview</Text></Pressable>
+    {preview && <><Text style={styles.sectionTitle}>Preview {preview.kind}</Text><Text selectable style={styles.help}>{maskNames(JSON.stringify(preview.data, null, 2), accounts, streamerMode)}</Text>{preview.errors.map((error, index) => <Text key={index} style={styles.help}>{maskNames(error.message, accounts, streamerMode)}</Text>)}<Text style={styles.help}>{preview.kind === 'profile' ? 'Continue to enter an account label and review settings before saving.' : 'Macros are imported disabled. Mobile can store and share them but cannot run them.'}</Text><Pressable style={styles.primary} onPress={save}><Text style={styles.primaryText}>{preview.kind === 'profile' ? 'Continue to account editor' : 'Save macro'}</Text></Pressable></>}
+  </ScrollView></SafeAreaView></Modal>;
+}
+
+function SettingsModal({onShare, streamerMode, onStreamerMode, visible, accounts, onClose, onChange}: {onShare: () => void; streamerMode: boolean; onStreamerMode: (value: boolean) => void; visible: boolean; accounts: Account[]; onClose: () => void; onChange: (accounts: Account[]) => void}) {
   const allStartup = accounts.length > 0 && accounts.every(account => account.connectOnStartup);
   return <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}><SafeAreaView style={styles.safe}><View style={styles.modalHeader}><Text style={styles.panelTitle}>Settings</Text><Pressable onPress={onClose}><Text style={styles.link}>Done</Text></Pressable></View><View style={styles.form}>
+    <Text style={styles.sectionTitle}>Share links</Text><Pressable style={styles.modalButton} onPress={onShare}><Text style={styles.buttonText}>Import or export profiles and macros</Text></Pressable>
     <Text style={styles.sectionTitle}>Startup</Text><Toggle label="Connect every account on app start" value={allStartup} onChange={value => onChange(accounts.map(account => ({...account, connectOnStartup: value})))} />
     <Text style={styles.sectionTitle}>Background operation</Text><Text style={styles.help}>Android keeps the AFK engine in a foreground service with a persistent notification. iOS can maintain sessions while open, but the operating system may suspend network connections in the background.</Text>
     <Text style={styles.sectionTitle}>Privacy</Text><Toggle label="Streamer mode" value={streamerMode} onChange={onStreamerMode} /><Text style={styles.help}>Hide account names in the app.</Text><Text style={styles.help}>Microsoft passwords are never requested or saved. Authentication tokens and account settings stay in this app's private storage.</Text>
