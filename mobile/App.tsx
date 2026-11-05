@@ -11,6 +11,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 // Version shown in the header comes from package.json so it can't go stale.
 const APP_VERSION: string = require('./package.json').version;
 const {maskNames, addRecent} = require('./mobile-ui-logic.cjs');
+const {graphCards} = require('./macro-graph-view.cjs');
 
 type ProxyConfig = {enabled: boolean; type: 'socks5' | 'http'; host: string; port: string; username: string; password: string};
 type Account = {
@@ -89,6 +90,7 @@ function App(): React.JSX.Element {
   const [editing, setEditing] = useState<Account | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
+  const [graphOpen, setGraphOpen] = useState(false);
   const [chat, setChat] = useState('');
   const [recent, setRecent] = useState<Record<string, string[]>>({});
   const [recentOpen, setRecentOpen] = useState(false);
@@ -360,7 +362,8 @@ function App(): React.JSX.Element {
       setAccounts(old => old.filter(item => item.id !== account.id)); setSelectedId(accounts.find(item => item.id !== account.id)?.id || ''); setEditing(null);
     }} />
     <ShareModal visible={shareOpen} accounts={accounts} selected={selected} streamerMode={streamerMode} onClose={() => setShareOpen(false)} onProfile={data => { setShareOpen(false); setSettingsOpen(false); setEditing(normalizeAccount({...blankAccount(), ...data, port: String(data.port ?? '25565')})); }} />
-    <SettingsModal onShare={() => setShareOpen(true)} streamerMode={streamerMode} onStreamerMode={changeStreamerMode} visible={settingsOpen} accounts={accounts} onClose={() => setSettingsOpen(false)} onChange={setAccounts} />
+    <GraphModal visible={graphOpen} accounts={accounts} streamerMode={streamerMode} onClose={() => setGraphOpen(false)} />
+    <SettingsModal onGraph={() => setGraphOpen(true)} onShare={() => setShareOpen(true)} streamerMode={streamerMode} onStreamerMode={changeStreamerMode} visible={settingsOpen} accounts={accounts} onClose={() => setSettingsOpen(false)} onChange={setAccounts} />
     <ServerMenuModal value={session?.serverWindow || null} onClick={slot => selected && engineCommand({action: 'window-click', accountId: selected.id, slot}).catch((error: Error) => Alert.alert('Menu action failed', error.message))} onClose={() => selected && engineCommand({action: 'window-close', accountId: selected.id}).catch((error: Error) => Alert.alert('Close menu failed', error.message))} />
     <Modal transparent visible={Boolean(loginCode)} animationType="fade"><View style={styles.backdrop}><View style={styles.modalCard}><Text style={styles.title}>Microsoft sign-in</Text><Text style={styles.modalHelp}>Open Microsoft, switch to the account you want, then enter this code:</Text><Text selectable style={styles.deviceCode}>{loginCode?.code}</Text><Pressable style={styles.primary} onPress={openMicrosoftSignIn}><Text style={styles.primaryText}>Open Microsoft sign-in</Text></Pressable><Pressable style={styles.modalButton} onPress={() => setLoginCode(null)}><Text style={styles.buttonText}>Close</Text></Pressable></View></View></Modal>
   </SafeAreaView>;
@@ -548,9 +551,21 @@ function ShareModal({visible, accounts, selected, streamerMode, onClose, onProfi
   </ScrollView></SafeAreaView></Modal>;
 }
 
-function SettingsModal({onShare, streamerMode, onStreamerMode, visible, accounts, onClose, onChange}: {onShare: () => void; streamerMode: boolean; onStreamerMode: (value: boolean) => void; visible: boolean; accounts: Account[]; onClose: () => void; onChange: (accounts: Account[]) => void}) {
+function GraphModal({visible, accounts, streamerMode, onClose}: {visible: boolean; accounts: Account[]; streamerMode: boolean; onClose: () => void}) {
+  const [json, setJson] = useState('');
+  const [graph, setGraph] = useState<any>(null);
+  const mask = (value: string) => maskNames(value, accounts, streamerMode);
+  const inspect = () => { try { setGraph(graphCards(json)); } catch (error: any) { setGraph(null); Alert.alert('Invalid graph', error.message); } };
+  return <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}><SafeAreaView style={styles.safe}><View style={styles.modalHeader}><Text style={styles.panelTitle}>Macro graph</Text><Pressable onPress={onClose}><Text style={styles.link}>Done</Text></Pressable></View><ScrollView contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled">
+    <Text style={styles.help}>Paste version 3 graph JSON to view its nodes and connections.</Text><TextInput accessibilityLabel="Graph JSON" value={json} onChangeText={value => {setJson(value); setGraph(null);}} secureTextEntry={streamerMode} autoCapitalize="none" autoCorrect={false} style={styles.input} placeholder="Graph JSON" placeholderTextColor="#626d7b" /><Pressable style={styles.modalButton} onPress={inspect}><Text style={styles.buttonText}>View graph</Text></Pressable>
+    {graph && <><Text style={styles.sectionTitle}>{mask(graph.name)}</Text><Text style={styles.help}>Read-only · execution is not available on this device.</Text>{graph.nodes.map((node: any) => <View key={node.id} style={[styles.panel, styles.form]}><Text style={styles.panelTitle}>{mask(node.label)} · {mask(node.id)}</Text><Text style={styles.help}>{mask(node.kind)}{node.disabled ? ' · disabled' : ''}</Text><Text selectable style={styles.help}>{mask(node.params)}</Text><Text style={styles.help}>{node.connections.length ? node.connections.map(mask).join('\n') : 'No outgoing connections'}</Text></View>)}</>}
+  </ScrollView></SafeAreaView></Modal>;
+}
+
+function SettingsModal({onGraph, onShare, streamerMode, onStreamerMode, visible, accounts, onClose, onChange}: {onGraph: () => void; onShare: () => void; streamerMode: boolean; onStreamerMode: (value: boolean) => void; visible: boolean; accounts: Account[]; onClose: () => void; onChange: (accounts: Account[]) => void}) {
   const allStartup = accounts.length > 0 && accounts.every(account => account.connectOnStartup);
   return <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}><SafeAreaView style={styles.safe}><View style={styles.modalHeader}><Text style={styles.panelTitle}>Settings</Text><Pressable onPress={onClose}><Text style={styles.link}>Done</Text></Pressable></View><View style={styles.form}>
+    <Text style={styles.sectionTitle}>Macro graph</Text><Pressable style={styles.modalButton} onPress={onGraph}><Text style={styles.buttonText}>View graph JSON</Text></Pressable>
     <Text style={styles.sectionTitle}>Share links</Text><Pressable style={styles.modalButton} onPress={onShare}><Text style={styles.buttonText}>Import or export profiles and macros</Text></Pressable>
     <Text style={styles.sectionTitle}>Startup</Text><Toggle label="Connect every account on app start" value={allStartup} onChange={value => onChange(accounts.map(account => ({...account, connectOnStartup: value})))} />
     <Text style={styles.sectionTitle}>Background operation</Text><Text style={styles.help}>Android keeps the AFK engine in a foreground service with a persistent notification. iOS can maintain sessions while open, but the operating system may suspend network connections in the background.</Text>
