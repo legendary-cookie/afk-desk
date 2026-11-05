@@ -145,8 +145,8 @@ function assertArranged(ids, options = {}) {
     assert.ok(item.x >= 0 && item.x + item.w <= (options.columns || 12), item.id + ': horizontal bounds')
     assert.ok(item.y >= 0 && item.h > 0 && item.y + item.h <= arranged.rows, item.id + ': vertical bounds')
     const pixels = item.h * arranged.height / arranged.rows - 8, hint = layout.registry[item.id]
-    assert.ok(pixels >= hint.minHeight - 1, item.id + ': minimum content height')
-    assert.ok(pixels <= hint.maxHeight + 1, item.id + ': maximum content height')
+    assert.ok(pixels >= hint.minHeight - arranged.height / arranged.rows, item.id + ': minimum content height')
+    assert.ok(pixels <= hint.maxHeight + arranged.height / arranged.rows, item.id + ': maximum content height')
     for (const other of items) if (other !== item) assert.ok(item.x >= other.x + other.w || item.x + item.w <= other.x || item.y >= other.y + other.h || item.y + item.h <= other.y, item.id + ' overlaps ' + other.id)
   }
   return arranged
@@ -179,15 +179,18 @@ test('default, extended, all, and single module arrangements fit the grid withou
   assert.deepEqual(layout.autoArrange(['console'], { width: Infinity, height: NaN }), layout.autoArrange(['console']))
 })
 
-test('compact panels share rows while main and side keep their columns', () => {
+test('all side modules span the full side column, including compact panels', () => {
   const result = assertArranged(Object.keys(layout.names), { width: 1200, height: 900 })
   const byId = Object.fromEntries(result.layout.map(item => [item.id, item]))
   for (const id of ['console', 'macro', 'inventory']) assert.equal(byId[id].x, 0)
   for (const id of ['details', 'movement', 'minimap', 'scoreboard', 'effects', 'bossBars', 'nextRuns']) assert.ok(byId[id].x >= 8)
-  assert.equal(byId.scoreboard.y, byId.effects.y)
-  assert.equal(byId.bossBars.y, byId.nextRuns.y)
+  for (const id of ['details', 'movement', 'minimap', 'scoreboard', 'effects', 'bossBars', 'nextRuns']) {
+    assert.equal(byId[id].x, 8); assert.equal(byId[id].w, 4)
+  }
+  assert.ok(byId.effects.y >= byId.scoreboard.y + byId.scoreboard.h)
+  assert.ok(byId.nextRuns.y >= byId.bossBars.y + byId.bossBars.h)
   const small = assertArranged([...layout.presets.Default, { id: 'scoreboard' }, { id: 'effects' }], { width: 900, height: 700 })
-  assert.equal(small.layout.find(item => item.id === 'scoreboard').y, small.layout.find(item => item.id === 'effects').y)
+  for (const id of ['scoreboard', 'effects']) assert.equal(small.layout.find(item => item.id === id).w, 4)
   const narrow = assertArranged(layout.presets.Default, { width: 700, height: 700 })
   for (const item of narrow.layout) { assert.equal(item.x, 0); assert.equal(item.w, 12) }
   assertArranged(Object.keys(layout.names), { columns: 6, width: 700, height: 900 })
@@ -249,4 +252,45 @@ test('an unavailable minimap hides its canvas and collapses only its standalone 
   wrapper.dataset.module = 'movement'
   context.update(canvas, false)
   assert.equal(wrapper.classList['overview-empty'], false, 'movement buttons remain usable without map data')
+})
+
+const moduleHeight = (result, id) => result.layout.find(item => item.id === id).h * result.height / result.rows - 8
+
+test('collapsed modules use only their header height, including inventory and console', () => {
+  for (const id of Object.keys(layout.names)) {
+    const result = layout.autoArrange(Object.keys(layout.names), { width: 1200, height: 1100,
+      measurements: { [id]: { collapsed: true, headerHeight: 49, naturalHeight: 350 } } })
+    assert.ok(Math.abs(moduleHeight(result, id) - 49) <= result.height / result.rows, id)
+  }
+})
+
+test('empty modules and compact content stay at natural height in a tall viewport', () => {
+  const measurements = Object.fromEntries(['scoreboard', 'effects', 'bossBars', 'nextRuns', 'minimap'].map(id => [id, { empty: true, naturalHeight: 73 }]))
+  measurements.macro = { naturalHeight: 83 }
+  const result = layout.autoArrange(Object.keys(layout.names), { width: 1200, height: 1600, measurements })
+  for (const id of Object.keys(measurements)) assert.ok(Math.abs(moduleHeight(result, id) - measurements[id].naturalHeight) <= result.height / result.rows, id)
+  assert.ok(moduleHeight(result, 'console') > layout.registry.console.preferredHeight)
+  assert.ok(moduleHeight(result, 'inventory') > layout.registry.inventory.preferredHeight)
+})
+
+test('natural inventory height takes priority over console preferences when the full grid fits', () => {
+  const measurements = { macro: { naturalHeight: 80 }, inventory: { naturalHeight: 390 } }
+  // Enough room for the grid and the console minimum, but not both preferred sizes.
+  const result = layout.autoArrange(['console', 'macro', 'inventory'], { width: 1200, height: 650, measurements })
+  assert.ok(moduleHeight(result, 'inventory') >= 389)
+  assert.ok(moduleHeight(result, 'console') >= layout.registry.console.minHeight - 1)
+  const small = layout.autoArrange(['console', 'macro', 'inventory'], { width: 1200, height: 480, measurements })
+  assert.ok(moduleHeight(small, 'inventory') < 390, 'only scroll when the full grid cannot fit')
+})
+
+test('edit bars are reserved for every module without clipping compact or collapsed content', () => {
+  const measurements = { macro: { naturalHeight: 90 }, inventory: { naturalHeight: 390 }, movement: { collapsed: true, headerHeight: 48 }, scoreboard: { empty: true, naturalHeight: 73 } }
+  const result = layout.autoArrange([...layout.presets.Default, { id: 'scoreboard' }], { width: 1200, height: 720, measurements, editing: true })
+  for (const [id, expected] of [['macro', 90], ['inventory', 390], ['movement', 48], ['scoreboard', 73]]) {
+    assert.ok(moduleHeight(result, id) - layout.editBarHeight >= expected - 1, id + ': content survives editing')
+  }
+  const css = fs.readFileSync(path.join(__dirname, '../src/styles.css'), 'utf8')
+  assert.match(css, new RegExp('\\.overview-module-bar \\{ flex: 0 0 ' + layout.editBarHeight + 'px; height: ' + layout.editBarHeight + 'px'))
+  assert.match(css, /\.overview-module > \.collapsed \{[^}]*align-self: stretch; width: 100%/)
+  assert.match(css, /\.overview-module > \.movement-panel\.collapsed \{ display: block/)
 })

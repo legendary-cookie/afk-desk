@@ -971,7 +971,8 @@ dialog.macro-templates-dialog {
 .overview-module .panel-header { min-height: 42px; padding: 6px 12px; flex-shrink: 0; }
 .overview-module .panel-header h2 { font-size: 12px; }
 .overview-module .inventory-header { min-height: 58px; }
-.overview-module-bar { flex: 0 0 auto; display: flex; background: var(--surface-raised); }
+.overview-module-bar { flex: 0 0 24px; height: 24px; display: flex; background: var(--surface-raised); }
+.overview-module-bar > button { height: 24px; min-height: 0; padding: 2px 6px; font: inherit; font-size: 11px; }
 .overview-module-handle { flex: 1; min-width: 0; text-align: left; cursor: grab; touch-action: none; }
 .overview-module-resize { position: absolute; right: 0; bottom: 0; cursor: nwse-resize; touch-action: none; z-index: 2; }
 .overview-module .inventory-panel { height: auto; max-height: none; }
@@ -1001,7 +1002,22 @@ dialog.macro-templates-dialog {
 /* Keep content collapsed without taking away the editor's resize target. */
 .overview-editing .overview-empty, .overview-editing .overview-modules > .overview-module:has(> .macro-section) { align-self: stretch; }
 .overview-editing .overview-modules > .overview-module > .macro-section { flex: 1 1 0; }
-.overview-editing .overview-module > .collapsed { flex: 0 0 auto; }
+.overview-module > .collapsed { flex: 0 0 auto; align-self: stretch; width: 100%; }
+/* A collapsed movement grid has no content tracks to distribute spare height. */
+.overview-module > .movement-panel.collapsed { display: block; }
+/* Measure the real content at its arranged width without the assigned row height. */
+.overview-measuring > .overview-module > .collapsed,
+.overview-measuring > .overview-empty > .panel,
+.overview-measuring > .overview-module[data-module="inventory"] > .panel,
+.overview-measuring > .overview-module[data-module="scoreboard"] > .panel,
+.overview-measuring > .overview-module[data-module="effects"] > .panel,
+.overview-measuring > .overview-module[data-module="bossBars"] > .panel,
+.overview-measuring > .overview-module[data-module="nextRuns"] > .panel,
+.overview-measuring > .overview-module > .macro-section { flex: 0 0 auto; height: max-content; max-height: none; }
+.overview-measuring .inventory-panel { grid-template-rows: auto auto; }
+.overview-measuring .inventory-grid { overflow: visible; }
+.overview-measuring .macro-pad { flex: 0 0 auto; max-height: none; }
+.overview-auto .macro-pad { max-height: none; }
 
 .game-hud { display:grid; gap:6px; padding:10px; font:12px monospace; }
 .hud-scoreboard { background:#000a; padding:8px; text-align:right; }

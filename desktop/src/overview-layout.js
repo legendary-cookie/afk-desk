@@ -7,6 +7,7 @@
   // Version 3 uses 1000 vertical tracks with gaps inside each module.
   const version = 3
   const rows = 1000
+  const editBarHeight = 24
   const integer = (n, fallback, min, max) => Number.isFinite(Number(n)) ? Math.max(min, Math.min(max, Math.round(Number(n)))) : fallback
   const legacyPresets = {
     Default: [{ id: 'console', x: 0, y: 0, w: 8, h: 6 }, { id: 'details', x: 8, y: 0, w: 4, h: 6 }, { id: 'movement', x: 8, y: 6, w: 4, h: 6 }, { id: 'macro', x: 0, y: 6, w: 8, h: 1 }, { id: 'inventory', x: 0, y: 7, w: 8, h: 5 }],
@@ -31,7 +32,7 @@
     bossBars: { minWidth: 130, minHeight: 76, preferredWidth: 160, preferredHeight: 96, maxHeight: 140, grow: 0, group: 'side', compact: true },
     nextRuns: { minWidth: 130, minHeight: 76, preferredWidth: 160, preferredHeight: 96, maxHeight: 140, grow: 0, group: 'side', compact: true }
   }
-  function autoArrange(active, { columns = 12, width = 1200, height = 600, gap = 8 } = {}) {
+  function autoArrange(active, { columns = 12, width = 1200, height = 600, gap = 8, measurements = {}, editing = false } = {}) {
     columns = integer(columns, 12, 1, 12)
     width = Number.isFinite(width) && width > 0 ? width : 1200
     height = Number.isFinite(height) && height > 0 ? height : 600
@@ -44,32 +45,33 @@
     const split = columns >= 3 && width >= 900 && main.length && side.length && fits(main, left) && fits(side, columns - left)
     const groups = split ? [{ ids: main, x: 0, w: left }, { ids: side, x: left, w: columns - left }] : [{ ids, x: 0, w: columns }]
     for (const group of groups) {
-      group.rows = []
-      for (const id of group.ids) {
-        const hint = registry[id]
-        const minimumWidth = Math.ceil((hint.minWidth + gap) / pitch)
-        const preferredWidth = Math.ceil((hint.preferredWidth + gap) / pitch)
-        // Let compact neighbours share a row down to their minimum width.
-        const w = hint.compact ? Math.min(group.w, Math.max(1, minimumWidth, Math.min(preferredWidth, Math.floor(group.w / 2)))) : group.w
-        let row = group.rows.at(-1)
-        if (!hint.compact || !row?.compact || row.used + w > group.w) {
-          row = { items: [], used: 0, compact: !!hint.compact }; group.rows.push(row)
+      // Each module spans its column, including compact and collapsed panels.
+      group.rows = group.ids.map(id => {
+        const hint = registry[id], measured = measurements[id] || {}
+        const natural = Number.isFinite(measured.naturalHeight) && measured.naturalHeight > 0 ? measured.naturalHeight : null
+        let min = hint.minHeight, preferred = hint.preferredHeight, max = hint.maxHeight, grow = hint.grow
+        if (measured.collapsed) {
+          min = preferred = max = measured.headerHeight > 0 ? measured.headerHeight : 44; grow = 0
+        } else if (measured.empty || hint.compact) {
+          min = preferred = max = natural || (measured.empty ? 80 : preferred); grow = 0
+        } else if (id === 'inventory' && natural) {
+          min = Math.min(min, natural); preferred = natural; max = Math.max(max, natural)
         }
-        row.items.push({ id, w }); row.used += w
-      }
-      for (const row of group.rows) {
-        // Distribute spare columns within each compact row, without moving other rows.
-        for (let i = row.used; i < group.w; i++) row.items[(i - row.used) % row.items.length].w++
-        const hints = row.items.map(item => registry[item.id])
-        row.min = Math.max(...hints.map(hint => hint.minHeight))
-        row.preferred = Math.max(...hints.map(hint => hint.preferredHeight))
-        row.max = Math.min(...hints.map(hint => hint.maxHeight))
-        row.grow = Math.max(...hints.map(hint => hint.grow))
-      }
+        const bar = editing ? editBarHeight : 0
+        return { items: [{ id, w: group.w }], min: min + bar, preferred: preferred + bar, max: max + bar, grow,
+          naturalInventory: id === 'inventory' && natural && !measured.collapsed && !measured.empty }
+      })
     }
     const minHeight = Math.max(0, ...groups.map(group => group.rows.reduce((sum, row) => sum + row.min + gap, 0)))
     const available = Math.max(height, minHeight), layout = []
     for (const group of groups) {
+      // Fill the inventory's natural grid before spending spare space on console
+      // preferences. It may still scroll when even the minimum console cannot fit.
+      let spare = available - group.rows.reduce((sum, row) => sum + row.min + gap, 0)
+      for (const row of group.rows.filter(row => row.naturalInventory)) {
+        const extra = Math.min(spare, row.preferred - row.min)
+        row.min += extra; spare -= extra
+      }
       const minimum = group.rows.reduce((sum, row) => sum + row.min + gap, 0)
       const preferred = group.rows.reduce((sum, row) => sum + row.preferred + gap, 0)
       const ratio = preferred > minimum ? Math.min(1, (available - minimum) / (preferred - minimum)) : 1
@@ -143,5 +145,5 @@
     return { version, global: read(value?.global), overrides: { ...overrides }, globalMode: mode(value?.global, value?.globalMode), overrideModes: { ...overrideModes } }
   }
   function isLegacyDefault(layout) { return layout.length === legacyPresets.Default.length && legacyPresets.Default.every(item => layout.some(other => ['id', 'x', 'y', 'w', 'h'].every(key => item[key] === other[key]))) }
-  return { version, rows, names, registry, presets, moduleDefaults, autoArrange, isDefault, rowCount, gridMetrics, normalize, normalizeSettings }
+  return { version, rows, editBarHeight, names, registry, presets, moduleDefaults, autoArrange, isDefault, rowCount, gridMetrics, normalize, normalizeSettings }
 })

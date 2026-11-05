@@ -39,12 +39,57 @@ window.createOverviewEditor = function ({ dashboard, settings, accountId, save, 
     const scale = grid.clientWidth > 0 ? rect.width / grid.clientWidth : 1
     return { width: grid.clientWidth || rect.width, height: Math.max(1, Number.isFinite(area.bottom - rect.top) ? (area.bottom - rect.top) / scale : rect.height) }
   }
-  function fit() {
+  function isEmpty(id, node) {
+    return ['scoreboard', 'effects', 'bossBars', 'nextRuns'].includes(id)
+      ? !!node.querySelector('.module-empty') : id === 'minimap' && node.classList.contains('map-empty')
+  }
+  function arrangePanels(size) {
+    // Set widths first: wrapping, container queries and UI zoom affect natural height.
+    const initial = model.autoArrange(layout, size)
+    for (const item of initial.layout) {
+      const wrapper = nodes[item.id].parentNode
+      wrapper.style.gridColumn = `${item.x + 1} / span ${item.w}`
+    }
+    const measurements = {}
+    grid.classList.toggle('overview-measuring', true)
+    try {
+      const rect = grid.getBoundingClientRect()
+      const scale = grid.clientWidth > 0 ? rect.width / grid.clientWidth : 1
+      const height = node => node ? Math.ceil(node.getBoundingClientRect().height / scale) + 1 : 0
+      for (const item of layout) {
+        const node = nodes[item.id], empty = isEmpty(item.id, node)
+        const collapsed = node.classList.contains('collapsed') || (item.id === 'inventory' && dashboard.classList.contains('inventory-collapsed'))
+        const header = node.querySelector(item.id === 'macro' ? '.macro-header' : '.panel-header')
+        measurements[item.id] = { collapsed, empty, headerHeight: header ? height(header) + 2 : 0,
+          naturalHeight: header && (empty || model.registry[item.id].compact || item.id === 'inventory') ? height(node) : 0 }
+        node.parentNode.classList.toggle('overview-empty', empty)
+      }
+    } finally { grid.classList.remove('overview-measuring') }
+    const result = model.autoArrange(layout, { ...size, measurements, editing })
+    layout = result.layout
+    grid.style.minHeight = `${result.minHeight}px`
+    grid.style.setProperty('--overview-rows', result.rows)
+    for (const item of layout) nodes[item.id].parentNode.style.gridRow = `${item.y + 1} / span ${item.h}`
+  }
+  function fit(contentChanged = false) {
     if (!active || mode !== 'auto') return
     const size = viewport(), key = `${size.width}:${Math.round(size.height)}`
-    if (lastSize !== key) draw()
+    if (contentChanged || lastSize !== key) { lastSize = key; arrangePanels(size) }
+  }
+  // Observe the retained panels, not generated wrappers. Arrangement only changes
+  // wrapper styles, so chat/HUD updates can be coalesced without a resize loop.
+  let pendingFit = false
+  const observer = typeof MutationObserver === 'function' ? new MutationObserver(() => {
+    if (pendingFit || !active || mode !== 'auto') return
+    pendingFit = true
+    window.requestAnimationFrame(() => { pendingFit = false; fit(true) })
+  }) : null
+  function observeContent() {
+    for (const node of Object.values(nodes)) observer?.observe(node, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['class', 'hidden'] })
+    observer?.observe(dashboard, { attributes: true, attributeFilter: ['class'] })
   }
   function draw() {
+    observer?.disconnect()
     auto.checked = mode === 'auto'; notice.hidden = mode === 'auto'
     const size = viewport(); lastSize = `${size.width}:${Math.round(size.height)}`
     const arranged = mode === 'auto' ? model.autoArrange(layout, size) : null
@@ -63,14 +108,15 @@ window.createOverviewEditor = function ({ dashboard, settings, accountId, save, 
       if (!item) { node.hidden = true; grid.append(node); continue }
       node.hidden = false
       const wrapper = document.createElement('div'); wrapper.className = 'overview-module'; wrapper.dataset.module = id; wrapper.style.gridColumn = `${item.x + 1} / span ${item.w}`; wrapper.style.gridRow = `${item.y + 1} / span ${item.h}`
-      const empty = ['scoreboard', 'effects', 'bossBars', 'nextRuns'].includes(id)
-        ? !!node.querySelector('.module-empty') : id === 'minimap' && node.classList.contains('map-empty')
+      const empty = isEmpty(id, node)
       wrapper.classList.toggle('overview-empty', empty)
       const bar = document.createElement('div'); bar.className = 'overview-module-bar'; bar.hidden = !editing
       const handle = document.createElement('button'); handle.type = 'button'; handle.className = 'overview-module-handle'; handle.textContent = `Move ${model.names[id]}`; handle.setAttribute('aria-label', `Move ${model.names[id]}; shift and arrow keys resize`)
       const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = '×'; remove.setAttribute('aria-label', `Remove ${model.names[id]}`)
       const resize = document.createElement('button'); resize.type = 'button'; resize.className = 'overview-module-resize'; resize.textContent = '◢'; resize.setAttribute('aria-label', `Resize ${model.names[id]}`); resize.hidden = !editing
       function change(dx, dy, sizing) {
+        // Content/viewport fits retain this handle while replacing layout entries.
+        const item = layout.find(entry => entry.id === id)
         const updated = { ...item, ...(sizing ? { w: Math.max(1, Math.min(12 - item.x, item.w + dx)), h: Math.max(1, Math.min(3000, item.h + dy)) } : { x: Math.max(0, Math.min(12 - item.w, item.x + dx)), y: Math.max(0, item.y + dy) }) }
         mode = 'manual'
         layout = model.normalize([updated, ...layout.filter(entry => entry.id !== id)]); persist(); draw()
@@ -97,10 +143,13 @@ window.createOverviewEditor = function ({ dashboard, settings, accountId, save, 
     picker.replaceChildren()
     for (const [id, name] of Object.entries(model.names)) if (!byId.has(id)) { const option = document.createElement('option'); option.value = id; option.textContent = name; picker.append(option) }
     add.disabled = !picker.options.length
+    if (mode === 'auto') arrangePanels(viewport())
+    observeContent()
   }
   function refresh(force = false) {
     const id = accountId(), overview = dashboard.dataset.view === 'overview' || !dashboard.dataset.view
     if (!overview) {
+      observer?.disconnect()
       if (active) { for (const [key, node] of Object.entries(nodes)) { node.hidden = false; placeholders[key].after(node) } resizerHome.after(inventoryResizer); grid.replaceChildren(); dashboard.classList.remove('overview-editing'); active = false }
       toolbar.hidden = true; grid.hidden = true; return
     }

@@ -43,7 +43,7 @@ class Element {
   querySelector(selector) { for (const child of this.children) { if (child.matches(selector)) return child; const found = child.querySelector(selector); if (found) return found } return null }
   focus() { this.focused = true }
 }
-function fixture(global = model.presets.Default, globalMode = 'auto') {
+function fixture(global = model.presets.Default, globalMode = 'auto', prepare = () => {}) {
   const dashboard = new Element(), original = new Element(), consolePanel = new Element()
   dashboard.dataset.view = 'overview'; dashboard.append(original)
   const selectors = {
@@ -55,7 +55,16 @@ function fixture(global = model.presets.Default, globalMode = 'auto') {
   const document = { querySelector: selector => selectors[selector], createElement: tag => new Element(tag), createComment: () => new Element('comment') }
   const settings = { overviewLayout: { version: model.version, global, overrides: {}, globalMode, overrideModes: {} } }, saved = []
   const window = new Element(); window.afkOverviewLayout = model
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/overview-editor.js'), 'utf8'), { window, document })
+  const frames = [], observations = []
+  let contentChanged
+  window.requestAnimationFrame = fn => frames.push(fn)
+  class MutationObserver {
+    constructor(fn) { contentChanged = fn }
+    observe(node, options) { observations.push({ node, options }) }
+    disconnect() { observations.length = 0 }
+  }
+  prepare(selectors, dashboard)
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/overview-editor.js'), 'utf8'), { window, document, MutationObserver })
   let account = 'one'
   const editor = window.createOverviewEditor({ dashboard, settings: () => settings, accountId: () => account, save: async data => saved.push(data), report: error => { throw error } })
   editor.refresh()
@@ -64,7 +73,7 @@ function fixture(global = model.presets.Default, globalMode = 'auto') {
     const find = node => node.children.find(child => child.textContent === text) || node.children.map(find).find(Boolean)
     return find(toolbar)
   }
-  return { dashboard, original, selectors, settings, saved, editor, grid, window, toolbar, button, controls: toolbar.querySelector('.overview-controls'), account: id => { account = id; editor.refresh() } }
+  return { frames, observations, mutate: () => contentChanged(), flush: () => { while (frames.length) frames.shift()() }, dashboard, original, selectors, settings, saved, editor, grid, window, toolbar, button, controls: toolbar.querySelector('.overview-controls'), account: id => { account = id; editor.refresh() } }
 }
 
 test('auto layout uses the existing panels and restores their homes outside overview', () => {
@@ -118,16 +127,17 @@ test('adding and removing modules re-arranges; a standalone map reparents its sh
   assert.deepEqual(picker.options.map(node => node.value), ['scoreboard', 'effects', 'bossBars', 'nextRuns', 'minimap'])
   for (const id of ['scoreboard', 'effects', 'bossBars', 'nextRuns', 'minimap']) {
     picker.value = id; f.button('Add module').dispatch('click')
-    assert.deepEqual(f.settings.overviewLayout.global, model.autoArrange(f.settings.overviewLayout.global, { width: 1200, height: 600 }).layout)
+    assert.deepEqual(f.settings.overviewLayout.global, model.autoArrange(f.settings.overviewLayout.global, { width: 1200, height: 600, editing: true }).layout)
   }
   assert.equal(f.selectors['#minimap-panel'].parentNode.dataset.module, 'minimap')
   const wrapper = f.grid.querySelector('[data-module="minimap"]')
   wrapper.children[0].children[1].dispatch('click')
   assert.equal(f.selectors['#minimap-panel'].parentNode, f.selectors['#movement-panel'])
-  assert.deepEqual(f.settings.overviewLayout.global, model.autoArrange(f.settings.overviewLayout.global).layout)
+  assert.deepEqual(f.settings.overviewLayout.global, model.autoArrange(f.settings.overviewLayout.global, { editing: true }).layout)
   f.button('Reset layout').dispatch('click'); f.button('Done editing').dispatch('click')
   assert.equal(f.grid.classList.contains('overview-auto'), true)
-  assert.deepEqual(f.settings.overviewLayout.global, model.autoArrange(model.presets.Default).layout)
+  const expected = model.autoArrange(model.presets.Default).layout
+  for (const item of expected) assert.equal(f.grid.querySelector(`[data-module="${item.id}"]`).style.gridRow, `${item.y + 1} / span ${item.h}`)
 })
 
 test('a drag switches to Manual and both Auto-arrange controls restore automatic layout', () => {
@@ -243,4 +253,101 @@ test('viewport measurement accounts for UI zoom and available height instead of 
   const wrapper = f.grid.querySelector('[data-module="console"]')
   f.editor.fit()
   assert.equal(f.grid.querySelector('[data-module="console"]'), wrapper, 'unchanged geometry does not rebuild panels')
+})
+
+function measuredPanel(node, headerHeight, naturalHeight, headerClass = 'panel-header') {
+  const header = new Element('header'); header.className = headerClass; header.height = headerHeight
+  node.height = naturalHeight; node.append(header)
+  return header
+}
+function displayedHeight(f, id) {
+  const wrapper = f.grid.querySelector(`[data-module="${id}"]`)
+  const tracks = Number(wrapper.style.gridRow.split('span ')[1])
+  return tracks * Math.max(f.grid.height || 600, parseFloat(f.grid.style.minHeight)) / model.rows - 8
+}
+
+test('content and collapse changes reflow retained panels at full column width without saving', () => {
+  const ids = [...model.presets.Default, { id: 'scoreboard' }, { id: 'effects' }, { id: 'bossBars' }, { id: 'nextRuns' }]
+  const f = fixture(ids, 'auto', nodes => {
+    measuredPanel(nodes['#movement-panel'], 46, 240)
+    measuredPanel(nodes['.inventory-panel'], 58, 390)
+    for (const id of ['scoreboard', 'effects', 'boss-bars', 'next-runs']) {
+      const panel = nodes[`#${id}-panel`]
+      measuredPanel(panel, 42, 73)
+      const empty = new Element(); empty.className = 'module-empty'; panel.append(empty)
+    }
+  })
+  f.grid.height = 900; f.editor.fit()
+  const movement = f.selectors['#movement-panel'], wrapper = movement.parentNode
+  const expanded = displayedHeight(f, 'movement')
+  movement.classList.toggle('collapsed', true); f.mutate(); f.mutate()
+  assert.equal(f.frames.length, 1, 'content updates coalesce per frame')
+  f.flush()
+  assert.equal(movement.parentNode, wrapper, 'content changes preserve wrappers, focus and panels')
+  assert.equal(wrapper.style.gridColumn, '9 / span 4')
+  assert.ok(displayedHeight(f, 'movement') < expanded)
+  assert.ok(Math.abs(displayedHeight(f, 'movement') - 49) < 1)
+  for (const id of ['scoreboard', 'effects', 'bossBars', 'nextRuns']) assert.ok(Math.abs(displayedHeight(f, id) - 74) < 1, id)
+  movement.classList.remove('collapsed'); f.mutate(); f.flush()
+  assert.ok(displayedHeight(f, 'movement') >= expanded - 1)
+  const board = f.selectors['#scoreboard-panel']
+  board.querySelector('.module-empty').remove(); board.height = 155; f.mutate(); f.flush()
+  assert.ok(Math.abs(displayedHeight(f, 'scoreboard') - 156) < 1)
+  assert.equal(board.parentNode.classList.contains('overview-empty'), false)
+  assert.equal(f.saved.length, 0, 'transient content sizing is never persisted')
+  f.dashboard.classList.toggle('inventory-collapsed', true); f.mutate(); f.flush()
+  assert.ok(Math.abs(displayedHeight(f, 'inventory') - 61) < 1)
+})
+
+test('natural inventory and wrapping macro content fit with edit bars and at UI zoom', () => {
+  const f = fixture(model.presets.Default, 'auto', nodes => {
+    measuredPanel(nodes['.inventory-panel'], 58, 390)
+    measuredPanel(nodes['#macro-section'], 38, 90, 'macro-header')
+  })
+  f.grid.height = 720; f.button('Edit layout').dispatch('click')
+  assert.ok(displayedHeight(f, 'inventory') - model.editBarHeight >= 390)
+  assert.ok(displayedHeight(f, 'macro') - model.editBarHeight >= 90)
+  const inventory = f.selectors['.inventory-panel'], header = inventory.querySelector('.panel-header')
+  f.grid.clientWidth = 1200
+  f.grid.getBoundingClientRect = () => ({ width: 840, height: 504, top: 0 })
+  f.dashboard.getBoundingClientRect = () => ({ bottom: 504 })
+  inventory.getBoundingClientRect = () => {
+    assert.equal(f.grid.classList.contains('overview-measuring'), true)
+    assert.equal(inventory.parentNode.style.gridColumn, '1 / span 8')
+    return { height: 390 * .7 }
+  }
+  header.height = 58 * .7
+  f.selectors['#macro-section'].height = 90 * .7
+  f.selectors['#macro-section'].querySelector('.macro-header').height = 38 * .7
+  f.editor.fit(true)
+  assert.ok(displayedHeight(f, 'inventory') - model.editBarHeight >= 390)
+  assert.equal(f.grid.classList.contains('overview-measuring'), false)
+})
+
+test('manual mode ignores content mutations and resize without changing its module geometry', () => {
+  const f = fixture(model.presets.Default, 'manual')
+  const wrapper = f.selectors['#movement-panel'].parentNode
+  const before = [wrapper.style.gridColumn, wrapper.style.gridRow]
+  f.selectors['#movement-panel'].classList.toggle('collapsed', true); f.mutate(); f.flush()
+  f.grid.width = 700; f.grid.height = 900; f.editor.fit(true)
+  assert.equal(f.selectors['#movement-panel'].parentNode, wrapper)
+  assert.deepEqual([wrapper.style.gridColumn, wrapper.style.gridRow], before)
+  assert.equal(f.saved.length, 0)
+  f.dashboard.dataset.view = 'inventory'; f.editor.refresh()
+  assert.equal(f.observations.length, 0, 'observers disconnect outside overview')
+})
+
+
+test('moving a retained handle uses the latest content and viewport arrangement', () => {
+  const f = fixture()
+  const wrapper = f.selectors['#movement-panel'].parentNode
+  const handle = wrapper.querySelector('[data-handle="movement"]')
+  f.grid.width = 700; f.grid.height = 900; f.editor.fit()
+  const before = Number(wrapper.style.gridRow.split(' /')[0]) - 1
+  assert.equal(wrapper.style.gridColumn, '1 / span 12')
+  handle.dispatch('keydown', { key: 'ArrowDown' })
+  const saved = f.settings.overviewLayout.global.find(item => item.id === 'movement')
+  assert.equal(saved.y, before + 25)
+  assert.equal(saved.w, 12)
+  assert.equal(f.settings.overviewLayout.globalMode, 'manual')
 })
