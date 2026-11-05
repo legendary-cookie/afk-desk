@@ -205,6 +205,24 @@ R5 sandbox: the lead must verify both architectures, native build/fallback,
 volume ownership, read-only operation, both smoke scripts, real Tailscale
 connectivity/ACL isolation, and Caddy certificate issuance/forwarded cookies.
 
+### Image size
+
+The production image is optimized to strip build toolchains, intermediate native compilation artifacts, and non-runtime files while preserving 100% server functionality and multi-version Bedrock/Java runtime support.
+
+| Metric | Before (`afkdesk:before`) | After (`afkdesk:after`) | Savings |
+| :--- | :--- | :--- | :--- |
+| **Disk Usage (uncompressed)** | 1.02 GB | 587 MB | -433 MB (-42.5%) |
+| **Content Size (compressed layers)** | 138 MB | 109 MB | -29 MB (-21.0%) |
+| **/app/node_modules** | 593 MB | 209 MB | -384 MB (-64.8%) |
+| **Total /app** | 595 MB | 211 MB | -384 MB (-64.5%) |
+
+Pruned runtime overhead:
+- **Build-only dependencies:** removed `typescript` (65 MB, mistakenly declared in `dependencies` by upstream `jsp-raknet`) and `cmake-js` (2.1 MB, native rebuild toolchain).
+- **Native compilation artifacts:** removed intermediate static libraries (`build/raknet`), CMake build trees, prebuilds, and cloned C++ submodules from `raknet-native`, retaining only `build/Release/node-raknet.node`. Removed macOS/Windows prebuilt binaries from `raknet-node`.
+- **minecraft-data:** pruned unused Bedrock block-to-Java conversion tables (`blocks*2*.json`, 136 MB) and replaced Bedrock `blockStates.json` (118 MB) and `1.19.1/blockMappings.json` (8.3 MB) with minimal array stubs (`[]`) satisfying `minecraft-data` loader getters without memory or disk overhead.
+- **Non-runtime files:** pruned all source maps (`*.map`), TypeScript declarations (`*.d.ts`, `*.d.ts.map`), markdown documentation, test/example suites, and C/C++ source/header files across `node_modules`. Retained only CommonJS in `rxjs`.
+- **Desktop-only assets/sources:** excluded Electron-only offscreen POV files (`src/offscreen-pov.*`) and desktop icons/docs (`assets/afk-desk.ico`, `assets/*.md`).
+
 ## Troubleshooting
 
 - Restart loop / no admin: stop the service, run `init`, then start it again.

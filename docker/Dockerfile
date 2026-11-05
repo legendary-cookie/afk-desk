@@ -47,11 +47,36 @@ if (!usable) {
 if (fs.existsSync('node_modules/electron')) throw new Error('Electron must not be installed');
 NODE
 BUILD_NATIVE
+RUN <<'PRUNE'
+set -e
+npm prune --omit=dev --no-audit --no-fund
+# Remove build-only native toolchains and non-runtime packages
+rm -rf node_modules/typescript node_modules/cmake-js
+# Remove native build intermediate files, source repositories, and non-Linux prebuilds
+rm -rf node_modules/raknet-native/build/raknet \
+       node_modules/raknet-native/build/CMakeFiles \
+       node_modules/raknet-native/raknet \
+       node_modules/raknet-native/prebuilds \
+       node_modules/raknet-native/test
+rm -f node_modules/raknet-native/build/*.txt \
+      node_modules/raknet-native/build/*.cmake \
+      node_modules/raknet-native/build/Makefile
+rm -f node_modules/raknet-node/raknet-node-osx.node \
+      node_modules/raknet-node/raknet-node-win.node
+# Prune non-runtime files across node_modules (maps, type declarations, docs, tests, C/C++ sources)
+find node_modules -type f \( -name "*.map" -o -name "*.d.ts" -o -name "*.d.ts.map" -o -name "*.md" -o -name "*.markdown" \) -delete
+find node_modules -type d \( -name "test" -o -name "tests" -o -name "__tests__" -o -name "doc" -o -name "docs" -o -name "example" -o -name "examples" \) -exec rm -rf {} + 2>/dev/null || true
+find node_modules -type f \( -name "*.c" -o -name "*.cc" -o -name "*.cpp" -o -name "*.h" -o -name "*.hpp" -o -name "*.o" -o -name "*.a" \) -delete
+# Retain only the CommonJS bundle for rxjs
+rm -rf node_modules/rxjs/dist/esm node_modules/rxjs/dist/esm5 node_modules/rxjs/dist/types node_modules/rxjs/dist/bundles node_modules/rxjs/src
+PRUNE
 COPY desktop/core ./core
 COPY desktop/electron ./electron
 COPY desktop/server ./server
 COPY desktop/src ./src
 COPY desktop/assets ./assets
+# Prune desktop assets and sources not served or needed by the headless server
+RUN rm -f src/offscreen-pov.html src/offscreen-pov.js assets/afk-desk.ico assets/MINECRAFT_ITEM_TEXTURES.md
 # Catch missing server-mode modules (including accidental Electron imports)
 # during each architecture's build, even when native RakNet is unavailable.
 RUN node -e "require('./server/cli.cjs')"
