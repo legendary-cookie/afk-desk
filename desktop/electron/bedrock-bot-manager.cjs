@@ -5,7 +5,7 @@ const minecraftData = require('minecraft-data')
 const { MacroActionError } = require('./macro/contract.cjs')
 const SUPPORTED_VERSION = minecraftData.versions.bedrock.filter((entry) => entry.releaseType === 'release').sort((a, b) => b.version - a.version)[0].minecraftVersion
 const EYE_HEIGHT = 1.62
-const STATIONARY_INPUTS = new Set(['jump', 'sneak', 'sprint', 'leftClick'])
+const STATIONARY_INPUTS = new Set(['jump', 'sneak', 'sprint', 'leftClick', 'forward', 'back', 'left', 'right'])
 const WALK_INPUTS = new Set(['forward', 'back', 'left', 'right'])
 
 function raknetBackend () {
@@ -227,6 +227,17 @@ class BedrockBotManager {
       start_sprinting: held.sprint && !previous.sprint, stop_sprinting: !held.sprint && Boolean(previous.sprint),
       handled_teleport: session.handledTeleport
     }
+    const forward = Number(Boolean(session.inputClaims.get('forward')?.size)) - Number(Boolean(session.inputClaims.get('back')?.size))
+    const sideways = Number(Boolean(session.inputClaims.get('left')?.size)) - Number(Boolean(session.inputClaims.get('right')?.size))
+    const magnitude = Math.hypot(forward, sideways) || 1
+    const move = { x: sideways / magnitude, z: forward / magnitude }
+    const angle = session.yaw * Math.PI / 180
+    const speed = session.serverAuthoritative ? 0.1 : 0.5
+    const delta = { x: (move.x * Math.cos(angle) - move.z * Math.sin(angle)) * speed, y: 0, z: (move.x * Math.sin(angle) + move.z * Math.cos(angle)) * speed }
+    delta.x ||= 0; delta.z ||= 0
+    session.position.x += delta.x
+    session.position.z += delta.z
+    Object.assign(inputData, { up: forward > 0, down: forward < 0, left: sideways > 0, right: sideways < 0 })
     const position = eyePosition(session.position)
     const rotation = { yaw: session.yaw, pitch: session.pitch, head_yaw: session.yaw }
     session.tick += 1n
@@ -234,11 +245,11 @@ class BedrockBotManager {
       // Only input flags request a jump: this arc is bookkeeping, never a guessed
       // position/delta. Without chunk collision, the server owns vertical motion.
       session.client.queue('player_auth_input', {
-        ...rotation, position, move_vector: { x: 0, z: 0 },
+        ...rotation, position, move_vector: move,
         input_data: inputData, input_mode: 'mouse', play_mode: 'normal', interaction_model: 'crosshair',
         interact_rotation: { x: session.pitch, z: session.yaw },
-        tick: session.tick, delta: { x: 0, y: 0, z: 0 },
-        analogue_move_vector: { x: 0, z: 0 }, raw_move_vector: { x: 0, z: 0 },
+        tick: session.tick, delta,
+        analogue_move_vector: move, raw_move_vector: move,
         camera_orientation: cameraDirection(session.yaw, session.pitch)
       })
     } else {
@@ -468,10 +479,6 @@ class BedrockBotManager {
     session.antiAfkTimer = null
     this.clearAntiAfkActions(id, session)
     session.antiAfkSettings = normalizeAntiAfkSettings(account)
-    if (session.antiAfkSettings.walk && !session.loggedAntiAfkWalk) {
-      session.loggedAntiAfkWalk = true
-      this.emit('log', id, { kind: 'system', message: 'Bedrock anti-AFK walk is ignored: walking is not supported yet.', at: Date.now() })
-    }
     if (session.account.antiAfk !== false && session.ready) this.scheduleAntiAfk(id, session)
   }
 
@@ -498,12 +505,12 @@ class BedrockBotManager {
     if (!session?.ready || session.closing || !session.position || session.account.antiAfk === false) return
     for (const owners of session.inputClaims.values()) if ([...owners].some((owner) => owner.startsWith('macro:'))) return
     const settings = session.antiAfkSettings
-    const actions = ['jump', 'look', 'sneak', 'swing'].filter((action) => settings[action])
+    const actions = ['jump', 'look', 'sneak', 'swing', 'walk'].filter((action) => settings[action])
     if (!actions.length) return
     const action = actions[Math.min(actions.length - 1, Math.floor(this.random() * actions.length))]
     if (action === 'look') this.lookAbsolute(id, (session.yaw + (this.random() < 0.5 ? -1 : 1) * settings.lookDegrees) * Math.PI / 180, session.pitch * Math.PI / 180)
     else {
-      const input = action === 'swing' ? 'leftClick' : action
+      const input = action === 'swing' ? 'leftClick' : action === 'walk' ? 'forward' : action
       this.claimInput(id, input, 'antiAfk')
       // Swing once per cycle, through the same ownership used by held clicks.
       if (action === 'swing') { this.swingArm(id); this.releaseInput(id, input, 'antiAfk'); return }
@@ -548,7 +555,6 @@ class BedrockBotManager {
 
 function bedrockCapabilities() { return { chat: true, reconnect: true, position: true, players: true, health: true, hunger: true, death: true, autoRespawn: true, serverSwitch: true, inventoryView: true, itemLocksStored: true, forms: true, containerWindows: true, movement: 'stationary', antiAfk: ['look', 'jump', 'sneak', 'swing'], inventoryActions: false, worldBlocks: false, macros: 'chat/wait/notify only' } }
 function assertStationaryInput(input) {
-  if (WALK_INPUTS.has(input)) throw new MacroActionError('UNSUPPORTED', 'Bedrock walking is not supported yet')
   if (!STATIONARY_INPUTS.has(input)) throw new MacroActionError('UNSUPPORTED', `Bedrock input ${input} is not supported yet`)
 }
 function packetFields(protocol, name) { return new Set((protocol['packet_' + name]?.[1] || []).map((field) => field.name)) }
