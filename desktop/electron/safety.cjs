@@ -122,6 +122,15 @@ function deferSafety(manager, account, state) {
 function installSafety(manager, account, session, state) {
   const bot = session.bot
   let previousHealth = bot.health, lastDamage = null, lastBottle = null
+  let popPending = false, popTimer = null, disconnecting = false
+  const disconnect = reason => {
+    if (disconnecting || manager.sessions.get(account.id) !== session || !session.ready) return
+    disconnecting = true
+    state.cooldownUntil = Date.now() + (Number(session.account.lowHealthCooldownMinutes ?? 10) * 60000)
+    state.safetyPause = 'health'
+    manager.emit('safety-disconnect', account.id, { reason, health: bot.health, cooldownUntil: state.cooldownUntil, notify: session.account.safetyDisconnectNotify === true })
+    bot.end('Safety protection: ' + reason)
+  }
   const tick = async () => {
     if (Number.isFinite(bot.health)) {
       if (Number.isFinite(previousHealth) && bot.health < previousHealth) lastDamage = Date.now()
@@ -131,6 +140,11 @@ function installSafety(manager, account, session, state) {
     const config = session.account
     if (!isWithinSchedule(config)) { state.safetyPause = 'schedule'; bot.end('Outside online hours'); return }
     if (!session.ready) return
+    if (config.lowHealthDisconnect && Number.isFinite(bot.health) && bot.health >= 0 && bot.health <= Number(config.lowHealthThreshold ?? 6)) { disconnect('low health'); return }
+    if (config.armorDisconnect && armorSlots.some(([, slot]) => {
+      const item = bot.inventory?.slots?.[slot], max = Number(item?.maxDurability), used = Number(item?.durabilityUsed ?? 0)
+      return Number.isFinite(max) && max > 0 && Number.isFinite(used) && 100 * (max - used) / max <= Number(config.armorDisconnectThreshold ?? 5)
+    })) { disconnect('low armor durability'); return }
     session.safetyBusy = true
     try {
       if (config.autoTotem || shouldLowHealthAct(config, bot.health)) {
@@ -143,13 +157,7 @@ function installSafety(manager, account, session, state) {
             if (totem) await bot.equip(totem, 'off-hand')
           })
         }
-        if (config.lowHealthDisconnect && shouldLowHealthAct(config, bot.health)) {
-          state.cooldownUntil = Date.now() + (config.lowHealthCooldownMinutes ?? 10) * 60000
-          state.safetyPause = 'health'
-          manager.emit('safety-disconnect', account.id, { health: bot.health, cooldownUntil: state.cooldownUntil })
-          bot.end('Low health protection')
-          return
-        }
+
       }
       if (config.autoArmor && !bot.currentWindow && !session.depositing && !session.inputClaims?.get('rightClick')?.size) {
         await manager.withInventoryAction(account.id, async () => {
@@ -196,6 +204,18 @@ function installSafety(manager, account, session, state) {
   }
   session.safetyTimer = setInterval(tick, 2000)
   session.safetyTimer.unref?.()
+  bot._client?.on('entity_status', packet => {
+    if (packet.entityStatus !== 35 || packet.entityId !== bot.entity?.id || !session.account.totemDisconnect || manager.sessions.get(account.id) !== session || !session.ready) return
+    popPending = true
+    clearTimeout(popTimer)
+    // The status packet can precede the inventory packet that consumes the totem.
+    popTimer = setTimeout(() => {
+      if (!popPending) return
+      popPending = false
+      if (session.account.totemDisconnect && !(bot.inventory?.slots || []).some(item => item?.name === 'totem_of_undying' && (item.count ?? 1) > 0)) disconnect('totems exhausted')
+    }, 500)
+    popTimer.unref?.()
+  })
   bot.on('health', tick)
   bot.inventory?.on?.('updateSlot', tick)
 }

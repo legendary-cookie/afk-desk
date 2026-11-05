@@ -104,7 +104,7 @@ const state = {
 }
 
 const el = Object.fromEntries([
-  'safety-ominous', 'safety-ominous-level', 'safety-ominous-cooldown', 'safety-apple', 'safety-apple-health', 'safety-apple-preference', 'safety-armor', 'safety-armor-threshold', 'safety-eat', 'safety-food', 'safety-food-priority', 'safety-food-golden', 'safety-auto-totem', 'safety-totem', 'safety-disconnect', 'safety-health', 'safety-cooldown', 'safety-schedule', 'safety-start', 'safety-end', 'safety-day-0', 'safety-day-1', 'safety-day-2', 'safety-day-3', 'safety-day-4', 'safety-day-5', 'safety-day-6',
+  'safety-ominous', 'safety-ominous-level', 'safety-ominous-cooldown', 'safety-apple', 'safety-apple-health', 'safety-apple-preference', 'safety-armor', 'safety-armor-threshold', 'safety-eat', 'safety-food', 'safety-food-priority', 'safety-food-golden', 'safety-auto-totem', 'safety-totem', 'safety-disconnect', 'safety-health', 'safety-cooldown', 'safety-armor-disconnect', 'safety-armor-disconnect-threshold', 'safety-totem-disconnect', 'safety-disconnect-notify', 'safety-schedule', 'safety-start', 'safety-end', 'safety-day-0', 'safety-day-1', 'safety-day-2', 'safety-day-3', 'safety-day-4', 'safety-day-5', 'safety-day-6',
   'account-list', 'account-count', 'add-account', 'import-profile-share', 'share-profile', 'open-settings', 'toggle-sidebar', 'open-command-center', 'command-dialog', 'command-search', 'command-results', 'close-command-center',
   'quick-scale', 'quick-scale-number', 'reset-scale', 'quick-scale-value', 'quick-workspace-design', 'quick-color-theme', 'workspace-design', 'color-theme', 'display-menu', 'console-menu',
   'update-banner', 'update-message', 'update-open', 'update-dismiss', 'check-updates', 'export-logs', 'update-check-enabled', 'streamer-quick-toggle', 'streamer-mode', 'macro-menu', 'settings-dialog', 'close-settings', 'start-with-windows', 'notifications-enabled', 'notify-attach-pov', 'notify-attach-inventory', 'notify-pov-offscreen', 'stagger-startup-connections', 'use-launcher-pack-cache', 'startup-connection-delay', 'save-settings', 'empty-state',
@@ -1000,6 +1000,10 @@ function openAccountDialog(account, importing = false) {
   el['safety-totem'].checked = account?.lowHealthTotem === true
   el['safety-disconnect'].checked = account?.lowHealthDisconnect === true
   el['safety-health'].value = account?.lowHealthThreshold ?? 6
+  el['safety-armor-disconnect'].checked = account?.armorDisconnect === true
+  el['safety-armor-disconnect-threshold'].value = account?.armorDisconnectThreshold ?? 5
+  el['safety-totem-disconnect'].checked = account?.totemDisconnect === true
+  el['safety-disconnect-notify'].checked = account?.safetyDisconnectNotify === true
   el['safety-cooldown'].value = account?.lowHealthCooldownMinutes ?? 10
   el['safety-schedule'].checked = account?.scheduleEnabled === true
   el['safety-start'].value = account?.scheduleStart ?? '00:00'
@@ -1106,6 +1110,10 @@ async function saveAccount(event) {
     lowHealthTotem: el['safety-totem'].checked,
     lowHealthDisconnect: el['safety-disconnect'].checked,
     lowHealthThreshold: Number(el['safety-health'].value),
+    armorDisconnect: el['safety-armor-disconnect'].checked,
+    armorDisconnectThreshold: Number(el['safety-armor-disconnect-threshold'].value),
+    totemDisconnect: el['safety-totem-disconnect'].checked,
+    safetyDisconnectNotify: el['safety-disconnect-notify'].checked,
     lowHealthCooldownMinutes: Number(el['safety-cooldown'].value),
     scheduleEnabled: el['safety-schedule'].checked,
     scheduleStart: el['safety-start'].value,

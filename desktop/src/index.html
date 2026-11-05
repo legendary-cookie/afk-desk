@@ -342,6 +342,10 @@
           <label class="check-row"><input id="safety-totem" type="checkbox" /> Equip a totem at low health</label>
           <label class="check-row"><input id="safety-disconnect" type="checkbox" /> Disconnect at low health</label>
           <label class="field"><span>Low-health threshold</span><input id="safety-health" type="number" min="0" max="20" value="6" /></label>
+          <label class="check-row"><input id="safety-armor-disconnect" type="checkbox" /> Disconnect when armor durability is low</label>
+          <label class="field"><span>Armor durability threshold (%)</span><input id="safety-armor-disconnect-threshold" type="number" min="0" max="100" value="5" /></label>
+          <label class="check-row"><input id="safety-totem-disconnect" type="checkbox" /> Disconnect when totems run out after a pop</label>
+          <label class="check-row"><input id="safety-disconnect-notify" type="checkbox" /> Notify on safety disconnect</label>
           <label class="field"><span>Reconnect cooldown (minutes)</span><input id="safety-cooldown" type="number" min="1" max="1440" value="10" /></label>
           <label class="check-row full"><input id="safety-schedule" type="checkbox" /> Limit online hours</label>
           <label class="field"><span>Start</span><input id="safety-start" type="time" value="00:00" /></label>

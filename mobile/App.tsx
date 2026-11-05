@@ -18,6 +18,7 @@ type Account = {
   antiAfk: boolean; antiAfkInterval: string; antiAfkChatEnabled: boolean; antiAfkChatMessage: string; antiAfkChatIntervalSec: string; autoReconnect: boolean; autoReconnectDelay: string;
   autoOminousBottle: boolean; autoOminousAmplifier: string; autoOminousCooldown: string; autoGoldenApple: boolean; autoGoldenAppleHealth: string; autoGoldenApplePreference: 'normal' | 'enchanted';
   autoArmor: boolean; autoArmorThreshold: string;
+  lowHealthDisconnect: boolean; lowHealthThreshold: string; armorDisconnect: boolean; armorDisconnectThreshold: string; totemDisconnect: boolean; safetyDisconnectNotify: boolean; lowHealthCooldownMinutes: string;
   autoReconnectMaxAttempts: string; connectOnStartup: boolean; joinMessage: string;
   serverChangeMessage: string; messageDelay: string; autoDepositToChest: boolean;
   autoDepositRange: string; autoDepositMode: 'immediate' | 'interval' | 'inventoryFull' | 'intervalOrFull';
@@ -40,6 +41,7 @@ const blankAccount = (): Account => ({
   antiAfk: true, antiAfkInterval: '45', antiAfkChatEnabled: false, antiAfkChatMessage: '', antiAfkChatIntervalSec: '300', autoReconnect: true, autoReconnectDelay: '5', autoReconnectMaxAttempts: '0',
   autoOminousBottle: false, autoOminousAmplifier: '0', autoOminousCooldown: '0', autoGoldenApple: false, autoGoldenAppleHealth: '10', autoGoldenApplePreference: 'normal',
   autoArmor: false, autoArmorThreshold: '5',
+  lowHealthDisconnect: false, lowHealthThreshold: '6', armorDisconnect: false, armorDisconnectThreshold: '5', totemDisconnect: false, safetyDisconnectNotify: false, lowHealthCooldownMinutes: '10',
   connectOnStartup: false, joinMessage: '', serverChangeMessage: '', messageDelay: '6',
   autoDepositToChest: false, autoDepositRange: '5', autoDepositMode: 'immediate', autoDepositInterval: '300',
   autoDepositFullThreshold: '0', serverChangeRetryMinutes: '30', proxy: {...EMPTY_PROXY},
@@ -51,6 +53,9 @@ const normalizeAccount = (account: Partial<Account>): Account => ({
   antiAfkChatIntervalSec: String(Math.max(10, Math.min(Math.round(Number(account.antiAfkChatIntervalSec) || 300), 86400))),
   autoOminousBottle: account.autoOminousBottle === true, autoOminousAmplifier: String(Math.max(0, Math.min(4, Number(account.autoOminousAmplifier ?? 0) || 0))), autoOminousCooldown: String(Math.max(0, Math.min(86400, Number(account.autoOminousCooldown ?? 0) || 0))),
   autoGoldenApple: account.autoGoldenApple === true, autoGoldenAppleHealth: String(Math.max(1, Math.min(20, Number(account.autoGoldenAppleHealth ?? 10) || 1))), autoGoldenApplePreference: account.autoGoldenApplePreference === 'enchanted' ? 'enchanted' : 'normal',
+  lowHealthDisconnect: account.lowHealthDisconnect === true, lowHealthThreshold: String(Math.max(0, Math.min(20, Number(account.lowHealthThreshold ?? 6) || 0))),
+  armorDisconnect: account.armorDisconnect === true, armorDisconnectThreshold: String(Math.max(0, Math.min(100, Number(account.armorDisconnectThreshold ?? 5) || 0))),
+  totemDisconnect: account.totemDisconnect === true, safetyDisconnectNotify: account.safetyDisconnectNotify === true, lowHealthCooldownMinutes: String(Math.max(1, Math.min(1440, Number(account.lowHealthCooldownMinutes ?? 10) || 1))),
   autoArmor: account.autoArmor === true,
   autoArmorThreshold: String(Math.max(0, Math.min(100, Number(account.autoArmorThreshold ?? 5) || 0))),
   autoDepositToChest: account.autoDepositToChest === true,
@@ -135,6 +140,7 @@ function App(): React.JSX.Element {
       if (type === 'log') updateSession(accountId, old => ({...old, logs: [...old.logs.slice(-499), {...payload, id: `${payload.at}-${Math.random()}`}]}));
       if (type === 'telemetry') updateSession(accountId, old => ({...old, telemetry: payload}));
       if (type === 'window') updateSession(accountId, old => ({...old, serverWindow: payload.open ? payload : null}));
+      if (type === 'safety-disconnect' && payload.notify) Alert.alert('Safety disconnect', `Disconnected: ${['low health', 'low armor durability', 'totems exhausted'].includes(payload.reason) ? payload.reason : 'safety protection'}.`);
       if (type === 'login-code') setLoginCode(payload);
       if (type === 'identity') {
         setAccounts(old => old.map(item => item.id === accountId ? {...item, minecraftName: payload.username || item.minecraftName, skinUrl: payload.skinUrl || item.skinUrl} : item));
@@ -462,6 +468,13 @@ function AccountModal({streamerMode, value, onClose, onSave, onDelete}: {streame
         <Toggle label="Prefer enchanted golden apples" value={draft.autoGoldenApplePreference === 'enchanted'} onChange={v => set('autoGoldenApplePreference', v ? 'enchanted' : 'normal')} />
         <Text style={styles.help}>Also eats an apple when recently damaged and Absorption or Regeneration is missing.</Text>
         <Toggle label="Auto armor" value={draft.autoArmor} onChange={v => set('autoArmor', v)} />
+        <Toggle label="Disconnect at low health" value={draft.lowHealthDisconnect} onChange={v => set('lowHealthDisconnect', v)} />
+        <Field label="Low health threshold (0–20)" value={draft.lowHealthThreshold} onChange={(v: string) => set('lowHealthThreshold', v)} keyboardType="number-pad" />
+        <Toggle label="Disconnect when armor durability is low" value={draft.armorDisconnect} onChange={v => set('armorDisconnect', v)} />
+        <Field label="Armor durability threshold (%)" value={draft.armorDisconnectThreshold} onChange={(v: string) => set('armorDisconnectThreshold', v)} keyboardType="number-pad" />
+        <Toggle label="Disconnect when totems run out after a pop" value={draft.totemDisconnect} onChange={v => set('totemDisconnect', v)} />
+        <Toggle label="Notify on safety disconnect" value={draft.safetyDisconnectNotify} onChange={v => set('safetyDisconnectNotify', v)} />
+        <Field label="Reconnect cooldown (minutes)" value={draft.lowHealthCooldownMinutes} onChange={(v: string) => set('lowHealthCooldownMinutes', v)} keyboardType="number-pad" />
         <Field label="Replace armor below durability (%)" value={draft.autoArmorThreshold} onChange={(v: string) => set('autoArmorThreshold', v)} keyboardType="number-pad" />
         <Toggle label="Auto reconnect" value={draft.autoReconnect} onChange={v => set('autoReconnect', v)} />
         <Field label="Reconnect delay (seconds)" value={draft.autoReconnectDelay} onChange={(v: string) => set('autoReconnectDelay', v)} keyboardType="number-pad" />

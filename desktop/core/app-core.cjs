@@ -792,7 +792,12 @@ class AppCore {
       this.healthEdges.set(account.id, h)
       this.previousInventoryFull.set(account.id, p.inventoryFull === true)
     }
-    if (event.type === 'safety-disconnect') this._send({ kind: 'lowHealth', accountId: account.id, accountName: name, message: `${name} disconnected for low health.`, payload: event.payload, at: event.at })
+    if (event.type === 'safety-disconnect' && event.payload.notify) {
+      const reason = { 'low health': 'low health', 'low armor durability': 'low armor durability', 'totems exhausted': 'totems exhausted' }[event.payload.reason] || 'safety protection'
+      const message = `${name} disconnected: ${reason}.`
+      this._send({ kind: 'lowHealth', accountId: account.id, accountName: name, message, payload: event.payload, at: event.at })
+      if (this.settingsStore.get().notificationsEnabled === true) this.platform.notify?.({ title: 'AFK Desk', body: message })
+    }
     if (event.type === 'death') this._send({ kind: 'death', accountId: account.id, accountName: name, message: `${name} died.`, at: event.at })
   }
 
@@ -1020,6 +1025,10 @@ function validateAccount(input, existing, secretBox, normalizeSkinUrl = defaultN
     autoEatAllowGoldenApples: (input?.autoEatAllowGoldenApples ?? existing?.autoEatAllowGoldenApples) === true,
     lowHealthTotem: (input?.lowHealthTotem ?? existing?.lowHealthTotem) === true,
     lowHealthDisconnect: (input?.lowHealthDisconnect ?? existing?.lowHealthDisconnect) === true,
+    armorDisconnect: (input?.armorDisconnect ?? existing?.armorDisconnect) === true,
+    armorDisconnectThreshold: bounded(input?.armorDisconnectThreshold ?? existing?.armorDisconnectThreshold, 0, 100, 5),
+    totemDisconnect: (input?.totemDisconnect ?? existing?.totemDisconnect) === true,
+    safetyDisconnectNotify: (input?.safetyDisconnectNotify ?? existing?.safetyDisconnectNotify) === true,
     lowHealthThreshold: bounded(input?.lowHealthThreshold ?? existing?.lowHealthThreshold, 0, 20, 6),
     lowHealthCooldownMinutes: bounded(input?.lowHealthCooldownMinutes ?? existing?.lowHealthCooldownMinutes, 1, 1440, 10),
     scheduleEnabled: (input?.scheduleEnabled ?? existing?.scheduleEnabled) === true,
