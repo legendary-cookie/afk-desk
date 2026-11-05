@@ -144,6 +144,7 @@ async function init() {
   const [accounts, settings, appVersion, versions] = await Promise.all([api.listAccounts(), api.getSettings(), api.getAppVersion(), api.getSupportedVersions()])
   state.accounts = accounts
   state.settings = settings
+  overviewEditor = window.createOverviewEditor({ dashboard: el.dashboard, settings: () => state.settings, accountId: () => state.selectedId, save: async layout => { await api.saveSettings({ ...state.settings, overviewLayout: layout }) }, report: error => toast(`Layout was not saved: ${cleanError(error)}`, 'error') })
   void api.checkUpdates().then(showUpdate).catch(() => {})
   state.supportedVersions = versions
   populateVersionOptions(versions)
@@ -356,7 +357,9 @@ function refreshStreamerDisplay() {
   if (el['logs-dialog'].open) void refreshPersistentLogs()
 }
 
+let overviewEditor
 function render() {
+  overviewEditor?.refresh()
   el['streamer-quick-toggle'].setAttribute('aria-pressed', String(state.settings.streamerMode === true))
   renderAccountList()
   const account = selectedAccount()
@@ -2128,6 +2131,7 @@ function setWorkspaceView(view = 'overview') {
   const resolved = ['overview', 'chat', 'inventory'].includes(view) ? view : 'overview'
   state.workspaceView = resolved
   el.dashboard.dataset.view = resolved
+  overviewEditor?.refresh()
   document.querySelectorAll('[data-workspace-view]').forEach((button) => button.classList.toggle('active', button.dataset.workspaceView === resolved))
   if (resolved === 'chat') requestAnimationFrame(() => el['chat-message'].focus())
   if (resolved === 'inventory') state.inventoryCollapsed = false

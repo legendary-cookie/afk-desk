@@ -945,3 +945,17 @@ dialog.macro-templates-dialog {
 .settings-tools { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
 .share-import-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 4px; }
 .share-import-row small { flex: 1 1 220px; opacity: .75; }
+/* The overview owns its grid; other workspace views retain their original layout. */
+.dashboard[data-view="overview"], .dashboard:not([data-view]) { display: block; height: auto; min-height: 100%; }
+.dashboard[data-view="overview"] > .workspace-grid, .dashboard[data-view="overview"] > .inventory-resizer, .dashboard:not([data-view]) > .workspace-grid, .dashboard:not([data-view]) > .inventory-resizer { display: none; }
+.overview-toolbar { margin: 8px 0; }
+.overview-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.overview-controls[hidden], .overview-module-bar[hidden], .overview-module-resize[hidden], .overview-modules[hidden], .overview-toolbar[hidden] { display: none; }
+.overview-controls span { color: var(--muted); font-size: 11px; }
+.overview-modules { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); grid-auto-rows: 52px; gap: 8px; }
+.overview-module { min-width: 0; min-height: 0; position: relative; display: flex; flex-direction: column; }
+.overview-module > .panel, .overview-module > .macro-section { flex: 1; min-height: 0; overflow: auto; }
+.overview-module > .macro-section { background: var(--surface); border: 1px solid var(--border); padding: 12px; }
+.overview-module-bar { display: flex; background: var(--surface-raised); }
+.overview-module-handle { flex: 1; text-align: left; cursor: grab; touch-action: none; }
+.overview-module-resize { position: absolute; right: 0; bottom: 0; cursor: nwse-resize; touch-action: none; z-index: 2; }

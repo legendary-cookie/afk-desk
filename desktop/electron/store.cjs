@@ -1,5 +1,6 @@
 const fs = require('node:fs')
 const path = require('node:path')
+const overviewLayout = require('../src/overview-layout.js')
 
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -152,7 +153,8 @@ function normalizeSettings(input = {}) {
     povShowHud: input?.povShowHud !== false,
     wallFps: Number.isFinite(Number(input?.wallFps)) && input?.wallFps != null ? Math.max(0.2, Math.min(5, Number(input.wallFps))) : 1,
     wallMaxLive: Number.isFinite(Number(input?.wallMaxLive)) && input?.wallMaxLive != null ? Math.max(0, Math.min(12, Math.round(Number(input.wallMaxLive)))) : 4,
-    macros: normalizeMacros(input?.macros)
+    macros: normalizeMacros(input?.macros),
+    overviewLayout: overviewLayout.normalizeSettings(input?.overviewLayout)
   }
 }
 
