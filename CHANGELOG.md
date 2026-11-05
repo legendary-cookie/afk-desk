@@ -2,6 +2,13 @@
 
 For the complete desktop history from 0.1.0 onward, including source tags, installers, and comparisons, see [HISTORY.md](HISTORY.md).
 
+## Desktop and Android 0.11.0-beta.5 — 2026-11-06
+
+### Fixed
+
+- Auto Ominous Bottle (and the other safety actions) could stall silently behind another inventory action such as auto-deposit. Every safety wait is now time-limited, safety actions get priority, and a new "Safety status" line in account details shows the last action or why it is waiting.
+- The overview fits the window again: compact modules, the inventory at its natural height, and the minimap back inside Movement. Scoreboard, effects, boss bars and next runs are opt-in modules with clear empty states. "Next runs" moved from the sidebar to account details. Saved layouts reset once to the new default.
+
 ## Desktop and Android 0.11.0-beta.4 — 2026-11-06
 
 ### Added
