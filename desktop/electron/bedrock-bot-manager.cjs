@@ -5,8 +5,7 @@ const minecraftData = require('minecraft-data')
 const { MacroActionError } = require('./macro/contract.cjs')
 const SUPPORTED_VERSION = minecraftData.versions.bedrock.filter((entry) => entry.releaseType === 'release').sort((a, b) => b.version - a.version)[0].minecraftVersion
 const EYE_HEIGHT = 1.62
-const STATIONARY_INPUTS = new Set(['jump', 'sneak', 'sprint', 'leftClick', 'forward', 'back', 'left', 'right'])
-const WALK_INPUTS = new Set(['forward', 'back', 'left', 'right'])
+const STATIONARY_INPUTS = new Set(['jump', 'sneak', 'sprint', 'leftClick'])
 
 function raknetBackend () {
   try { require('raknet-native'); return 'raknet-native' } catch { return 'jsp-raknet' }
@@ -245,17 +244,8 @@ class BedrockBotManager {
       start_sprinting: held.sprint && !previous.sprint, stop_sprinting: !held.sprint && Boolean(previous.sprint),
       handled_teleport: session.handledTeleport
     }
-    const forward = Number(Boolean(session.inputClaims.get('forward')?.size)) - Number(Boolean(session.inputClaims.get('back')?.size))
-    const sideways = Number(Boolean(session.inputClaims.get('left')?.size)) - Number(Boolean(session.inputClaims.get('right')?.size))
-    const magnitude = Math.hypot(forward, sideways) || 1
-    const move = { x: sideways / magnitude, z: forward / magnitude }
-    const angle = session.yaw * Math.PI / 180
-    const speed = session.serverAuthoritative ? 0.1 : 0.5
-    const delta = { x: (move.x * Math.cos(angle) - move.z * Math.sin(angle)) * speed, y: 0, z: (move.x * Math.sin(angle) + move.z * Math.cos(angle)) * speed }
-    delta.x ||= 0; delta.z ||= 0
-    session.position.x += delta.x
-    session.position.z += delta.z
-    Object.assign(inputData, { up: forward > 0, down: forward < 0, left: sideways > 0, right: sideways < 0 })
+    const move = { x: 0, z: 0 }
+    const delta = { x: 0, y: 0, z: 0 }
     const position = eyePosition(session.position)
     const rotation = { yaw: session.yaw, pitch: session.pitch, head_yaw: session.yaw }
     session.tick += 1n
@@ -590,13 +580,20 @@ class BedrockBotManager {
     if (enabled && session.ready) this.scheduleDeposit(id, session, 0)
   }
   scheduleDeposit(id, session, delay = 5000) {
-    if (!session.ready || session.closing || !session.account.autoDepositToChest || this.sessions.get(id) !== session) return
-    session.depositTimer = this.timers.setTimeout(async () => {
+    if (!session.ready || session.closing || !session.account.autoDepositToChest || this.sessions.get(id) !== session || session.depositTimer != null || session.depositActive) return
+    const revision = session.depositRevision
+    const timer = this.timers.setTimeout(async () => {
+      if (session.depositTimer !== timer || session.depositRevision !== revision || this.sessions.get(id) !== session) return
       session.depositTimer = null
+      session.depositActive = true
       try { if (bedrockShouldDeposit(session)) await this.autoDeposit(id, session) }
-      catch (error) { if (session.account.autoDepositToChest && session.ready) this.emit('log', id, { kind: 'error', message: `Auto-deposit failed: ${error.message}`, at: Date.now() }) }
-      this.scheduleDeposit(id, session)
+      catch (error) { if (session.depositRevision === revision && session.account.autoDepositToChest && session.ready) this.emit('log', id, { kind: 'error', message: `Auto-deposit failed: ${error.message}`, at: Date.now() }) }
+      finally {
+        session.depositActive = false
+        this.scheduleDeposit(id, session, session.depositRevision === revision ? 5000 : 0)
+      }
     }, delay)
+    session.depositTimer = timer
   }
   async autoDeposit(id, session) {
     const revision = session.depositRevision
@@ -611,15 +608,7 @@ class BedrockBotManager {
     const distance = () => Math.hypot(target.x + 0.5 - session.position.x, target.y + 0.5 - (session.position.y + EYE_HEIGHT), target.z + 0.5 - session.position.z)
     let requestedWindow = false
     try {
-      if (distance() > 4.5) {
-        if (distance() > 16 || Math.abs(target.y + 0.5 - (session.position.y + EYE_HEIGHT)) > 4) throw new Error('Deposit target is out of reach; move closer.')
-        const dx = target.x + 0.5 - session.position.x, dz = target.z + 0.5 - session.position.z
-        this.lookAbsolute(id, Math.atan2(-dx, dz), 0)
-        this.claimInput(id, 'forward', 'autoDeposit')
-        for (let i = 0; i < 100 && distance() > 4.5; i++) { await wait(100); check() }
-        this.releaseOwner(id, 'autoDeposit')
-        if (distance() > 4.5) throw new Error('Deposit target is out of reach; move closer.')
-      }
+      if (distance() > 4.5) throw new Error('Deposit target must already be within reach; move closer.')
       check()
       const item = session.rawInventory[session.selectedHotbarSlot] || { network_id: 0 }
       requestedWindow = true
@@ -708,15 +697,13 @@ class BedrockBotManager {
     if (!session?.ready || session.closing || !session.position || session.account.antiAfk === false) return
     for (const owners of session.inputClaims.values()) if ([...owners].some((owner) => owner.startsWith('macro:'))) return
     const settings = session.antiAfkSettings
-    const actions = ['jump', 'look', 'sneak', 'swing', 'walk'].filter((action) => settings[action])
+    const actions = ['jump', 'look', 'sneak'].filter((action) => settings[action])
     if (!actions.length) return
     const action = actions[Math.min(actions.length - 1, Math.floor(this.random() * actions.length))]
     if (action === 'look') this.lookAbsolute(id, (session.yaw + (this.random() < 0.5 ? -1 : 1) * settings.lookDegrees) * Math.PI / 180, session.pitch * Math.PI / 180)
     else {
-      const input = action === 'swing' ? 'leftClick' : action === 'walk' ? 'forward' : action
+      const input = action
       this.claimInput(id, input, 'antiAfk')
-      // Swing once per cycle, through the same ownership used by held clicks.
-      if (action === 'swing') { this.swingArm(id); this.releaseInput(id, input, 'antiAfk'); return }
       const timer = this.timers.setTimeout(() => {
         if (!session.antiAfkActionTimers.delete(timer) || this.sessions.get(id) !== session || session.closing) return
         this.releaseInput(id, input, 'antiAfk')
@@ -785,7 +772,7 @@ function bedrockShouldDeposit(session, now = Date.now()) {
 function inventoryWireSlot(value) { const slot = Number(value); if (!Number.isInteger(slot) || slot < 9 || slot > 44) throw new Error('Invalid player inventory slot.'); return slot >= 36 ? slot - 36 : slot }
 function assertUnlocked(session, slot) { if (session.itemLocks.has(slot) || (session.account.lockedInventorySlots || []).map(Number).includes(slot)) throw new Error('That inventory stack is locked.') }
 function stackSlot(slot, item) { const id = item?.stack_id; return { slot_type: { container_id: 'hotbar_and_inventory' }, slot, stack_id: Number(typeof id === 'object' ? id?.id : id) || 0 } }
-function bedrockCapabilities() { return { chat: true, reconnect: true, position: true, players: true, health: true, hunger: true, death: true, autoRespawn: true, serverSwitch: true, inventoryView: true, itemLocksStored: true, forms: true, containerWindows: true, movement: 'stationary', antiAfk: ['look', 'jump', 'sneak', 'swing'], inventoryActions: false, worldBlocks: false, macros: 'chat/wait/notify only' } }
+function bedrockCapabilities() { return { chat: true, reconnect: true, position: true, players: true, health: true, hunger: true, death: true, autoRespawn: true, serverSwitch: true, inventoryView: true, itemLocksStored: true, forms: true, containerWindows: true, movement: 'stationary', antiAfk: ['look', 'jump', 'sneak'], inventoryActions: false, worldBlocks: false, macros: 'chat/wait/notify only' } }
 function assertStationaryInput(input) {
   if (!STATIONARY_INPUTS.has(input)) throw new MacroActionError('UNSUPPORTED', `Bedrock input ${input} is not supported yet`)
 }

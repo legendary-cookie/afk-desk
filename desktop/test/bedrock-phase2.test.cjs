@@ -62,17 +62,17 @@ test('owners are sets, releasing one preserves held flags, and releaseOwner is s
   assert.doesNotThrow(() => h.manager.releaseOwner('phase2', 'macro:one'))
 })
 
-test('walking claims produce bounded movement and stop on release', () => {
+test('walking inputs are rejected and movement packets remain stationary', () => {
   const h = setup()
-  h.manager.claimInput('phase2', 'forward', 'macro:walk')
-  h.timers.advance(50)
-  const first = h.packets('player_auth_input').at(-1)
-  assert.equal(first.move_vector.z, 1)
-  assert.ok(Math.abs(Math.hypot(first.delta.x, first.delta.z) - 0.1) < 1e-9)
-  h.manager.releaseOwner('phase2', 'macro:walk')
-  h.timers.advance(50)
+  const initial = { ...h.session.position }
+  for (const input of ['forward', 'back', 'left', 'right']) {
+    assert.throws(() => h.manager.claimInput('phase2', input, 'macro:walk'), { code: 'UNSUPPORTED' })
+    assert.throws(() => h.manager.setControlState('phase2', input, true), { code: 'UNSUPPORTED' })
+  }
+  h.timers.advance(100)
+  assert.deepEqual(h.session.position, initial)
   assert.deepEqual(h.packets('player_auth_input').at(-1).delta, { x: 0, y: 0, z: 0 })
-  assert.throws(() => h.manager.claimInput('phase2', 'rightClick', 'manual'), { code: 'UNSUPPORTED' })
+  assert.deepEqual(h.packets('player_auth_input').at(-1).move_vector, { x: 0, z: 0 })
   h.manager.disconnect('phase2')
 })
 
@@ -192,12 +192,11 @@ test('anti-AFK pauses for any macro input, cancels its current hold, and resumes
   h.manager.disconnect('phase2'); assert.equal(h.timers.items.size, 0)
 })
 
-test('anti-AFK jump, swing, and look execute only the selected enabled action', () => {
-  for (const action of ['Jump', 'Swing', 'Look']) {
+test('anti-AFK jump and look execute only the selected enabled action', () => {
+  for (const action of ['Jump', 'Look']) {
     const h = setup({ antiAfk: true, antiAfkInterval: 2, antiAfkJump: false, antiAfkLook: false, ['antiAfk' + action]: true })
     h.timers.advance(2050)
     if (action === 'Jump') assert.equal(h.packets('player_auth_input').some((p) => p.input_data.start_jumping), true)
-    if (action === 'Swing') assert.equal(h.packets('animate').length, 1)
     if (action === 'Look') assert.notEqual(h.packets('player_auth_input').at(-1).yaw, 20)
     h.manager.disconnect('phase2'); assert.equal(h.timers.items.size, 0)
   }
@@ -302,17 +301,17 @@ test('health-triggered respawn keeps the Phase 1 wire position after storing fee
   h.manager.disconnect('phase2')
 })
 
-test('advertises stationary movement and the four supported anti-AFK actions', () => {
+test('advertises stationary movement and the supported anti-AFK actions', () => {
   assert.equal(bedrockCapabilities().movement, 'stationary')
-  assert.deepEqual(bedrockCapabilities().antiAfk, ['look', 'jump', 'sneak', 'swing'])
+  assert.deepEqual(bedrockCapabilities().antiAfk, ['look', 'jump', 'sneak'])
 })
 
-test('anti-AFK walk claims forward briefly and releases it', () => {
-  const h = setup({ antiAfk: true, antiAfkInterval: 2, antiAfkJump: false, antiAfkLook: false, antiAfkWalk: true })
+test('anti-AFK ignores walking and swing settings', () => {
+  const h = setup({ antiAfk: true, antiAfkInterval: 2, antiAfkJump: false, antiAfkLook: false, antiAfkWalk: true, antiAfkSwing: true })
+  const initial = { ...h.session.position }
   h.timers.advance(2050)
-  assert.deepEqual(h.manager.inputOwners('phase2', 'forward'), ['antiAfk'])
-  assert.equal(h.packets('player_auth_input').at(-1).move_vector.z, 1)
-  h.timers.advance(250)
   assert.deepEqual(h.manager.inputOwners('phase2', 'forward'), [])
+  assert.deepEqual(h.session.position, initial)
+  assert.equal(h.packets('animate').length, 0)
   h.manager.disconnect('phase2')
 })

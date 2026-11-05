@@ -29,19 +29,40 @@ test('Bedrock auto deposit reports missing window and distant target', async () 
   for (let i = 0; i < 50; i++) { h.timers.advance(100); await flush() }
   assert.match(h.events.filter(e => e[0] === 'log').at(-1)[2].message, /No container window opened/)
   h.session.account.bedrockDepositTarget = { x: 100, y: 65, z: 4 }
-  await assert.rejects(h.manager.autoDeposit('phase2', h.session), /out of reach/)
+  await assert.rejects(h.manager.autoDeposit('phase2', h.session), /within reach/)
   h.manager.disconnect('phase2')
 })
-test('Bedrock deposit walks toward a nearby target and releases movement when disabled', async () => {
+test('Bedrock deposit requires a target already within reach', async () => {
   const h = setup({ autoDepositToChest: true, bedrockDepositTarget: { x: 1, y: 65, z: 10 } })
   h.client.emit('inventory_content', { window_id: 0, input: [item(1, 5, 10)] })
-  h.timers.advance(0); assert.deepEqual(h.manager.inputOwners('phase2', 'forward'), ['autoDeposit'])
-  h.timers.advance(1000); await flush()
-  assert.ok(h.session.position.z > 3.4567)
-  h.manager.setAutoDeposit('phase2', false)
+  const initial = { ...h.session.position }
+  h.timers.advance(0); await flush()
+  assert.match(h.events.filter(e => e[0] === 'log').at(-1)[2].message, /already be within reach/)
   assert.deepEqual(h.manager.inputOwners('phase2', 'forward'), [])
-  h.timers.advance(100); await flush()
+  h.timers.advance(1000)
+  assert.deepEqual(h.session.position, initial)
   assert.equal(h.packets('inventory_transaction').length, 0)
+  h.manager.disconnect('phase2')
+})
+
+test('settings changes during a deposit leave one polling chain and no overlapping tasks', async () => {
+  const h = setup({ autoDepositToChest: true })
+  let finish
+  let calls = 0
+  h.manager.autoDeposit = () => { calls++; return new Promise(resolve => { finish = resolve }) }
+  h.timers.advance(0)
+  assert.equal(calls, 1)
+  h.manager.setAutoDeposit('phase2', true)
+  h.manager.setAutoDeposit('phase2', true)
+  h.timers.advance(10000)
+  assert.equal(calls, 1)
+  finish(); await flush()
+  assert.ok(h.session.depositTimer != null)
+  h.manager.scheduleDeposit('phase2', h.session, 0)
+  h.timers.advance(0)
+  assert.equal(calls, 2)
+  finish(); await flush()
+  assert.equal([...h.timers.items.values()].filter(t => t.delay === 5000).length, 1)
   h.manager.disconnect('phase2')
 })
 test('Bedrock deposit honors interval and full triggers', async () => {
