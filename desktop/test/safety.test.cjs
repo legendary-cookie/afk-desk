@@ -67,3 +67,30 @@ for (const file of ['../electron/safety.cjs', '../../mobile/nodejs-assets/nodejs
     clearInterval(session.safetyTimer)
   })
 }
+for (const file of ['../electron/safety.cjs', '../../mobile/nodejs-assets/nodejs-project/safety.cjs']) {
+  const { pickFood, installSafety } = require(file)
+  test(`${file}: food preference and golden apple opt-in`, () => {
+    const foods = { bread: { foodPoints: 5 }, steak: { foodPoints: 8 }, golden_apple: { foodPoints: 20 } }
+    const items = [{ name: 'bread', slot: 36 }, { name: 'steak', slot: 9 }, { name: 'golden_apple', slot: 10 }]
+    assert.equal(pickFood(items, foods, [], 'nutrition').name, 'steak')
+    assert.equal(pickFood(items, foods, [], 'hotbar').name, 'bread')
+    assert.equal(pickFood(items, foods, [], 'nutrition', true).name, 'golden_apple')
+  })
+  test(`${file}: auto totem re-equips on inventory change`, async () => {
+    const { EventEmitter } = require('node:events')
+    const bot = new EventEmitter(), inventory = new EventEmitter(), slots = []
+    slots[9] = { name: 'totem_of_undying', slot: 9 }
+    Object.assign(inventory, { slots, items: () => slots.filter(Boolean) })
+    let equipped = 0
+    Object.assign(bot, { health: 20, inventory, async equip(item) { equipped++; slots[45] = item; slots[9] = null } })
+    const account = { id: 'a', autoTotem: true }, session = { bot, account, ready: true }
+    const manager = { sessions: new Map([['a', session]]), emit() {}, async withInventoryAction(id, fn) { await fn() } }
+    installSafety(manager, account, session, {})
+    inventory.emit('updateSlot'); await new Promise(resolve => setImmediate(resolve))
+    assert.equal(equipped, 1)
+    slots[45] = null; slots[9] = { name: 'totem_of_undying', slot: 9 }
+    inventory.emit('updateSlot'); await new Promise(resolve => setImmediate(resolve))
+    assert.equal(equipped, 2)
+    clearInterval(session.safetyTimer)
+  })
+}

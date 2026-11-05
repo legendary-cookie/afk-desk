@@ -3,12 +3,12 @@
 function shouldEat(account, bot) {
   return account.autoEat === true && Number.isFinite(bot.food) && bot.food <= (account.autoEatThreshold ?? 14) && !bot.currentWindow
 }
-function pickFood(items, foods, locked = []) {
+function pickFood(items, foods, locked = [], priority = 'hotbar', allowGoldenApples = false) {
   const locks = new Set(locked.map(Number))
-  return (items || []).filter(item => !locks.has(Number(item.slot)) && foods?.[item.name]).sort((a, b) => {
+  return (items || []).filter(item => !locks.has(Number(item.slot)) && foods?.[item.name] && (allowGoldenApples || !['golden_apple', 'enchanted_golden_apple'].includes(item.name))).sort((a, b) => {
     const hot = (item) => item.slot >= 36 && item.slot <= 44 ? 1 : 0
     const value = (item) => Number(foods[item.name].foodPoints || 0) + Number(foods[item.name].saturation || 0)
-    return hot(b) - hot(a) || value(b) - value(a)
+    return priority === 'nutrition' ? value(b) - value(a) || hot(b) - hot(a) : hot(b) - hot(a) || value(b) - value(a)
   })[0] || null
 }
 function shouldLowHealthAct(account, health) {
@@ -49,17 +49,17 @@ function installSafety(manager, account, session, state) {
     if (!session.ready) return
     session.safetyBusy = true
     try {
-      if (shouldLowHealthAct(config, bot.health)) {
-        if (config.lowHealthTotem && !bot.currentWindow && !session.depositing && !session.inputClaims?.get('rightClick')?.size) {
+      if (config.autoTotem || shouldLowHealthAct(config, bot.health)) {
+        if ((config.autoTotem || config.lowHealthTotem && shouldLowHealthAct(config, bot.health)) && !bot.currentWindow && !session.depositing && !session.inputClaims?.get('rightClick')?.size) {
           await manager.withInventoryAction(account.id, async () => {
             const current = session.account
             const locks = new Set((current.lockedInventorySlots || []).map(Number))
-            if (manager.sessions.get(account.id) !== session || bot.currentWindow || session.depositing || session.inputClaims?.get('rightClick')?.size || !shouldLowHealthAct(current, bot.health) || !current.lowHealthTotem || locks.has(45) || bot.inventory?.slots?.[45]?.name === 'totem_of_undying') return
+            if (manager.sessions.get(account.id) !== session || bot.currentWindow || session.depositing || session.inputClaims?.get('rightClick')?.size || !(current.autoTotem || current.lowHealthTotem && shouldLowHealthAct(current, bot.health)) || locks.has(45) || bot.inventory?.slots?.[45]?.name === 'totem_of_undying') return
             const totem = bot.inventory?.items?.().find(item => item.name === 'totem_of_undying' && !locks.has(Number(item.slot)))
             if (totem) await bot.equip(totem, 'off-hand')
           })
         }
-        if (config.lowHealthDisconnect) {
+        if (config.lowHealthDisconnect && shouldLowHealthAct(config, bot.health)) {
           state.cooldownUntil = Date.now() + (config.lowHealthCooldownMinutes ?? 10) * 60000
           state.safetyPause = 'health'
           manager.emit('safety-disconnect', account.id, { health: bot.health, cooldownUntil: state.cooldownUntil })
@@ -72,7 +72,7 @@ function installSafety(manager, account, session, state) {
           const current = session.account
           if (manager.sessions.get(account.id) !== session || session.depositing || !shouldEat(current, bot) || session.inputClaims?.get('rightClick')?.size) return
           const locks = new Set((current.lockedInventorySlots || []).map(Number))
-          const food = pickFood(bot.inventory?.items?.(), bot.registry?.foodsByName, [...locks])
+          const food = pickFood(bot.inventory?.items?.(), bot.registry?.foodsByName, [...locks], current.autoEatPriority, current.autoEatAllowGoldenApples)
           if (!food) return
           const source = Number(food.slot)
           const target = source >= 36 && source <= 44 ? source : Array.from({ length: 9 }, (_, i) => i + 36).find(slot => !locks.has(slot))
@@ -103,5 +103,6 @@ function installSafety(manager, account, session, state) {
   session.safetyTimer = setInterval(tick, 2000)
   session.safetyTimer.unref?.()
   bot.on('health', tick)
+  bot.inventory?.on?.('updateSlot', tick)
 }
 module.exports = { shouldEat, pickFood, shouldLowHealthAct, isWithinSchedule, deferSafety, installSafety }

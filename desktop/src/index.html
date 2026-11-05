@@ -327,6 +327,9 @@
           <div class="form-section full"><h3>Safety</h3><p>Safety actions are off by default. Online hours use this device's local time.</p></div>
           <label class="check-row"><input id="safety-eat" type="checkbox" /> Auto-eat</label>
           <label class="field"><span>Eat at food level</span><input id="safety-food" type="number" min="0" max="20" value="14" /></label>
+          <label class="field"><span>Food priority</span><select id="safety-food-priority"><option value="hotbar">Hotbar first</option><option value="nutrition">Most nutritious first</option></select></label>
+          <label class="check-row"><input id="safety-food-golden" type="checkbox" /> Allow golden apples as normal food</label>
+          <label class="check-row"><input id="safety-auto-totem" type="checkbox" /> Keep a totem in offhand</label>
           <label class="check-row"><input id="safety-totem" type="checkbox" /> Equip a totem at low health</label>
           <label class="check-row"><input id="safety-disconnect" type="checkbox" /> Disconnect at low health</label>
           <label class="field"><span>Low-health threshold</span><input id="safety-health" type="number" min="0" max="20" value="6" /></label>
