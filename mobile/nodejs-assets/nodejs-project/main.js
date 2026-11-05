@@ -1,7 +1,7 @@
 const path = require('node:path')
 const bridge = require('rn-bridge')
 const { BotManager } = require('./bot-manager.cjs')
-const { validateCommand, isRequestId } = require('./bridge-command.cjs')
+const { validateCommand, isRequestId, getUpcomingRuns } = require('./bridge-command.cjs')
 
 const manager = new BotManager({
   profilesPath: path.join(bridge.app.datadir(), 'minecraft-profiles'),
@@ -31,6 +31,7 @@ bridge.channel.on('engine-command', async (rawCommand) => {
       case 'window-close': manager.closeWindow(accountId); break
       case 'set-auto-deposit': manager.setAutoDeposit(accountId, enabled, range, config); break
       case 'update-account-config': manager.updateAccountConfig(account); break
+      case 'getUpcomingRuns': result = getUpcomingRuns(manager, accountId); break
       case 'shutdown':
         for (const id of [...manager.sessions.keys()]) manager.disconnect(id)
         break

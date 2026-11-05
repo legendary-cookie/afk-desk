@@ -20,6 +20,8 @@ type Account = {
   serverChangeMessage: string; messageDelay: string; autoDepositToChest: boolean;
   autoDepositRange: string; autoDepositMode: 'immediate' | 'interval' | 'inventoryFull' | 'intervalOrFull';
   autoDepositInterval: string; autoDepositFullThreshold: string; serverChangeRetryMinutes: string; proxy: ProxyConfig;
+  autoEat?: boolean; autoEatThreshold?: number; lowHealthTotem?: boolean; lowHealthDisconnect?: boolean; lowHealthThreshold?: number; lowHealthCooldownMinutes?: number;
+  scheduleEnabled?: boolean; scheduleStart?: string; scheduleEnd?: string; scheduleDays?: number[];
 };
 type ChatClick = {action: 'open_url' | 'run_command' | 'suggest_command' | 'copy_to_clipboard'; value: string};
 type Segment = {text: string; color?: string; bold?: boolean; italic?: boolean; underlined?: boolean; strikethrough?: boolean; hover?: string; click?: ChatClick};
@@ -39,6 +41,7 @@ const blankAccount = (): Account => ({
   connectOnStartup: false, joinMessage: '', serverChangeMessage: '', messageDelay: '6',
   autoDepositToChest: false, autoDepositRange: '5', autoDepositMode: 'immediate', autoDepositInterval: '300',
   autoDepositFullThreshold: '0', serverChangeRetryMinutes: '30', proxy: {...EMPTY_PROXY},
+  scheduleStart: '00:00', scheduleEnd: '00:00',
 });
 
 const normalizeAccount = (account: Partial<Account>): Account => ({
@@ -77,6 +80,7 @@ function App(): React.JSX.Element {
   const [selectedId, setSelectedId] = useState('');
   const [sessions, setSessions] = useState<Record<string, Session>>({});
   const [engineReady, setEngineReady] = useState(false);
+  const [upcomingRuns, setUpcomingRuns] = useState<{kind: string; at: number}[]>([]);
   const [editing, setEditing] = useState<Account | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [chat, setChat] = useState('');
@@ -100,6 +104,15 @@ function App(): React.JSX.Element {
 
   const selected = accounts.find(account => account.id === selectedId) || accounts[0];
   const session = selected ? sessions[selected.id] || {status: 'offline', detail: 'Not connected', logs: []} : undefined;
+
+  useEffect(() => {
+    if (!engineReady || !selected?.id) { setUpcomingRuns([]); return; }
+    let active = true;
+    const refresh = () => engineCommand<{kind: string; at: number}[]>({action: 'getUpcomingRuns', accountId: selected.id}).then(runs => { if (active) setUpcomingRuns(runs); }).catch(() => { if (active) setUpcomingRuns([]); });
+    refresh();
+    const timer = setInterval(refresh, 2000);
+    return () => { active = false; clearInterval(timer); };
+  }, [engineReady, selected?.id]);
 
   const updateSession = useCallback((id: string, updater: (old: Session) => Session) => {
     setSessions(old => ({...old, [id]: updater(old[id] || {status: 'offline', detail: 'Not connected', logs: []})}));
@@ -322,6 +335,8 @@ function App(): React.JSX.Element {
         <Stat label="Coordinates" value={session?.telemetry?.position ? `${session.telemetry.position.x}, ${session.telemetry.position.y}, ${session.telemetry.position.z}` : '—'} wide />
         <Stat label="Nearest container" value={session?.telemetry?.nearestChest ? `${session.telemetry.nearestChest.type.replace(/_/g, ' ')} · ${session.telemetry.nearestChest.x}, ${session.telemetry.nearestChest.y}, ${session.telemetry.nearestChest.z} · ${session.telemetry.nearestChest.distance} blocks` : `No visible container within ${selected.autoDepositRange || '5'} blocks`} wide />
       </View>
+      <View style={styles.panel}><Text style={styles.panelTitle}>Next runs</Text>{upcomingRuns.length ? upcomingRuns.map((run, index) => <Text key={`${run.kind}-${run.at}-${index}`} style={styles.muted}>{run.kind} · {new Date(run.at).toLocaleTimeString()}</Text>) : <Text style={styles.muted}>No scheduled runs.</Text>}</View>
+      <View style={styles.panel}><Text style={styles.panelTitle}>Accounts status</Text>{accounts.map((account, index) => { const current = sessions[account.id]; const position = current?.telemetry?.position; return <View key={account.id} style={styles.item}><Text style={styles.itemName}>{streamerMode ? `Account ${index + 1}` : account.minecraftName || account.username}</Text><Text style={styles.muted}>{mask(account.host)} · {current?.status || 'offline'} · HP {current?.telemetry?.health ?? '—'} · Food {current?.telemetry?.food ?? '—'} · {position ? `${position.x}, ${position.y}, ${position.z}` : '—'}</Text></View>; })}</View>
 
       <View style={styles.panel}><View style={styles.panelHeader}><Text style={styles.panelTitle}>Movement</Text><Text style={styles.muted}>Quick taps</Text></View>
         <View style={styles.moveGrid}><View /><Move label="W" onPress={() => action('move', 'forward')} /><View /><Move label="A" onPress={() => action('move', 'left')} /><Move label="S" onPress={() => action('move', 'back')} /><Move label="D" onPress={() => action('move', 'right')} /></View>
@@ -445,6 +460,17 @@ function AccountModal({streamerMode, value, onClose, onSave, onDelete}: {streame
         <Field label="Port" value={draft.port} onChange={(v: string) => set('port', v)} keyboardType="number-pad" />
         <VersionField value={draft.version} onChange={(v: string) => set('version', v)} />
         <Text style={styles.sectionTitle}>Automation</Text>
+        <Text style={styles.sectionTitle}>Safety</Text>
+        <Toggle label="Auto eat" value={draft.autoEat === true} onChange={v => set('autoEat', v)} />
+        <Field label="Eat at food level" value={String(draft.autoEatThreshold ?? 14)} onChange={(v: string) => set('autoEatThreshold', Number(v))} keyboardType="number-pad" />
+        <Toggle label="Equip totem on low health" value={draft.lowHealthTotem === true} onChange={v => set('lowHealthTotem', v)} />
+        <Toggle label="Disconnect on low health" value={draft.lowHealthDisconnect === true} onChange={v => set('lowHealthDisconnect', v)} />
+        <Field label="Low health threshold" value={String(draft.lowHealthThreshold ?? 6)} onChange={(v: string) => set('lowHealthThreshold', Number(v))} keyboardType="number-pad" />
+        <Field label="Low health cooldown (minutes)" value={String(draft.lowHealthCooldownMinutes ?? 10)} onChange={(v: string) => set('lowHealthCooldownMinutes', Number(v))} keyboardType="number-pad" />
+        <Toggle label="Limit online hours" value={draft.scheduleEnabled === true} onChange={v => set('scheduleEnabled', v)} />
+        <Field label="Start time (HH:MM)" value={draft.scheduleStart ?? '00:00'} onChange={(v: string) => set('scheduleStart', v)} />
+        <Field label="End time (HH:MM)" value={draft.scheduleEnd ?? '00:00'} onChange={(v: string) => set('scheduleEnd', v)} />
+        {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day, index) => <Toggle key={day} label={day} value={(draft.scheduleDays ?? [0, 1, 2, 3, 4, 5, 6]).includes(index)} onChange={v => set('scheduleDays', v ? [...(draft.scheduleDays ?? [0, 1, 2, 3, 4, 5, 6]), index] : (draft.scheduleDays ?? [0, 1, 2, 3, 4, 5, 6]).filter(dayIndex => dayIndex !== index))} />)}
         <Toggle label="Join when the app starts" value={draft.connectOnStartup} onChange={v => set('connectOnStartup', v)} />
         <Toggle label="Auto reconnect" value={draft.autoReconnect} onChange={v => set('autoReconnect', v)} />
         <Field label="Reconnect delay (seconds)" value={draft.autoReconnectDelay} onChange={(v: string) => set('autoReconnectDelay', v)} keyboardType="number-pad" />
