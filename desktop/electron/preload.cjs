@@ -42,6 +42,8 @@ contextBridge.exposeInMainWorld('afkDesk', {
     contract: () => ipcRenderer.invoke('macros:contract'),
     list: () => ipcRenderer.invoke('macros:list'),
     save: (macro) => ipcRenderer.invoke('macros:save', macro),
+    saveCustom: (definition) => ipcRenderer.invoke('macros:save-custom', definition),
+    removeCustom: (id) => ipcRenderer.invoke('macros:delete-custom', id),
     remove: (id) => ipcRenderer.invoke('macros:delete', id),
     setEnabled: (macroId, enabled) => ipcRenderer.invoke('macros:set-enabled', { macroId, enabled }),
     run: (accountId, macroId) => ipcRenderer.invoke('macros:run', { accountId, macroId }),

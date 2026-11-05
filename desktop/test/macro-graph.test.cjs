@@ -201,3 +201,13 @@ test('while and each inventory and player collection use the current account sta
     assert.equal(result.variables.last.name || result.variables.last.type, expected)
   }
 })
+
+test('engine executes extracted custom groups with the same facade actions as the original graph', async () => {
+  const edit = require('../src/macro-graph-edit.js'), { NODE_KINDS } = require('../electron/macro/graph-contract.cjs')
+  const original = migrateV2({ targets: { mode: 'all' }, trigger: { type: 'manual' }, defaultDelayMs: 0, steps: [{ type: 'chat', message: 'before' }, { type: 'wait', ms: 1 }, { type: 'chat', message: 'after' }] })
+  const selected = original.nodes.filter(node => node.kind === 'wait' || node.params.message === 'before').map(node => node.id)
+  const grouped = edit.makeCustom(original, selected, NODE_KINDS, 'library', 'custom').graph
+  assert.deepEqual(await run(grouped), await run(original))
+  const nested = edit.makeCustom(grouped, ['custom'], NODE_KINDS, 'outer-library', 'nested').graph
+  assert.deepEqual(await run(nested), await run(original))
+})

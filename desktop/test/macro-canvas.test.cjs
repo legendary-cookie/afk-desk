@@ -208,7 +208,7 @@ test('validation and live overlays mask text without changing the graph or histo
   assert.equal(h.tool('↶ Undo').disabled, true)
 })
 
-async function editorHarness(input, validation = {}) {
+async function editorHarness(input, validation = {}, services = {}) {
   const document = dom(), el = {}, stack = [document.body]
   const html = fs.readFileSync(path.join(__dirname, '../src/index.html'), 'utf8')
   for (const match of html.matchAll(/<\/?([a-z][\w-]*)([^>]*)>/gi)) {
@@ -220,17 +220,21 @@ async function editorHarness(input, validation = {}) {
     if (!['input', 'img', 'br', 'hr', 'meta', 'link'].includes(tag.toLowerCase()) && !whole.endsWith('/>')) stack.push(node)
   }
   let stored = plain(input), failure = null
-  const saves = [], toasts = []
+  const saves = [], toasts = [], customSaves = [], customRemoves = []
+  let customNodes = services.customNodes || []
   const api = { macros: {
     contract: async () => ({ triggers: contract.TRIGGER_TYPES, steps: contract.STEP_TYPES, conditions: contract.CONDITION_METADATA, graphKinds: NODE_KINDS }),
-    list: async () => ({ macros: [stored], validation }),
+    list: async () => ({ macros: [stored], validation, customNodes }),
+    saveCustom: async value => { customSaves.push(plain(value)); customNodes = [...customNodes.filter(item => item.id !== value.id), plain(value)]; return plain(value) },
+    removeCustom: async id => { customRemoves.push(id); customNodes = customNodes.filter(item => item.id !== id) },
     save: async value => { if (failure) throw failure; saves.push(plain(value)); stored = plain(value); return stored }
   } }
+  Object.assign(api, services)
   const window = scripts(document, api), state = { selectedId: 'a', settings: { streamerMode: false }, accounts: [{ id: 'a', username: 'Steve', edition: 'java' }] }
   const editor = window.afkMacroEditor.createMacroEditor({ api, state, el, toast: (...args) => toasts.push(args), cleanError: error => error.message })
   await editor.open()
   const settle = () => new Promise(resolve => setImmediate(resolve))
-  return { document, window, state, el, editor, saves, toasts, settle, fail(error) { failure = error } }
+  return { document, window, state, el, editor, saves, customSaves, customRemoves, toasts, settle, fail(error) { failure = error } }
 }
 
 test('full editor vm/DOM integration renders nodes/edges, connects ports and saves an equivalent v3 graph', async () => {
@@ -372,4 +376,99 @@ test('Simple view metadata edits keep v3 ids, labels, layout and wire ids', asyn
   assert.deepEqual(h.saves[0].nodes, original.nodes)
   assert.deepEqual(h.saves[0].edges, original.edges)
   assert.equal(h.saves[0].name, 'Renamed in Simple view')
+})
+
+const tick = () => new Promise(resolve => setImmediate(resolve))
+test('canvas custom-node flow: boundary ports, undo, palette placement, nested editing, rename, delete and share', async () => {
+  const saves = [], deletes = [], shares = []
+  const input = graph()
+  input.nodes.push({ id: 'wait', kind: 'wait', params: { ms: 10 }, position: { x: 700, y: 0 } })
+  input.edges.push({ id: 'after', from: { node: 'chat', port: 'out' }, to: { node: 'wait', port: 'in' } })
+  const h = canvasHarness(input, {
+    async saveCustom(value) { saves.push(plain(value)); return value },
+    async removeCustom(id) { deletes.push(id) }, async shareCustom(id) { shares.push(id) }
+  })
+  h.card('chat').fire('pointerdown'); h.viewport.fire('pointerup')
+  h.tool('Make custom node').fire('click'); await tick()
+  assert.equal(saves.length, 1)
+  const custom = h.canvas.getGraph().nodes.find(node => node.kind === 'group')
+  assert.ok(h.port(custom.id, 'in1', 'input')); assert.ok(h.port(custom.id, 'out1', 'output'))
+  assert.deepEqual(model.validateGraph(h.canvas.getGraph()), [])
+  h.canvas.undo(); assert.ok(h.canvas.getGraph().nodes.some(node => node.id === 'chat'))
+  h.canvas.redo(); assert.ok(h.canvas.getGraph().nodes.some(node => node.kind === 'group'))
+  assert.ok(h.container.querySelector('.macro-custom-entry'))
+  const entryButton = label => h.container.querySelector('.macro-custom-entry').querySelectorAll('button').find(button => button.textContent === label)
+  entryButton('Share').fire('click'); await tick(); assert.deepEqual(shares, [custom.params.definition.id])
+  entryButton('Open').fire('click')
+  const overlay = h.find('.macro-custom-editor')
+  assert.ok(overlay)
+  assert.equal(overlay.querySelectorAll('.macro-canvas-node').length, 3) // chat + input/output proxies
+  overlay.querySelector('.macro-canvas-node[data-node-id="chat"]').fire('pointerdown')
+  overlay.querySelector('.macro-canvas-viewport').fire('pointerup')
+  const text = overlay.querySelector('.macro-canvas-inspector input'); text.value = 'Edited <Steve>'; text.fire('change')
+  overlay.querySelectorAll('button').find(button => button.textContent === 'Save custom node').fire('click'); await tick()
+  assert.equal(h.find('.macro-custom-editor'), null)
+  assert.equal(saves.at(-1).nodes[0].params.message, 'Edited <Steve>')
+  assert.equal(saves.at(-1).nodes.some(node => node.kind.startsWith('boundary.')), false)
+  assert.equal(h.canvas.getGraph().nodes.find(node => node.id === custom.id).params.definition.nodes[0].params.message, 'Edited <Steve>')
+  const rename = h.container.querySelector('.macro-custom-entry input'); rename.value = '<Steve> helper'
+  entryButton('Rename').fire('click'); await tick()
+  assert.equal(saves.at(-1).name, '<Steve> helper')
+  h.container.querySelector('.macro-custom-entry [data-custom-id]').fire('click')
+  assert.equal(h.canvas.getGraph().nodes.filter(node => node.kind === 'group').length, 2)
+  const groups = h.canvas.getGraph().nodes.filter(node => node.kind === 'group')
+  assert.notEqual(groups[0].id, groups[1].id)
+  entryButton('Delete custom node').fire('click'); await tick()
+  assert.deepEqual(deletes, [custom.params.definition.id])
+  assert.equal(h.find('.macro-custom-entry'), null)
+  assert.equal(h.canvas.getGraph().nodes.filter(node => node.kind === 'group').length, 2)
+})
+
+test('custom-node controls handle selection errors and persistence failures, and mask names and inner text', async () => {
+  let masked = false
+  const h = canvasHarness(graph(), { mask: value => value.replaceAll('Steve', 'Acc•••'), isMasked: () => masked, async saveCustom() { throw new Error('disk full') } })
+  h.tool('Make custom node').fire('click'); await tick()
+  assert.match(h.find('.macro-canvas-message').textContent, /Select/)
+  h.card('start').fire('pointerdown'); h.viewport.fire('pointerup')
+  h.tool('Make custom node').fire('click'); await tick()
+  assert.match(h.find('.macro-canvas-message').textContent, /Triggers/)
+  h.card('chat').fire('pointerdown'); h.viewport.fire('pointerup')
+  h.tool('Make custom node').fire('click'); await tick()
+  assert.match(h.find('.macro-canvas-message').textContent, /disk full/)
+  assert.deepEqual(plain(h.canvas.getGraph()), graph())
+  const definition = { id: 'c', name: 'Steve helper', version: 3, nodes: [graph().nodes[1]], edges: [], inputs: { in1: { type: 'control', node: 'chat', port: 'in' } }, outputs: {} }
+  h.canvas.setCustomNodes([definition]); masked = true; h.canvas.refresh()
+  assert.ok(!h.container.textContent.includes('Steve'))
+  assert.equal(h.container.querySelector('.macro-custom-entry input').value, '')
+  assert.equal(h.container.querySelector('.macro-custom-entry input').disabled, true)
+})
+
+test('editor passes persistent custom definitions to the canvas, saves placements and imports shared custom nodes', async () => {
+  const definition = { id: 'helper', name: 'Steve helper', version: 3, nodes: [{ id: 'delay', kind: 'wait', params: { ms: 20 } }], edges: [], inputs: { in1: { type: 'control', node: 'delay', port: 'in' } }, outputs: { out1: { type: 'control', node: 'delay', port: 'out' } } }
+  const h = await editorHarness(graph(), {}, { customNodes: [definition], sharePreview: async () => ({ kind: 'custom', data: definition, errors: [] }) })
+  h.el['macro-canvas'].querySelector('[data-custom-id="helper"]').fire('click')
+  h.el['macro-save-btn'].fire('click'); await h.settle()
+  assert.equal(h.saves[0].nodes.at(-1).kind, 'group')
+  assert.deepEqual(h.saves[0].nodes.at(-1).params.definition, definition)
+  h.window.askShareLink = async () => 'afkdesk://share/custom/example'
+  h.el['macro-share-import'].fire('click'); await h.settle()
+  assert.equal(h.customSaves.length, 1); assert.notEqual(h.customSaves[0].id, definition.id)
+  assert.equal(h.el['macro-canvas'].querySelectorAll('.macro-custom-entry').length, 2)
+})
+
+test('custom group drops onto a wire with typed ports, and streamer refresh covers an open custom editor', async () => {
+  let masked = false
+  const definition = { id: 'helper', name: 'Steve helper', version: 3, nodes: [{ id: 'say', kind: 'chat', params: { message: 'Steve hello' } }], edges: [], inputs: { in1: { type: 'control', node: 'say', port: 'in' } }, outputs: { out1: { type: 'control', node: 'say', port: 'out' } } }
+  const h = canvasHarness(graph(), { customNodes: [definition], mask: value => masked ? value.replaceAll('Steve', 'Acc•••') : value, isMasked: () => masked })
+  h.find('.macro-canvas-wire-hit').fire('drop', { clientX: 340, clientY: 120, dataTransfer: { getData: () => 'custom:helper' } })
+  assert.equal(h.canvas.getGraph().edges.length, 2)
+  assert.equal(h.canvas.getGraph().nodes.at(-1).kind, 'group')
+  h.container.querySelectorAll('.macro-custom-entry button').find(button => button.textContent === 'Open').fire('click')
+  const overlay = h.find('.macro-custom-editor')
+  overlay.querySelector('.macro-canvas-node[data-node-id="say"]').fire('pointerdown'); overlay.querySelector('.macro-canvas-viewport').fire('pointerup')
+  assert.equal(overlay.querySelector('.macro-canvas-inspector input').value, 'Steve hello')
+  masked = true; h.canvas.refresh()
+  assert.equal(overlay.querySelector('.macro-canvas-inspector input').value, '')
+  assert.equal(overlay.querySelector('.macro-canvas-inspector input').disabled, true)
+  assert.ok(!h.container.textContent.includes('Steve'))
 })

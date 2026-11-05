@@ -79,6 +79,8 @@ const ORIGINAL_IPC_CHANNELS = Object.freeze([
   'macros:contract',
   'macros:list',
   'macros:save',
+  'macros:save-custom',
+  'macros:delete-custom',
   'macros:delete',
   'macros:set-enabled',
   'macros:run',
@@ -385,4 +387,52 @@ test('consumable settings default off, clamp and survive updates', () => {
   const restored = validateAccount(base, saved, null)
   assert.equal(restored.autoOminousBottle, true)
   assert.equal(restored.autoGoldenApplePreference, 'enchanted')
+})
+
+test('custom-node API persists the library and shares standalone definitions without changing placed macros', async t => {
+  const { AppCore } = require('../core/app-core.cjs')
+  const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'core-custom-'))
+  t.after(() => fs.rmSync(userDataPath, { recursive: true, force: true }))
+  const core = new AppCore({ userDataPath, bots: { connect() {}, disconnect() {}, sessions: new Map() } })
+  await core.start(); t.after(() => core.shutdown())
+  const definition = { id: 'delay', name: 'Private label', version: 3, nodes: [{ id: 'private-id', kind: 'wait', params: { ms: 1 } }], edges: [], inputs: { in1: { type: 'control', node: 'private-id', port: 'in' } }, outputs: { out1: { type: 'control', node: 'private-id', port: 'out' } } }
+  assert.deepEqual(core.macros.saveCustom(definition), definition)
+  assert.equal(core.macros.list().customNodes.length, 1)
+  const preview = core.share.preview(core.share.export({ kind: 'custom', id: 'delay' }))
+  assert.equal(preview.kind, 'custom'); assert.deepEqual(preview.errors, [])
+  assert.doesNotMatch(JSON.stringify(preview), /private-id|Private label/)
+  core.macros.saveCustom({ ...preview.data, id: 'imported' })
+  assert.equal(core.macros.list().customNodes.length, 2)
+  core.macros.removeCustom('delay')
+  assert.throws(() => core.share.export({ kind: 'custom', id: 'delay' }), /not found/)
+  const reopened = new (require('../electron/macro/library-store.cjs').MacroLibraryStore)(userDataPath)
+  assert.equal(reopened.load().customNodes[0].id, 'imported')
+})
+
+test('recipe graph services persist live safety settings and deliver captured images before resolving', async t => {
+  const { AppCore } = require('../core/app-core.cjs')
+  const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'core-graph-actions-'))
+  t.after(() => fs.rmSync(userDataPath, { recursive: true, force: true }))
+  const events = [], updates = [], sessions = new Map(), images = [{ name: 'pov.png', data: Buffer.from('image') }]
+  let completeCapture, captureArgs
+  const bots = { connect() {}, disconnect() {}, sessions, inventory: () => [], updateAccountConfig: value => updates.push(value) }
+  const core = new AppCore({ userDataPath, bots,
+    notifier: async () => ({ notify: value => events.push(value), flush() {} }),
+    platform: { captureAlertImages: async (...args) => { captureArgs = args; await new Promise(resolve => { completeCapture = resolve }); return images } }
+  })
+  await core.start(); t.after(() => core.shutdown())
+  core.accounts.save({ id: 'a', username: 'local', host: 'localhost' })
+  await core.facade.graphAction('a', { type: 'safetySettings', autoEat: true, autoEatThreshold: 99, autoTotem: true, totemDisconnect: true })
+  const account = core.store.list()[0]
+  assert.equal(account.autoEat, true); assert.equal(account.autoEatThreshold, 20)
+  assert.equal(account.autoTotem, true); assert.equal(account.totemDisconnect, true)
+  assert.equal(updates.at(-1).autoEat, true)
+  sessions.set('a', { sessionId: 'session', bot: { entity: {} } })
+  const pending = core.facade.graphAction('a', { type: 'screenshot', message: 'nearby' })
+  assert.equal(events.length, 0)
+  assert.equal(captureArgs[1].notifyAttachPov, true); assert.equal(captureArgs[1].notifyPovOffscreen, true)
+  completeCapture(); await pending
+  assert.equal(events.at(-1).message, 'nearby'); assert.deepEqual(events.at(-1).images, images)
+  core.platform.captureAlertImages = async () => []
+  await assert.rejects(core.facade.graphAction('a', { type: 'screenshot' }), /stays connected/)
 })

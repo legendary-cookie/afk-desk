@@ -1005,3 +1005,54 @@ test('right autoclick releases its owned item use when cancelled', async () => {
   await assert.rejects(run, { code: 'ABORTED' })
   assert.ok(manager.calls.some(call => call[0] === 'releaseInput' && call[2] === 'rightClick'))
 })
+
+test('graph fishing reserves use ownership, reports durability, releases on completion and rejects incompatible actions', async () => {
+  const h = spySetup()
+  h.bot.heldItem = { name: 'fishing_rod', maxDurability: 100, durabilityUsed: 75 }
+  let finish
+  h.bot.fish = () => new Promise(resolve => { finish = resolve })
+  assert.equal(h.facade.state('a').heldDurability, 25)
+  const pending = h.facade.graphAction('a', { type: 'fish' }, h.ctx())
+  assert.deepEqual([...h.session.inputClaims.get('rightClick')], [OWNER])
+  await assert.rejects(h.facade.graphAction('a', { type: 'fish' }, h.ctx()), /owned/)
+  finish(); await pending
+  assert.ok(h.calls.some(([method, id, input, owner]) => method === 'releaseInput' && id === 'a' && input === 'rightClick' && owner === OWNER))
+  h.session.inputClaims.clear(); h.bot.heldItem.name = 'stick'
+  await assert.rejects(h.facade.graphAction('a', { type: 'fish' }, h.ctx()), /rod/)
+  await assert.rejects(h.facade.graphAction('a', { type: 'unknown' }, h.ctx()), /Unknown/)
+  await assert.rejects(h.facade.graphAction('a', { type: 'fish' }, h.ctx({ sessionId: 'different' })), /session/i)
+  const bedrock = spySetup({ edition: 'bedrock' })
+  await assert.rejects(bedrock.facade.graphAction('a', { type: 'fish' }, bedrock.ctx()), /Java/)
+})
+
+test('graph fishing waits for safety input and reels in on abort without touching a replacement session', async () => {
+  const h = spySetup(), controller = new AbortController()
+  h.bot.heldItem = { name: 'fishing_rod' }
+  let releaseSafety, rejectFishing, started = false
+  h.session.safetyInputDone = new Promise(resolve => { releaseSafety = resolve })
+  h.bot.fish = () => { started = true; return new Promise((_, reject) => { rejectFishing = reject }) }
+  h.bot.activateItem = () => { h.bot.calls.push(['reel']); rejectFishing(new Error('Fishing cancelled')) }
+  const pending = h.facade.graphAction('a', { type: 'fish' }, h.ctx({ signal: controller.signal }))
+  assert.equal(started, false)
+  h.session.safetyInputDone = null; releaseSafety(); await settle()
+  assert.equal(started, true)
+  controller.abort(); await assert.rejects(pending, /cancelled/)
+  assert.equal(h.bot.calls.filter(([name]) => name === 'reel').length, 1)
+})
+
+test('graph screenshot awaits capture and safety delegates bounded settings through the facade services', async () => {
+  const h = spySetup(), calls = []
+  let done
+  const facade = createFacade({ bots: h.manager,
+    screenshot: async (id, step) => { calls.push(['capture', id, step.message]); await new Promise(resolve => { done = resolve }); calls.push(['complete']) },
+    safetySettings: (id, step) => { calls.push(['safety', id, step.autoTotem]); return 'saved' }
+  })
+  const pending = facade.graphAction('a', { type: 'screenshot', message: 'Nearby' }, h.ctx())
+  assert.deepEqual(calls, [['capture', 'a', 'Nearby']])
+  done(); await pending
+  assert.deepEqual(calls.at(-1), ['complete'])
+  assert.equal(await facade.graphAction('a', { type: 'safetySettings', autoTotem: true }, h.ctx()), 'saved')
+  assert.deepEqual(calls.at(-1), ['safety', 'a', true])
+  await assert.rejects(h.facade.graphAction('a', { type: 'screenshot' }, h.ctx()), /unavailable/)
+  await assert.rejects(h.facade.graphAction('a', { type: 'safetySettings' }, h.ctx()), /unavailable/)
+})

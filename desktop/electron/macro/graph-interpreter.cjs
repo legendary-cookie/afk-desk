@@ -1,18 +1,18 @@
 'use strict'
-const { validateGraph } = require('./graph-model.cjs')
+const { validateGraph, expandGroups } = require('./graph-model.cjs')
 const { NODE_KINDS } = require('./graph-contract.cjs')
 const { LIMITS, MacroActionError } = require('./contract.cjs')
 const { safeRegex } = require('./safe-regex.cjs')
 
 // Runs inside MacroEngine's run context, reusing its budgets, facade and ownership.
 async function runGraph(engine, ctx) {
-  const graph = ctx.macro, errors = validateGraph(graph)
+  const errors = validateGraph(ctx.macro), graph = errors.length ? ctx.macro : expandGroups(ctx.macro)
   if (errors.length) throw new MacroActionError('INVALID', `${errors[0].code}: ${errors[0].message}`)
   const nodes = new Map(graph.nodes.map((node, index) => [node.id, { node, index }]))
   const outgoing = (id, port) => graph.edges.filter(e => e.from.node === id && e.from.port === port).map(e => { emit({ status: 'graphValue', edgeId: e.id, value: 'flow' }); return e.to.node })
   const incoming = (id, port) => graph.edges.find(e => e.to.node === id && e.to.port === port)
   const counts = new Map(), activeValues = new Set(), loopItems = new Map(), reportedErrors = new WeakSet()
-  const emit = data => engine._emit?.({ runId: ctx.runId, macroId: ctx.macroId, accountId: ctx.accountId, ...data })
+  const emit = data => engine._emit?.({ runId: ctx.runId, macroId: ctx.macroId, accountId: ctx.accountId, ...data, ...(data.nodeId ? { nodeId: nodes.get(data.nodeId)?.node._groupId || data.nodeId } : {}) })
   function displayValue(value) {
     try { return String(typeof value === 'string' ? value : JSON.stringify(value) ?? String(value)).slice(0, 500) } catch { return '[Unserializable value]' }
   }
@@ -31,6 +31,7 @@ async function runGraph(engine, ctx) {
         case 'position': return state.position
         case 'health': return state.health
         case 'food': return state.food
+        case 'heldDurability': return state.heldDurability ?? 0
         case 'getVar': return p.scope === 'persistent' ? engine.getPersistentVariables(ctx.accountId)[p.variable] : p.scope === 'account' ? (engine.graphAccountVariables?.get(ctx.accountId) || {})[p.variable] : ctx.variables[p.variable]
         case 'random': return (Number(p.min) || 0) + engine._unit() * ((p.max === undefined ? 1 : Number(p.max)) - (Number(p.min) || 0))
         case 'forEach': return loopItems.get(id)
@@ -170,7 +171,12 @@ async function runGraph(engine, ctx) {
       for (const next of outgoing(id, 'out')) await walk(next, options)
       return
     }
-    if (type === 'wait') await engine._stepWait(ctx, p, path)
+    if (['fish', 'screenshot', 'safetySettings'].includes(type)) {
+      await engine._gate(ctx, path, type)
+      engine._checkFence(ctx)
+      if (!engine.facade.graphAction) throw new MacroActionError('UNSUPPORTED', `Unsupported graph action ${type}.`)
+      await engine._awaitOp(ctx, () => engine.facade.graphAction(ctx.accountId, { ...p, type }, { signal: ctx.signal, owner: ctx.owner, sessionId: ctx.sessionId }))
+    } else if (type === 'wait') await engine._stepWait(ctx, p, path)
     else if (type === 'setVar' && p.scope === 'account') {
       await engine._gate(ctx, path, type)
       if (!engine.graphAccountVariables) engine.graphAccountVariables = new Map()

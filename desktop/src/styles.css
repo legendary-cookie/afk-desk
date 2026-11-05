@@ -1023,3 +1023,8 @@ dialog.macro-templates-dialog {
   .macro-canvas-body { grid-template-columns: 120px minmax(220px, 1fr); height: 650px; grid-template-rows: 440px 210px; }
   .macro-canvas-inspector { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--border); }
 }
+
+.macro-canvas { position: relative; }
+.macro-custom-editor { position: absolute; inset: 0; z-index: 10; background: var(--surface); overflow: auto; border: 1px solid var(--border); }
+.macro-custom-entry { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+.macro-custom-entry input { min-width: 0; width: 100%; }

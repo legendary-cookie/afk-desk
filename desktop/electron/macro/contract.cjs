@@ -461,6 +461,8 @@ const IPC = Object.freeze({
   contract: 'macros:contract',
   list: 'macros:list', // () => { macros, validation: {[macroId]: errors[]} }
   save: 'macros:save', // (macro) => macro
+  saveCustom: 'macros:save-custom',
+  removeCustom: 'macros:delete-custom',
   remove: 'macros:delete', // (macroId) => void
   setEnabled: 'macros:set-enabled', // ({ macroId, enabled }) => macro
   run: 'macros:run', // ({ accountId, macroId }) => RunResult

@@ -30,6 +30,21 @@ class MacroLibraryStore {
     this.write(this.library)
   }
   list() { return this.library.macros.slice() }
+  customNodes() { return JSON.parse(JSON.stringify(this.library.customNodes || [])) }
+  saveCustom(definition) {
+    const errors = require('./graph-model.cjs').validateCustom(definition)
+    if (errors.length) throw new Error(errors[0].message)
+    const next = this.customNodes(), index = next.findIndex(item => item.id === definition.id)
+    if (index < 0 && next.length >= 200) throw new Error('Custom node library is full (200).')
+    if (index < 0) next.push(definition); else next[index] = definition
+    const library = model.normalizeLibrary({ ...this.library, customNodes: next })
+    this.write(library); this.library = library
+    return this.customNodes().find(item => item.id === definition.id)
+  }
+  removeCustom(id) {
+    const library = { ...this.library, customNodes: this.customNodes().filter(item => item.id !== id) }
+    this.write(library); this.library = library
+  }
   get(id) { return this.library.macros.find((macro) => macro.id === id) || null }
   save(macro) { const next = this.list(); const index = next.findIndex((item) => item.id === macro.id); if (index < 0) next.push(macro); else next[index] = macro; this.library = model.normalizeLibrary({ ...this.library, macros: next }); this.write(this.library); return this.get(macro.id) }
   remove(id) { const before = this.library.macros.length; this.library = model.normalizeLibrary({ ...this.library, macros: this.library.macros.filter((m) => m.id !== id) }); if (before !== this.library.macros.length) this.write(this.library); return before !== this.library.macros.length }

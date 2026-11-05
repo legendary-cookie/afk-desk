@@ -315,9 +315,28 @@
   // Factories return fresh graphs so the shipped recipes remain immutable.
   const RECIPES = Object.freeze({
     'auto-sell': () => recipe('Auto-sell when inventory is full', 'Sends /sell all when the inventory fills. Check the command for your server.', { type: 'inventoryFull' }, [{ type: 'chat', message: '/sell all' }]),
+    'afk-fishing': () => fishingRecipe(),
+    'player-nearby': () => recipe('Player-nearby alert, screenshot, then logout', 'Captures and sends a POV screenshot before logging out. Capture failure stops the run.', { type: 'playerAppears', ignoreRegex: '' }, [{ type: 'screenshot', message: 'A player appeared nearby.' }, { type: 'disconnect' }]),
+    'mob-farm': () => recipe('Mob farm attack loop plus deposit', 'Attack nearby mobs for 30 seconds, then deposit a stack of rotten flesh into a nearby chest. Adjust the item and count.', { type: 'timer', intervalMs: 60000 }, [{ type: 'leftClick', action: 'hold', only: 'entities' }, { type: 'wait', ms: 30000 }, { type: 'leftClick', action: 'release', only: 'entities' }, { type: 'deposit', select: { name: 'rotten_flesh' }, count: 64 }]),
+    'server-restart': () => recipe('Server restart: rejoin and /server towny', 'After a server disconnect, wait 30 seconds and rejoin, then switch to Towny. Manual disconnects do not trigger this.', { type: 'disconnected' }, [{ type: 'reconnect', delaySec: 30, maxAttempts: 10 }, { type: 'chat', message: '/server towny' }]),
+    'eat-totem': () => recipe('Eat and totem safety net', 'Applies the existing account safety settings: auto eat below 14 food, refill the offhand totem, and disconnect when totems run out. Run once to apply.', { type: 'manual' }, [{ type: 'safetySettings', autoEat: true, autoEatThreshold: 14, autoTotem: true, totemDisconnect: true }]),
     'timed-kit': () => recipe('Timed /kit claim', 'Claims /kit daily at noon. Set the time and command for your server.', { type: 'schedule', at: '12:00' }, [{ type: 'chat', message: '/kit' }]),
     'vote-reminder': () => recipe('Daily vote reminder', 'Shows a desktop reminder daily at noon.', { type: 'schedule', at: '12:00' }, [{ type: 'notify', message: 'Remember to vote for your server.', desktop: true, webhook: false }])
   })
+  function fishingRecipe() {
+    const graph = recipe('AFK fishing with auto-repair check', 'Hold a fishing rod, check durability before each catch, and run /repair below 20%. Set the repair command for your server. Aim at water before running.', { type: 'manual' }, [
+      { type: 'holdItem', name: 'fishing_rod' },
+      { type: 'repeat', times: 1000, steps: [
+        { type: 'if', condition: { type: 'always' }, then: [{ type: 'chat', message: '/repair' }, { type: 'wait', ms: 1000 }] },
+        { type: 'fish' }, { type: 'wait', ms: 500 }
+      ] }
+    ])
+    const branch = graph.nodes.find(node => node.kind === 'if')
+    delete branch.params.condition
+    graph.nodes.push({ id: 'rod-durability', kind: 'heldDurability', params: {}, position: { x: 280, y: 400 } }, { id: 'needs-repair', kind: 'compare', params: { b: 20, operator: '<' }, position: { x: 560, y: 400 } })
+    graph.edges.push({ id: 'durability-value', from: { node: 'rod-durability', port: 'value' }, to: { node: 'needs-repair', port: 'a' } }, { id: 'repair-condition', from: { node: 'needs-repair', port: 'value' }, to: { node: branch.id, port: 'condition' } })
+    return graph
+  }
   function recipe(name, description, trigger, steps) {
     const migrate = typeof window === 'undefined' ? require('./macro-graph-edit.js').migrateV2 : window.afkMacroGraphEdit.migrateV2
     return migrate({ name, description, enabled: false, targets: { mode: 'all' }, trigger, steps, stopWhen: [], concurrency: 'skip', onError: 'stop', defaultDelayMs: 0, maxRuntimeMs: null })
@@ -440,6 +459,7 @@
     const maskText = (value) => window.afkStreamerMask.maskText(value, state.accounts, state.settings.streamerMode)
 
     let macros = []
+    let customNodes = []
     let validationMap = {}
     let selectedMacroId = null
     let draft = null
@@ -496,6 +516,13 @@
         if (!link) return
         try {
           const preview = await api.sharePreview(link)
+          if (preview.kind === 'custom') {
+            if (preview.errors?.length) throw new Error(preview.errors[0].message)
+            await api.macros.saveCustom({ ...preview.data, id: newMacroId() })
+            await refreshLibrary()
+            toast('Custom node imported. Open it under Custom to fill in removed text.')
+            return
+          }
           if (preview.kind !== 'macro') throw new Error('This link is not a macro.')
           createNewMacro(preview.data)
           draftValidationErrors = preview.errors || []
@@ -810,6 +837,8 @@
         if (api.macros?.list) {
           const result = await api.macros.list()
           macros = Array.isArray(result?.macros) ? result.macros : []
+          customNodes = Array.isArray(result?.customNodes) ? result.customNodes : []
+          canvas?.setCustomNodes(customNodes)
           validationMap = result?.validation && typeof result.validation === 'object' ? result.validation : {}
         } else {
           macros = []
@@ -1907,6 +1936,14 @@
         if (!canvas && el['macro-canvas']) {
           canvas = window.afkMacroCanvas.create(el['macro-canvas'], {
             graph: draft, kinds: graphKinds, history: graphHistory, mask: maskText,
+            customNodes,
+            async saveCustom(definition) {
+              const saved = await api.macros.saveCustom(definition)
+              customNodes = [...customNodes.filter(item => item.id !== saved.id), saved]
+              return saved
+            },
+            async removeCustom(id) { await api.macros.removeCustom(id); customNodes = customNodes.filter(item => item.id !== id) },
+            async shareCustom(id) { const link = await api.shareExport('custom', id); await navigator.clipboard.writeText(link); toast('Custom node link copied. Text was removed.') },
             isMasked: () => state.settings.streamerMode,
             createSchemaFields, conditionEditor: createConditionEditor,
             onChange(next) { draft = next; draftValidationErrors = []; syncUndoRedoButtons(); renderEditor() }

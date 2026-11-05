@@ -48,4 +48,15 @@ const extraParams = {
 for (const [kind, fields] of Object.entries(extraParams)) Object.assign(NODE_KINDS[kind].params, fields)
 NODE_KINDS.forEach.inputs.items.required = false
 NODE_KINDS.setVar.params.scope = { type: 'string', label: 'Scope' }
+NODE_KINDS.math.params.operation.enum = ['add', 'subtract', 'multiply', 'divide']
+NODE_KINDS.compare.params.operator.enum = ['==', '!=', '<', '<=', '>', '>=']
+NODE_KINDS.getVar.params.scope.enum = NODE_KINDS.setVar.params.scope.enum = ['run', 'account', 'persistent']
+NODE_KINDS.forEach.params.source.enum = ['items', 'players', 'entities']
+NODE_KINDS.group = { label: 'Custom node', category: 'Custom', params: {}, inputs: {}, outputs: {} }
+for (const [kind, label, category, params] of [
+  ['fish', 'Catch one fish', 'Clicking', {}],
+  ['screenshot', 'Screenshot alert', 'Communication', { message: { type: 'string', label: 'Message', default: 'Player nearby' } }],
+  ['safetySettings', 'Eat and totem safety settings', 'Control', { autoEat: { type: 'boolean', label: 'Auto eat', default: true }, autoEatThreshold: { type: 'number', label: 'Food threshold', default: 14 }, autoTotem: { type: 'boolean', label: 'Auto totem', default: true }, totemDisconnect: { type: 'boolean', label: 'Disconnect without totems', default: true } }]
+]) NODE_KINDS[kind] = { label, category, params, inputs: { in: control, ...inputsFor(params) }, outputs: { out: control } }
+NODE_KINDS.heldDurability = { label: 'Held item durability (%)', category: 'Data', params: {}, inputs: {}, outputs: { value: { type: 'number' } } }
 module.exports = { NODE_KINDS: Object.freeze(NODE_KINDS) }

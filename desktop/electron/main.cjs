@@ -336,6 +336,8 @@ function registerIpc() {
   handle(MACRO_IPC.contract, () => core.macros.contract())
   handle(MACRO_IPC.list, () => core.macros.list())
   handle(MACRO_IPC.save, (_event, input) => core.macros.save(input))
+  handle(MACRO_IPC.saveCustom, (_event, input) => core.macros.saveCustom(input))
+  handle(MACRO_IPC.removeCustom, (_event, id) => core.macros.removeCustom(id))
   handle(MACRO_IPC.remove, (_event, id) => core.macros.remove(id))
   handle(MACRO_IPC.setEnabled, (_event, input) => core.macros.setEnabled(input))
   handle(MACRO_IPC.run, (_event, input) => core.macros.run(input))

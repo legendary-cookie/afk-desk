@@ -20,7 +20,7 @@ const CLICKS = Object.freeze({
 // These steps still work when the account is offline or the session changed.
 const SESSION_LIFECYCLE_STEPS = new Set(['disconnect', 'reconnect'])
 
-function createFacade({ bots, notify = () => {}, getEdition = () => 'java', timers = globalThis }) {
+function createFacade({ bots, notify = () => {}, screenshot, safetySettings, getEdition = () => 'java', timers = globalThis }) {
   const managerFor = (id) => (typeof bots.manager === 'function' ? bots.manager(id) : bots)
   const sessionFor = (id) => managerFor(id)?.sessions?.get(id)
   // Bedrock sessions carry no id of their own; give each one a stable id.
@@ -55,6 +55,7 @@ function createFacade({ bots, notify = () => {}, getEdition = () => 'java', time
       edition: getEdition(id),
       health: bedrock ? session?.health : telemetry.health,
       food: bedrock ? session?.food : telemetry.food,
+      heldDurability: session?.bot?.heldItem?.maxDurability > 0 ? Math.max(0, 100 * (1 - (session.bot.heldItem.durabilityUsed || 0) / session.bot.heldItem.maxDurability)) : 0,
       inventoryFull: online && !hasFreeInventorySlot(inventory),
       inventory: inventory.map(({ name, count, slot }) => ({ name, count, slot })),
       windowOpen: Boolean(session?.bot?.currentWindow || (bedrock && session?.openWindow)),
@@ -344,6 +345,35 @@ function createFacade({ bots, notify = () => {}, getEdition = () => 'java', time
   }
 
   const facade = {
+    async graphAction(id, step, ctx = {}) {
+      throwIfAborted(ctx.signal); assertSameSession(id, ctx)
+      if (step.type === 'safetySettings') {
+        if (!safetySettings) throw invalid('Safety settings are unavailable.')
+        return safetySettings(id, step)
+      }
+      if (!isOnline(id)) throw new MacroActionError('OFFLINE', 'Account is not online.')
+      if (step.type === 'screenshot') {
+        if (!screenshot) throw invalid('Screenshot capture is unavailable.')
+        await screenshot(id, step, ctx)
+      } else if (step.type === 'fish') {
+        if (getEdition(id) !== 'java') throw new MacroActionError('UNSUPPORTED', 'Fishing requires a Java account.')
+        const session = sessionFor(id), bot = session.bot, manager = managerFor(id), owner = requireOwner(ctx)
+        while (session.safetyInputDone) { await session.safetyInputDone; throwIfAborted(ctx.signal); assertSameSession(id, ctx) }
+        if (bot.heldItem?.name !== 'fishing_rod' || typeof bot.fish !== 'function') throw invalid('Hold a fishing rod first.')
+        if (session.inputClaims?.get('rightClick')?.size) throw invalid('Right click is owned by another action.')
+        // fish() presses use itself; reserve the same ownership slot without
+        // pressing twice, which would immediately reel the rod back in.
+        session.inputClaims ||= new Map()
+        session.inputClaims.set('rightClick', new Set([owner]))
+        const cancel = () => { if (sessionFor(id) === session) { try { bot.activateItem() } catch {} } }
+        ctx.signal?.addEventListener('abort', cancel, { once: true })
+        try { await bot.fish() } finally {
+          ctx.signal?.removeEventListener('abort', cancel)
+          if (sessionFor(id) === session) manager.releaseInput(id, 'rightClick', owner)
+        }
+      } else throw invalid('Unknown graph action.')
+      throwIfAborted(ctx.signal); assertSameSession(id, ctx)
+    },
     sessionId: sessionIdFor,
     state,
     releaseOwner(id, owner) {

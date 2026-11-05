@@ -152,6 +152,11 @@ class AppCore {
     this.share = {
       export: ({ kind, id } = {}) => {
         if (kind === 'profile') return shareLinks.encode(kind, shareLinks.profileData(this._require(id)))
+        if (kind === 'custom') {
+          const definition = this.macroLibrary.customNodes().find(item => item.id === id)
+          if (!definition) throw new Error('Custom node not found.')
+          return shareLinks.encode(kind, shareLinks.customData(definition, macroModel))
+        }
         if (kind === 'macro') {
           const macro = this.macroLibrary.get(id)
           if (!macro) throw new Error('Macro not found.')
@@ -161,6 +166,10 @@ class AppCore {
       },
       preview: (link) => {
         const { kind, data } = shareLinks.decode(link)
+        if (kind === 'custom') {
+          const safe = shareLinks.customData(data, macroModel)
+          return { kind, data: safe, errors: require('../electron/macro/graph-model.cjs').validateCustom(safe) }
+        }
         if (kind === 'profile') {
           const safe = shareLinks.profileData(data)
           const normalized = validateAccount({ ...safe, username: 'share-preview' }, null, null)
@@ -252,8 +261,10 @@ class AppCore {
       list: () => {
         const validation = {}
         for (const m of this.macroLibrary.list()) validation[m.id] = macroModel.validateMacro(m, this._macroOptions())
-        return { macros: this.macroLibrary.list(), validation }
+        return { macros: this.macroLibrary.list(), validation, customNodes: this.macroLibrary.customNodes() }
       },
+      saveCustom: (input) => { assertMacroPayload(input); return this.macroLibrary.saveCustom(input) },
+      removeCustom: (id) => { assertMacroPayload(id); return this.macroLibrary.removeCustom(id) },
       save: (input) => {
         assertMacroPayload(input)
         const prev = this.macroLibrary.get(input?.id)
@@ -407,7 +418,18 @@ class AppCore {
     this.facade = createFacade({
       bots: this.botManager,
       getEdition: (id) => this.store.list().find((a) => a.id === id)?.edition || 'java',
-      notify: (event) => this.notifyMacro(event)
+      notify: (event) => this.notifyMacro(event),
+      screenshot: async (id, step) => {
+        const settings = { ...this.settingsStore.get(), notifyAttachPov: true, notifyPovOffscreen: true, notifyAttachInventory: false }
+        const images = await this.platform.captureAlertImages?.(id, settings, this.bots.inventory(id))
+        if (!images?.length) throw new Error('Could not capture a screenshot; account stays connected.')
+        this.notifyMacro({ accountId: id, message: step.message || 'Player nearby', images })
+      },
+      safetySettings: (id, step) => {
+        const account = this._require(id)
+        const settings = { autoEat: step.autoEat !== false, autoEatThreshold: bounded(step.autoEatThreshold, 0, 20, 14), autoTotem: step.autoTotem !== false, totemDisconnect: step.totemDisconnect !== false }
+        return this._persistLinked(validateAccount({ ...account, ...settings }, account, this.secretBox, this._normalizeSkinUrl))
+      }
     })
     const resolveTargets = (macro) => {
       const all = this.store.list()
@@ -831,7 +853,7 @@ class AppCore {
         this.platform.notifyMacro ? this.platform.notifyMacro(title, message, event) : this.platform.notify?.({ title, body: message })
       }
     } catch {}
-    this._send({ kind: 'macro', accountId: event.accountId, accountName: name, message, payload: { macroName: event.macroName || 'Macro', status: event.status || 'notify' }, at: this.now() })
+    this._send({ kind: 'macro', accountId: event.accountId, accountName: name, message, ...(event.images ? { images: event.images } : {}), payload: { macroName: event.macroName || 'Macro', status: event.status || 'notify' }, at: this.now() })
   }
 
   emitMacroRunEvent(event) {

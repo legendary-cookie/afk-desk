@@ -339,6 +339,7 @@ function normalizeLibrary(input) {
       macros.push(macro)
     }
     const library = { version: SCHEMA_VERSION, macros }
+    if (Array.isArray(raw.customNodes)) library.customNodes = JSON.parse(JSON.stringify(raw.customNodes.filter(item => isObj(item) && typeof item.id === 'string' && typeof item.name === 'string' && Array.isArray(item.nodes) && Array.isArray(item.edges) && isObj(item.inputs) && isObj(item.outputs)).slice(0, 200)))
     const migrated = normalizeMigratedFromV1(raw.migratedFromV1)
     if (migrated) library.migratedFromV1 = migrated
     return library

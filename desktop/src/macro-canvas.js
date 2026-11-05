@@ -12,6 +12,8 @@
     let graph = clone(options.graph), live = null, errors = [], selected = new Set(), selectedEdges = new Set()
     let clipboard = null, sequence = 0, gesture = null, scale = 1, pan = { x: 30, y: 50 }, selectMode = false, snapping = true
     const history = options.history || edit.createHistory(graph)
+    let customNodes = clone(options.customNodes || []), childEditor = null, childCaption = null
+    const specFor = node => edit.nodeSpec(node, kinds)
     const mask = value => (options.mask || String)(String(value ?? ''))
     const doc = container.ownerDocument || document
     const make = (tag, className, text) => {
@@ -46,13 +48,13 @@
     snapInput.type = 'checkbox'; snapInput.checked = true
     snapInput.addEventListener('change', () => { snapping = snapInput.checked })
     snapLabel.append(snapInput, make('span', '', 'Snap to grid'))
-    toolbar.append(undoButton, redoButton, button('Copy', copy), button('Paste', paste), button('Delete', remove), selectButton, snapLabel, button('Fit', fit))
+    toolbar.append(undoButton, redoButton, button('Copy', copy), button('Paste', paste), button('Delete', remove), button('Make custom node', makeCustom), selectButton, snapLabel, button('Fit', fit))
     const search = make('input'); search.type = 'search'; search.placeholder = 'Search nodes…'; search.setAttribute('aria-label', 'Search node palette')
     const paletteItems = make('div'); palette.append(search, paletteItems)
     search.addEventListener('input', renderPalette)
     function id(prefix = 'node') {
       let value
-      do { value = `${prefix}-${++sequence}` } while ([...graph.nodes, ...graph.edges].some(item => item.id === value))
+      do { value = `${prefix}-${++sequence}` } while ([...graph.nodes, ...graph.edges, ...customNodes].some(item => item.id === value))
       return value
     }
     function point(event) {
@@ -63,11 +65,11 @@
     function position(node, index = graph.nodes.indexOf(node)) {
       return { x: Number.isFinite(node.position?.x) ? node.position.x : index * 280, y: Number.isFinite(node.position?.y) ? node.position.y : 0 }
     }
-    function portSpec(port) { return kinds[graph.nodes.find(node => node.id === port.node)?.kind]?.[port.direction === 'output' ? 'outputs' : 'inputs']?.[port.port] }
+    function portSpec(port) { return specFor(graph.nodes.find(node => node.id === port.node))?.[port.direction === 'output' ? 'outputs' : 'inputs']?.[port.port] }
     function portPosition(port) {
       const node = graph.nodes.find(node => node.id === port.node)
       if (!node) return null
-      const ports = kinds[node.kind]?.[port.direction === 'output' ? 'outputs' : 'inputs'] || {}
+      const ports = specFor(node)?.[port.direction === 'output' ? 'outputs' : 'inputs'] || {}
       const index = Object.keys(ports).indexOf(port.port), pos = position(node)
       return index < 0 ? null : { x: pos.x + (port.direction === 'output' ? WIDTH : 0), y: pos.y + PORT_TOP + index * ROW }
     }
@@ -130,23 +132,29 @@
     function insert(next, node, edgeId) {
       const edge = next.edges.find(edge => edge.id === edgeId)
       if (!edge) return { ...next, nodes: [...next.nodes, node] }
-      const output = kinds[next.nodes.find(node => node.id === edge.from.node)?.kind]?.outputs?.[edge.from.port]
-      const input = kinds[next.nodes.find(node => node.id === edge.to.node)?.kind]?.inputs?.[edge.to.port]
-      const spec = kinds[node.kind]
+      const output = specFor(next.nodes.find(node => node.id === edge.from.node))?.outputs?.[edge.from.port]
+      const input = specFor(next.nodes.find(node => node.id === edge.to.node))?.inputs?.[edge.to.port]
+      const spec = specFor(node)
       const inputPort = Object.keys(spec.inputs || {}).find(port => edit.compatible(output, spec.inputs[port]))
       const outputPort = Object.keys(spec.outputs || {}).find(port => edit.compatible(spec.outputs[port], input))
       if (!inputPort || !outputPort) throw new Error('This node cannot be inserted into that wire.')
       return edit.insertOnEdge(next, kinds, edgeId, node, inputPort, outputPort, [id('edge'), id('edge')])
     }
     function add(kind, p, edgeId) {
-      if (!kinds[kind]) return
+      const definition = customNodes.find(item => `custom:${item.id}` === kind)
+      if (!definition && !kinds[kind]) return
+      if (definition) {
+        const node = { id: id(), kind: 'group', params: { definition: clone(definition) }, position: { x: snap(p.x), y: snap(p.y) } }
+        try { selected = new Set([node.id]); commit(insert(graph, node, edgeId)) } catch (error) { report(error) }
+        return
+      }
       const params = Object.fromEntries(Object.entries(kinds[kind].params || {}).filter(([, field]) => field.default !== undefined).map(([key, field]) => [key, clone(field.default)]))
       const node = { id: id(), kind, params, position: { x: snap(p.x), y: snap(p.y) } }
       try { const next = insert(graph, node, edgeId); selected = new Set([node.id]); commit(next) } catch (error) { report(error) }
     }
     function renderPalette() {
       paletteItems.replaceChildren()
-      for (const group of edit.searchPalette(kinds, search.value || '')) {
+      for (const group of edit.searchPalette(Object.fromEntries(Object.entries(kinds).filter(([kind, spec]) => kind !== 'group' && !spec.interface)), search.value || '')) {
         paletteItems.append(make('h4', '', group.category))
         for (const kind of group.kinds) {
           const item = button(kinds[kind].label || kind, () => {
@@ -158,14 +166,108 @@
           paletteItems.append(item)
         }
       }
+      const query = (search.value || '').toLowerCase()
+      const matches = customNodes.filter(item => !query || `custom ${item.name}`.toLowerCase().includes(query))
+      if (matches.length) paletteItems.append(make('h4', '', 'Custom'))
+      for (const definition of matches) {
+        const row = make('div', 'macro-custom-entry')
+        const item = button(definition.name, () => {
+          const rect = viewport.getBoundingClientRect()
+          add(`custom:${definition.id}`, { x: (rect.width / 2 - pan.x) / scale, y: (rect.height / 2 - pan.y) / scale })
+        })
+        item.dataset.customId = definition.id; item.draggable = true
+        item.addEventListener('dragstart', event => { event.dataTransfer.setData('application/x-afk-macro-kind', `custom:${definition.id}`); event.dataTransfer.effectAllowed = 'copy' })
+        row.append(item, button('Open', () => openCustom(definition)))
+        customName(definition, row)
+        row.append(button('Delete custom node', async () => {
+          try { await options.removeCustom?.(definition.id); customNodes = customNodes.filter(item => item.id !== definition.id); renderPalette() } catch (error) { report(error) }
+        }))
+        if (options.shareCustom) row.append(button('Share', async () => { try { await options.shareCustom(definition.id) } catch (error) { report(error) } }))
+        paletteItems.append(row)
+      }
+    }
+    async function persistCustom(definition) {
+      const saved = options.saveCustom ? await options.saveCustom(clone(definition)) : clone(definition)
+      customNodes = [...customNodes.filter(item => item.id !== saved.id), clone(saved)]
+      renderPalette()
+      return saved
+    }
+    async function makeCustom() {
+      try {
+        const original = JSON.stringify(graph), nodeId = id('group')
+        const result = edit.makeCustom(graph, [...selected], kinds, id('custom'), nodeId)
+        // Persist before replacing the selection, so a disk error loses no work.
+        await persistCustom(result.definition)
+        if (JSON.stringify(graph) !== original) { report('Saved to Custom. The canvas changed while saving; place it from the palette.'); return }
+        selected = new Set([nodeId]); commit(result.graph)
+      } catch (error) { report(error) }
+    }
+    function updateDefinition(definition) {
+      const next = clone(graph)
+      for (const node of next.nodes) if (node.kind === 'group' && node.params.definition?.id === definition.id) node.params.definition = clone(definition)
+      commit(next)
+    }
+    function customName(definition, host) {
+      const name = make('input'); name.type = 'text'; name.setAttribute('aria-label', 'Custom node name')
+      name.value = options.isMasked?.() ? '' : definition.name; name.disabled = Boolean(options.isMasked?.())
+      host.append(name, button('Rename', async () => {
+        if (options.isMasked?.()) return
+        try {
+          if (!name.value.trim()) throw new Error('Enter a name for the custom node.')
+          const saved = await persistCustom({ ...definition, name: name.value.trim().slice(0, 128) })
+          updateDefinition(saved)
+        } catch (error) { report(error) }
+      }))
+    }
+    function openCustom(definition) {
+      if (childEditor) return
+      const overlay = make('section', 'macro-custom-editor'), controls = make('div', 'macro-canvas-toolbar'), host = make('div')
+      const inner = { version: 3, nodes: clone(definition.nodes), edges: clone(definition.edges) }, innerKinds = { ...kinds }
+      const interfaces = []
+      let serial = 0
+      for (const direction of ['inputs', 'outputs']) for (const [name, boundary] of Object.entries(definition[direction])) {
+        let proxyId
+        do { proxyId = `boundary-${++serial}` } while (inner.nodes.some(node => node.id === proxyId))
+        const kind = `boundary.${serial}`
+        const spec = { type: boundary.type }
+        innerKinds[kind] = { label: `${direction === 'inputs' ? 'Input' : 'Output'}: ${name}`, category: 'Custom', params: {}, inputs: direction === 'outputs' ? { in: spec } : {}, outputs: direction === 'inputs' ? { out: spec } : {}, interface: true }
+        inner.nodes.push({ id: proxyId, kind, params: {}, position: { x: direction === 'inputs' ? -280 : 840, y: serial * 120 } })
+        let edgeId
+        do { edgeId = `boundary-edge-${++serial}` } while (inner.edges.some(edge => edge.id === edgeId))
+        inner.edges.push({ id: edgeId, from: direction === 'inputs' ? { node: proxyId, port: 'out' } : { node: boundary.node, port: boundary.port }, to: direction === 'inputs' ? { node: boundary.node, port: boundary.port } : { node: proxyId, port: 'in' } })
+        interfaces.push({ proxyId, direction, name, boundary })
+      }
+      const close = () => { childEditor?.destroy(); childEditor = null; childCaption = null; overlay.parentElement?.replaceChildren(...Array.from(overlay.parentElement.children).filter(child => child !== overlay)) }
+      const childOptions = { ...options, graph: inner, kinds: innerKinds, customNodes, history: undefined, onChange() {} }
+      const heading = make('strong', '', `Editing ${definition.name}`)
+      childCaption = () => { heading.textContent = mask(`Editing ${definition.name}`) }
+      controls.append(heading, button('Save custom node', async () => {
+        try {
+          const edited = childEditor.getGraph(), next = { ...clone(definition), nodes: edited.nodes.filter(node => !interfaces.some(item => item.proxyId === node.id)), edges: edited.edges.filter(edge => !interfaces.some(item => item.proxyId === edge.from.node || item.proxyId === edge.to.node)), inputs: {}, outputs: {} }
+          for (const item of interfaces) {
+            const wires = edited.edges.filter(edge => item.direction === 'inputs' ? edge.from.node === item.proxyId : edge.to.node === item.proxyId)
+            if (wires.length !== 1) throw new Error(`Connect exactly one wire to boundary ${item.name}.`)
+            const endpoint = item.direction === 'inputs' ? wires[0].to : wires[0].from
+            next[item.direction][item.name] = { ...item.boundary, ...endpoint }
+          }
+          const saved = await persistCustom(next)
+          close(); updateDefinition(saved)
+        } catch (error) { report(error) }
+      }), button('Cancel custom edit', close))
+      overlay.append(controls, host); shell.append(overlay)
+      childEditor = create(host, childOptions)
     }
     function renderInspector() {
       inspector.replaceChildren(make('h4', '', 'Inspector'))
       const node = graph.nodes.find(node => selected.has(node.id))
       if (!node || selected.size !== 1) { inspector.append(make('p', '', selected.size ? `${selected.size} nodes selected` : 'Select a node to edit its parameters.')); return }
-      inspector.append(make('strong', '', node.label || kinds[node.kind]?.label || node.kind))
+      inspector.append(make('strong', '', node.label || specFor(node)?.label || node.kind))
+      if (node.kind === 'group') {
+        customName(node.params.definition, inspector)
+        inspector.append(button('Open custom node', () => openCustom(node.params.definition)))
+      }
       if (options.createSchemaFields) {
-        const fields = options.createSchemaFields(kinds[node.kind]?.params || {}, node.params || {}, (key, value) => {
+        const fields = options.createSchemaFields(specFor(node)?.params || {}, node.params || {}, (key, value) => {
           const next = clone(graph), params = next.nodes.find(item => item.id === node.id).params
           if (value === undefined) delete params[key]; else params[key] = value
           commit(next)
@@ -183,7 +285,7 @@
         inspector.append(fields)
       }
     }
-    function cardHeight(node) { const spec = kinds[node.kind] || {}; return PORT_TOP + Math.max(1, Object.keys(spec.inputs || {}).length, Object.keys(spec.outputs || {}).length) * ROW + 10 }
+    function cardHeight(node) { const spec = specFor(node) || {}; return PORT_TOP + Math.max(1, Object.keys(spec.inputs || {}).length, Object.keys(spec.outputs || {}).length) * ROW + 10 }
     function renderWires() {
       svg.replaceChildren(); labels.replaceChildren()
       for (const edge of graph.edges) {
@@ -207,7 +309,7 @@
       cards.replaceChildren()
       const byNode = edit.nodeErrors(graph, errors)
       for (const node of graph.nodes) {
-        const spec = kinds[node.kind] || {}, pos = position(node), theme = themes[spec.category] || ['#64748b', '◆']
+        const spec = specFor(node) || {}, pos = position(node), theme = themes[spec.category] || ['#64748b', '◆']
         const card = make('article', 'macro-canvas-node'); card.dataset.nodeId = node.id
         card.classList.toggle('selected', selected.has(node.id)); card.classList.toggle('live-running', live?.nodeId === node.id)
         const messages = [...(byNode[node.id] || []), ...(live?.errors?.[node.id] ? [live.errors[node.id]] : [])]
@@ -215,7 +317,7 @@
         card.style.left = `${pos.x}px`; card.style.top = `${pos.y}px`; card.style.height = `${cardHeight(node)}px`
         const header = make('header', 'macro-canvas-node-header'); header.style.backgroundColor = theme[0]
         header.append(make('span', 'macro-canvas-icon', theme[1]), make('strong', '', node.label || spec.label || node.kind))
-        const summary = Object.entries(node.params || {}).map(([key, value]) => `${key}: ${typeof value === 'object' ? JSON.stringify(value) : value}`).join(' · ') || 'No parameters'
+        const summary = Object.entries(node.params || {}).filter(([key]) => key !== 'definition').map(([key, value]) => `${key}: ${typeof value === 'object' ? JSON.stringify(value) : value}`).join(' · ') || 'No parameters'
         const line = make('div', 'macro-canvas-summary', summary); line.title = mask(summary)
         card.append(header, line)
         for (const direction of ['input', 'output']) {
@@ -342,6 +444,7 @@
     })) fit()
     return {
       getGraph: () => clone(graph), undo, redo,
+      setCustomNodes(next) { customNodes = clone(next || []); renderPalette() },
       setGraph(next) {
         // Live events re-send the saved draft while a drag has temporary positions.
         if (gesture?.type === 'nodes' && JSON.stringify(next) === JSON.stringify(gesture.original)) return
@@ -350,8 +453,8 @@
       },
       setLive(next) { live = next; runStatus.textContent = mask(`Graph run: ${live?.status === 'started' ? 'running' : live?.status || 'idle'}`); renderCards(); renderWires() },
       setErrors(next) { errors = next || []; renderCards() },
-      refresh() { renderPalette(); render() },
-      destroy() { gesture = null; container.replaceChildren() }
+      refresh() { renderPalette(); render(); childEditor?.refresh(); childCaption?.() },
+      destroy() { childEditor?.destroy(); childEditor = null; childCaption = null; gesture = null; container.replaceChildren() }
     }
   }
   root.afkMacroCanvas = { create }

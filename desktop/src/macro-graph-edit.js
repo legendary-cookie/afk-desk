@@ -6,6 +6,39 @@
   const clone = value => JSON.parse(JSON.stringify(value))
   const snap = (value, grid = 20) => Math.round(value / grid) * grid
   const compatible = (output, input) => Boolean(output && input && (output.type === input.type || (output.type !== 'control' && input.type !== 'control' && (output.type === 'any' || input.type === 'any'))))
+  function nodeSpec(node, kinds) {
+    if (node?.kind !== 'group') return kinds[node?.kind]
+    const definition = node.params?.definition
+    const inputs = definition?.inputs || {}, outputs = definition?.outputs || {}
+    return { label: definition?.name || 'Custom node', category: 'Custom', inputs, outputs,
+      params: Object.fromEntries(Object.entries(inputs).filter(([, p]) => p.type !== 'control').map(([key, p]) => [key, { type: p.type, label: key }])) }
+  }
+  function makeCustom(graph, ids, kinds, customId, nodeId, name = 'Custom node') {
+    const selected = new Set(ids), inner = copySelection(graph, ids)
+    if (!inner.nodes.length) throw new Error('Select nodes to make a custom node.')
+    if (inner.nodes.some(node => node.kind.startsWith('trigger.'))) throw new Error('Triggers must stay outside custom nodes.')
+    const inputs = {}, outputs = {}, inputKeys = new Map(), outputKeys = new Map()
+    const boundary = (endpoint, direction) => {
+      const ports = direction === 'inputs' ? inputs : outputs, keys = direction === 'inputs' ? inputKeys : outputKeys
+      const key = JSON.stringify(endpoint)
+      if (!keys.has(key)) {
+        const port = `${direction === 'inputs' ? 'in' : 'out'}${keys.size + 1}`
+        const spec = nodeSpec(graph.nodes.find(node => node.id === endpoint.node), kinds)?.[direction]?.[endpoint.port]
+        if (!spec) throw new Error('Boundary wire references a missing port.')
+        ports[port] = { ...clone(spec), node: endpoint.node, port: endpoint.port }; keys.set(key, port)
+      }
+      return keys.get(key)
+    }
+    const edges = graph.edges.filter(edge => !(selected.has(edge.from.node) && selected.has(edge.to.node))).map(edge => {
+      const copy = clone(edge)
+      if (selected.has(edge.to.node)) copy.to = { node: nodeId, port: boundary(edge.to, 'inputs') }
+      if (selected.has(edge.from.node)) copy.from = { node: nodeId, port: boundary(edge.from, 'outputs') }
+      return copy
+    })
+    const definition = { id: customId, name, version: 3, ...inner, inputs, outputs }
+    const node = { id: nodeId, kind: 'group', params: { definition: clone(definition) }, position: clone(inner.nodes[0].position || { x: 0, y: 0 }) }
+    return { definition, graph: { ...clone(graph), nodes: [...clone(graph.nodes.filter(node => !selected.has(node.id))), node], edges } }
+  }
   // Shared by the renderer and graph model, so opening and saving use the same
   // branch/loop migration as the engine.
   function migrateV2(macro) {
@@ -68,8 +101,8 @@
   function connect(graph, kinds, edge) {
     const from = graph.nodes.find(node => node.id === edge.from.node)
     const to = graph.nodes.find(node => node.id === edge.to.node)
-    const output = kinds[from?.kind]?.outputs?.[edge.from.port]
-    const input = kinds[to?.kind]?.inputs?.[edge.to.port]
+    const output = nodeSpec(from, kinds)?.outputs?.[edge.from.port]
+    const input = nodeSpec(to, kinds)?.inputs?.[edge.to.port]
     if (!compatible(output, input)) throw new Error('Incompatible ports.')
     if (graph.edges.some(item => item.id === edge.id)) throw new Error('Duplicate edge id.')
     if (input.type !== 'control' && graph.edges.some(item => item.to.node === edge.to.node && item.to.port === edge.to.port)) throw new Error('Input already connected.')
@@ -163,7 +196,7 @@
       redo() { if (index < snapshots.length - 1) index++; return clone(snapshots[index]) }
     }
   }
-  const api = { snap, compatible, connect, insertOnEdge, copySelection, pasteSelection, searchPalette, nodeErrors, createHistory, migrateV2, toSimple }
+  const api = { snap, compatible, nodeSpec, makeCustom, connect, insertOnEdge, copySelection, pasteSelection, searchPalette, nodeErrors, createHistory, migrateV2, toSimple }
   if (typeof module === 'object' && module.exports) module.exports = api
   else root.afkMacroGraphEdit = api
 })(typeof window === 'undefined' ? globalThis : window)
