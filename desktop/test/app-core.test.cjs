@@ -435,6 +435,8 @@ test('recipe graph services persist live safety settings and deliver captured im
   assert.equal(events.at(-1).message, 'nearby'); assert.deepEqual(events.at(-1).images, images)
   core.platform.captureAlertImages = async () => []
   await assert.rejects(core.facade.graphAction('a', { type: 'screenshot' }), /stays connected/)
+})
+
 test('Bedrock deposit target is per-account, validated and preserved on partial edits', () => {
   const target = { x: -4, y: 65, z: 12 }
   const base = { label: 'test', username: 'test', host: 'localhost', edition: 'bedrock' }
