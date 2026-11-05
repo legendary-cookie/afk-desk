@@ -3,12 +3,11 @@ const categories = {
   server: ['host', 'port', 'version'],
   deposit: ['autoDepositToChest', 'autoDepositRange', 'autoDepositMode', 'autoDepositInterval', 'autoDepositFullThreshold'],
   antiAfk: ['antiAfk', 'antiAfkInterval', 'antiAfkMinDelay', 'antiAfkMaxDelay', 'antiAfkActionDuration', 'antiAfkWalkDistance', 'antiAfkLookDegrees', 'antiAfkChatEnabled', 'antiAfkChatMessage', 'antiAfkChatIntervalSec', 'antiAfkJump', 'antiAfkLook', 'antiAfkSneak', 'antiAfkSwing', 'antiAfkWalk', 'environmentalMovement'],
-  macros: ['automations'],
+  macros: ['automations', 'macroTargets'],
   messages: ['joinMessage', 'serverChangeMessage', 'messageDelay', 'serverChangeRetryMinutes'],
   notifications: ['alerts'],
   reconnect: ['autoReconnect', 'autoReconnectDelay', 'autoReconnectBackoffMultiplier', 'autoReconnectMaxDelay', 'autoReconnectRateLimitDelay', 'autoReconnectMaxAttempts', 'connectTimeoutSeconds', 'reconnectResetDelay'],
   safety: ['autoEat', 'autoEatThreshold', 'lowHealthTotem', 'lowHealthDisconnect', 'lowHealthThreshold', 'lowHealthCooldownMinutes', 'scheduleEnabled', 'scheduleStart', 'scheduleEnd', 'scheduleDays'],
-  display: []
 }
 const clone = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value))
 const fields = new Set(Object.values(categories).flat())
@@ -42,4 +41,19 @@ function apply(accounts, account) {
   if (!old) result.push(account)
   return result
 }
-module.exports = {categories, normalizeLink, apply}
+// Explicit account targets are shared; tag and all-account targets remain dynamic.
+function syncMacroTargets(macros, accounts, sourceId, previousTargets = null) {
+  const source = accounts.find(a => a.id === sourceId)
+  const link = normalizeLink(source?.linkGroup)
+  if (!link?.categories.includes('macros') || link.excluded.includes('macroTargets')) return macros
+  const peers = accounts.filter(a => a.id !== sourceId && normalizeLink(a.linkGroup)?.id === link.id && !normalizeLink(a.linkGroup).excluded.includes('macroTargets'))
+  return macros.map(macro => {
+    if (macro.targets?.mode !== 'accounts') return macro
+    const assigned = macro.targets.accountIds.includes(sourceId)
+    if (previousTargets && previousTargets.mode === 'accounts' && previousTargets.accountIds.includes(sourceId) === assigned) return macro
+    const ids = new Set(macro.targets.accountIds)
+    for (const peer of peers) assigned ? ids.add(peer.id) : ids.delete(peer.id)
+    return {...macro, targets: {...macro.targets, accountIds: [...ids]}}
+  })
+}
+module.exports = {categories, normalizeLink, apply, syncMacroTargets}

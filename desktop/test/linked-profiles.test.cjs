@@ -23,3 +23,17 @@ test('old profiles and invalid links load without a group', () => {
   assert.equal(normalizeLink({id:'bad id'}), null)
   assert.equal(apply([], {id:'old', username:'a'})[0].linkGroup, null)
 })
+
+test('macro targets follow linked assignments and honor field exclusions', () => {
+  const {syncMacroTargets} = require('../core/linked-profiles.cjs')
+  const link = {id:'g', name:'Group', categories:['macros'], excluded:[]}
+  const accounts = [{id:'a', linkGroup:link}, {id:'b', linkGroup:link}, {id:'c', linkGroup:{...link, excluded:['macroTargets']}}]
+  const macros = [{id:'m', targets:{mode:'accounts', accountIds:['a','c']}}, {id:'all', targets:{mode:'all'}}]
+  let synced = syncMacroTargets(macros, accounts, 'a')
+  assert.deepEqual(synced[0].targets.accountIds, ['a','c','b'])
+  assert.deepEqual(synced[1], macros[1])
+  synced = syncMacroTargets([{...synced[0], targets:{mode:'accounts', accountIds:['b','c']}}], accounts, 'a', {mode:'accounts', accountIds:['a']})
+  assert.deepEqual(synced[0].targets.accountIds, ['c'])
+  assert.deepEqual(syncMacroTargets(macros, accounts, 'c'), macros)
+  assert.deepEqual(normalizeLink({...link, categories:['display','macros']}).categories, ['macros'])
+})

@@ -23,3 +23,9 @@ test('old profiles and invalid links load without a group', () => {
   assert.equal(normalizeLink({id:'bad id'}), null)
   assert.equal(apply([], {id:'old', username:'a'})[0].linkGroup, null)
 })
+
+test('only categories with shared fields are offered', () => {
+  const {categories} = require('../linked-profiles.cjs')
+  assert.equal(Object.hasOwn(categories, 'display'), false)
+  assert.ok(Object.values(categories).every(fields => fields.length > 0))
+})

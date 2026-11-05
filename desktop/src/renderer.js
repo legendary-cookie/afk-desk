@@ -937,7 +937,7 @@ const linkCategories = {
   macros: ['Macro assignment', {}], messages: ['Timed messages', {'join-message': 'joinMessage', 'server-change-message': 'serverChangeMessage', 'message-delay': 'messageDelay', 'server-change-retry-minutes': 'serverChangeRetryMinutes'}],
   notifications: ['Notifications', {'alert-disconnect': 'alerts', 'alert-errors': 'alerts', 'alert-health': 'alerts'}],
   reconnect: ['Reconnect policy', {'auto-reconnect': 'autoReconnect', 'auto-reconnect-delay': 'autoReconnectDelay', 'auto-reconnect-max': 'autoReconnectMaxAttempts', 'auto-reconnect-backoff': 'autoReconnectBackoffMultiplier', 'auto-reconnect-max-delay': 'autoReconnectMaxDelay', 'auto-reconnect-rate-limit-delay': 'autoReconnectRateLimitDelay', 'connect-timeout': 'connectTimeoutSeconds', 'reconnect-reset-delay': 'reconnectResetDelay'}],
-  safety: ['Safety', {'safety-eat': 'autoEat', 'safety-food': 'autoEatThreshold', 'safety-totem': 'lowHealthTotem', 'safety-disconnect': 'lowHealthDisconnect', 'safety-health': 'lowHealthThreshold', 'safety-cooldown': 'lowHealthCooldownMinutes', 'safety-schedule': 'scheduleEnabled', 'safety-start': 'scheduleStart', 'safety-end': 'scheduleEnd', ...Object.fromEntries(Array.from({length: 7}, (_, day) => [`safety-day-${day}`, 'scheduleDays']))}], display: ['POV/display', {}]
+  safety: ['Safety', {'safety-eat': 'autoEat', 'safety-food': 'autoEatThreshold', 'safety-totem': 'lowHealthTotem', 'safety-disconnect': 'lowHealthDisconnect', 'safety-health': 'lowHealthThreshold', 'safety-cooldown': 'lowHealthCooldownMinutes', 'safety-schedule': 'scheduleEnabled', 'safety-start': 'scheduleStart', 'safety-end': 'scheduleEnd', ...Object.fromEntries(Array.from({length: 7}, (_, day) => [`safety-day-${day}`, 'scheduleDays']))}]
 }
 let editingLink = null
 function setupLinkEditor(account) {
@@ -966,6 +966,13 @@ function setupLinkEditor(account) {
       row.append(check, document.createTextNode(' ' + label + ' ')); box.append(row)
       check.onchange = () => { editingLink.categories = check.checked ? [...editingLink.categories, category] : editingLink.categories.filter(x => x !== category); draw() }
       if (!check.checked) continue
+      const extraFields = category === 'macros' ? ['automations', 'macroTargets'] : category === 'antiAfk' ? ['antiAfkInterval'] : []
+      for (const field of extraFields) {
+        if (editingLink.excluded.includes(field)) continue
+        const badge = document.createElement('button'); badge.type = 'button'; badge.className = 'linked-field-badge'
+        badge.textContent = `Linked ${field === 'macroTargets' ? 'macro targets' : field === 'automations' ? 'legacy automations' : 'anti-AFK interval'} · Unlink this field`
+        badge.onclick = () => { editingLink.excluded.push(field); draw() }; row.after(badge)
+      }
       for (const [id, field] of Object.entries(inputs)) {
         const input = document.getElementById(id); if (!input || editingLink.excluded.includes(field)) continue
         const badge = document.createElement('button'); badge.type = 'button'; badge.className = 'linked-field-badge'; badge.textContent = 'Linked · Unlink this field'

@@ -266,8 +266,13 @@ class AppCore {
         }
         writeBackV1(this.store, macro)
         this.macroLibrary.save(macro)
+        const accounts = this.store.list()
+        const ids = new Set([...(prev?.targets?.accountIds || []), ...(macro.targets?.accountIds || [])])
+        let synced = [this.macroLibrary.get(macro.id)]
+        for (const id of ids) synced = linkedProfiles.syncMacroTargets(synced, accounts, id, prev?.targets || { mode: 'accounts', accountIds: [] })
+        if (JSON.stringify(synced[0]) !== JSON.stringify(this.macroLibrary.get(macro.id))) this.macroLibrary.save(synced[0])
         this.macroEngine?.setLibrary(this.macroLibrary.list())
-        return macro
+        return this.macroLibrary.get(macro.id)
       },
       remove: (id) => this._removeMacro(id),
       delete: (id) => this._removeMacro(id),
@@ -574,6 +579,16 @@ class AppCore {
     const before = this.store.list()
     const after = linkedProfiles.apply(before, account)
     this.store.write(after)
+    const old = before.find(a => a.id === account.id)
+    const link = linkedProfiles.normalizeLink(account.linkGroup)
+    const wasLinked = linkedProfiles.normalizeLink(old?.linkGroup)
+    if (link?.categories.includes('macros') && (wasLinked?.id !== link.id || !wasLinked.categories.includes('macros'))) {
+      const source = wasLinked?.id === link.id ? after.find(a => a.id === account.id) : after.find(a => a.id !== account.id && linkedProfiles.normalizeLink(a.linkGroup)?.id === link.id && !linkedProfiles.normalizeLink(a.linkGroup).excluded.includes('macroTargets'))
+      if (source) {
+        const macros = linkedProfiles.syncMacroTargets(this.macroLibrary.list(), after, source.id)
+        if (JSON.stringify(macros) !== JSON.stringify(this.macroLibrary.list())) this.macroLibrary.replaceAll(macros)
+      }
+    }
     this.macroEngine?.setLibrary(this.macroLibrary.list())
     for (const saved of after) {
       const existing = before.find(a => a.id === saved.id)
@@ -656,10 +671,16 @@ class AppCore {
     assertMacroPayload(json)
     const result = macroModel.importMacros(json, this._macroOptions())
     if (result.errors.length) return result
-    const merged = [...this.macroLibrary.list(), ...result.macros].slice(0, LIMITS.maxMacros)
+    const accounts = this.store.list()
+    const imported = result.macros.map(macro => {
+      let synced = [macro]
+      for (const id of macro.targets?.accountIds || []) synced = linkedProfiles.syncMacroTargets(synced, accounts, id)
+      return synced[0]
+    })
+    const merged = [...this.macroLibrary.list(), ...imported].slice(0, LIMITS.maxMacros)
     this.macroLibrary.replaceAll(merged)
     this.macroEngine?.setLibrary(this.macroLibrary.list())
-    return { ...result, macros: result.macros }
+    return { ...result, macros: imported }
   }
 
   _exportMacros(ids) {

@@ -8,7 +8,6 @@ const categories = {
   notifications: ['alerts'],
   reconnect: ['autoReconnect', 'autoReconnectDelay', 'autoReconnectBackoffMultiplier', 'autoReconnectMaxDelay', 'autoReconnectRateLimitDelay', 'autoReconnectMaxAttempts', 'connectTimeoutSeconds', 'reconnectResetDelay'],
   safety: ['autoEat', 'autoEatThreshold', 'lowHealthTotem', 'lowHealthDisconnect', 'lowHealthThreshold', 'lowHealthCooldownMinutes', 'scheduleEnabled', 'scheduleStart', 'scheduleEnd', 'scheduleDays'],
-  display: []
 }
 const clone = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value))
 const fields = new Set(Object.values(categories).flat())
