@@ -971,7 +971,8 @@ dialog.macro-templates-dialog {
 .overview-module .panel-header { min-height: 42px; padding: 6px 12px; flex-shrink: 0; }
 .overview-module .panel-header h2 { font-size: 12px; }
 .overview-module .inventory-header { min-height: 58px; }
-.overview-module-bar { flex: 0 0 24px; height: 24px; display: flex; background: var(--surface-raised); }
+/* Handles overlay the header, so editing preserves every panel's grow share. */
+.overview-module-bar { position: absolute; top: 0; left: 0; right: 0; z-index: 3; height: 24px; display: flex; background: var(--surface-raised); }
 .overview-module-bar > button { height: 24px; min-height: 0; padding: 2px 6px; font: inherit; font-size: 11px; }
 .overview-module-handle { flex: 1; min-width: 0; text-align: left; cursor: grab; touch-action: none; }
 .overview-module-resize { position: absolute; right: 0; bottom: 0; cursor: nwse-resize; touch-action: none; z-index: 2; }
@@ -1000,12 +1001,12 @@ dialog.macro-templates-dialog {
   .movement-panel > .minimap p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 }
 /* Keep content collapsed without taking away the editor's resize target. */
-.overview-editing .overview-empty, .overview-editing .overview-modules > .overview-module:has(> .macro-section) { align-self: stretch; }
-.overview-editing .overview-modules > .overview-module > .macro-section { flex: 1 1 0; }
 .overview-module > .collapsed { flex: 0 0 auto; align-self: stretch; width: 100%; }
 /* A collapsed movement grid has no content tracks to distribute spare height. */
 .overview-module > .movement-panel.collapsed { display: block; }
-/* Measure the real content at its arranged width without the assigned row height. */
+/* Shrink the wrapper and its content independently of assigned grid tracks.
+   In particular, the macro pad must never read back its stretched edit height. */
+.overview-measuring > .overview-module { height: max-content; align-self: start; }
 .overview-measuring > .overview-module > .collapsed,
 .overview-measuring > .overview-empty > .panel,
 .overview-measuring > .overview-module[data-module="inventory"] > .panel,

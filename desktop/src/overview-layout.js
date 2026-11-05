@@ -32,7 +32,7 @@
     bossBars: { minWidth: 130, minHeight: 76, preferredWidth: 160, preferredHeight: 96, maxHeight: 140, grow: 0, group: 'side', compact: true },
     nextRuns: { minWidth: 130, minHeight: 76, preferredWidth: 160, preferredHeight: 96, maxHeight: 140, grow: 0, group: 'side', compact: true }
   }
-  function autoArrange(active, { columns = 12, width = 1200, height = 600, gap = 8, measurements = {}, editing = false } = {}) {
+  function autoArrange(active, { columns = 12, width = 1200, height = 600, gap = 8, measurements = {} } = {}) {
     columns = integer(columns, 12, 1, 12)
     width = Number.isFinite(width) && width > 0 ? width : 1200
     height = Number.isFinite(height) && height > 0 ? height : 600
@@ -57,8 +57,8 @@
         } else if (id === 'inventory' && natural) {
           min = Math.min(min, natural); preferred = natural; max = Math.max(max, natural)
         }
-        const bar = editing ? editBarHeight : 0
-        return { items: [{ id, w: group.w }], min: min + bar, preferred: preferred + bar, max: max + bar, grow,
+        // Edit handles overlay the panel and never participate in allocation.
+        return { items: [{ id, w: group.w }], min, preferred, max, grow,
           naturalInventory: id === 'inventory' && natural && !measured.collapsed && !measured.empty }
       })
     }

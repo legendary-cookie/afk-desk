@@ -2090,12 +2090,18 @@ function observePanelFit() {
     applyPanelLayout(state.settings)
     overviewEditor?.fit()
   }
-  const observer = new ResizeObserver(fit)
+  let pending = false
+  const scheduleFit = () => {
+    if (pending) return
+    pending = true
+    requestAnimationFrame(() => { pending = false; fit() })
+  }
+  const observer = new ResizeObserver(scheduleFit)
   observer.observe(inventoryHeader)
   observer.observe(el.dashboard)
   const overviewGrid = el.dashboard.querySelector('.overview-modules')
   if (overviewGrid) observer.observe(overviewGrid)
-  window.addEventListener('resize', () => requestAnimationFrame(fit))
+  window.addEventListener('resize', scheduleFit)
   requestAnimationFrame(() => applyPanelLayout(state.settings))
 }
 

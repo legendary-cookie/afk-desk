@@ -24,7 +24,7 @@ window.createOverviewEditor = function ({ dashboard, settings, accountId, save, 
   controls.append(overrideLabel, autoLabel, arrange, preset, apply, reset, picker, add, help); toolbar.append(edit, notice, controls)
   const grid = document.createElement('div'); grid.className = 'overview-modules'
   dashboard.append(toolbar, grid)
-  let editing = false, currentAccount = null, active = false, layout = [], mode = 'auto', lastSize = '', saving = Promise.resolve()
+  let editing = false, currentAccount = null, active = false, layout = [], mode = 'auto', lastSize = '', lastMeasurements = {}, saving = Promise.resolve()
   function config() { return model.normalizeSettings(settings().overviewLayout) }
   function persist() {
     const data = config()
@@ -43,14 +43,17 @@ window.createOverviewEditor = function ({ dashboard, settings, accountId, save, 
     return ['scoreboard', 'effects', 'bossBars', 'nextRuns'].includes(id)
       ? !!node.querySelector('.module-empty') : id === 'minimap' && node.classList.contains('map-empty')
   }
-  function arrangePanels(size) {
-    // Set widths first: wrapping, container queries and UI zoom affect natural height.
-    const initial = model.autoArrange(layout, size)
-    for (const item of initial.layout) {
-      const wrapper = nodes[item.id].parentNode
-      wrapper.style.gridColumn = `${item.x + 1} / span ${item.w}`
+  function arrangePanels(size, force = false) {
+    const key = `${Math.round(size.width)}:${Math.round(size.height)}`
+    const resized = lastSize !== key
+    // Width is an input to wrapping and container queries. Only recompute columns
+    // for a new module set or viewport, never for an observer echo of our rows.
+    if (force || resized) {
+      const initial = model.autoArrange(layout, size)
+      for (const item of initial.layout) nodes[item.id].parentNode.style.gridColumn = `${item.x + 1} / span ${item.w}`
     }
     const measurements = {}
+    let changed = Object.keys(lastMeasurements).length !== layout.length
     grid.classList.toggle('overview-measuring', true)
     try {
       const rect = grid.getBoundingClientRect()
@@ -62,19 +65,28 @@ window.createOverviewEditor = function ({ dashboard, settings, accountId, save, 
         const header = node.querySelector(item.id === 'macro' ? '.macro-header' : '.panel-header')
         measurements[item.id] = { collapsed, empty, headerHeight: header ? height(header) + 2 : 0,
           naturalHeight: header && (empty || model.registry[item.id].compact || item.id === 'inventory') ? height(node) : 0 }
-        node.parentNode.classList.toggle('overview-empty', empty)
+        const previous = lastMeasurements[item.id], next = measurements[item.id]
+        if (!previous || previous.collapsed !== collapsed || previous.empty !== empty ||
+            Math.abs(previous.naturalHeight - next.naturalHeight) > 8 || Math.abs(previous.headerHeight - next.headerHeight) > 8) changed = true
+        else if (!resized && !force) measurements[item.id] = previous
       }
     } finally { grid.classList.remove('overview-measuring') }
-    const result = model.autoArrange(layout, { ...size, measurements, editing })
+    if (!force && !resized && !changed) return
+    lastSize = key; lastMeasurements = measurements
+    const result = model.autoArrange(layout, { ...size, measurements })
     layout = result.layout
     grid.style.minHeight = `${result.minHeight}px`
     grid.style.setProperty('--overview-rows', result.rows)
-    for (const item of layout) nodes[item.id].parentNode.style.gridRow = `${item.y + 1} / span ${item.h}`
+    for (const item of layout) {
+      const wrapper = nodes[item.id].parentNode
+      wrapper.classList.toggle('overview-empty', measurements[item.id].empty)
+      wrapper.style.gridRow = `${item.y + 1} / span ${item.h}`
+    }
   }
   function fit(contentChanged = false) {
     if (!active || mode !== 'auto') return
-    const size = viewport(), key = `${size.width}:${Math.round(size.height)}`
-    if (contentChanged || lastSize !== key) { lastSize = key; arrangePanels(size) }
+    const size = viewport(), key = `${Math.round(size.width)}:${Math.round(size.height)}`
+    if (contentChanged || lastSize !== key) arrangePanels(size)
   }
   // Observe the retained panels, not generated wrappers. Arrangement only changes
   // wrapper styles, so chat/HUD updates can be coalesced without a resize loop.
@@ -91,7 +103,7 @@ window.createOverviewEditor = function ({ dashboard, settings, accountId, save, 
   function draw() {
     observer?.disconnect()
     auto.checked = mode === 'auto'; notice.hidden = mode === 'auto'
-    const size = viewport(); lastSize = `${size.width}:${Math.round(size.height)}`
+    const size = viewport()
     const arranged = mode === 'auto' ? model.autoArrange(layout, size) : null
     if (arranged) layout = arranged.layout
     grid.style.minHeight = arranged ? `${arranged.minHeight}px` : '0px'
@@ -143,7 +155,7 @@ window.createOverviewEditor = function ({ dashboard, settings, accountId, save, 
     picker.replaceChildren()
     for (const [id, name] of Object.entries(model.names)) if (!byId.has(id)) { const option = document.createElement('option'); option.value = id; option.textContent = name; picker.append(option) }
     add.disabled = !picker.options.length
-    if (mode === 'auto') arrangePanels(viewport())
+    if (mode === 'auto') arrangePanels(viewport(), true)
     observeContent()
   }
   function refresh(force = false) {

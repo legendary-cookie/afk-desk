@@ -54,7 +54,8 @@ function fixture(global = model.presets.Default, globalMode = 'auto', prepare = 
   for (const [selector, node] of Object.entries(selectors)) (selector === '#macro-section' ? consolePanel : original).append(node)
   const document = { querySelector: selector => selectors[selector], createElement: tag => new Element(tag), createComment: () => new Element('comment') }
   const settings = { overviewLayout: { version: model.version, global, overrides: {}, globalMode, overrideModes: {} } }, saved = []
-  const window = new Element(); window.afkOverviewLayout = model
+  const arrangements = []
+  const window = new Element(); window.afkOverviewLayout = { ...model, autoArrange(...args) { arrangements.push(args); return model.autoArrange(...args) } }
   const frames = [], observations = []
   let contentChanged
   window.requestAnimationFrame = fn => frames.push(fn)
@@ -73,7 +74,7 @@ function fixture(global = model.presets.Default, globalMode = 'auto', prepare = 
     const find = node => node.children.find(child => child.textContent === text) || node.children.map(find).find(Boolean)
     return find(toolbar)
   }
-  return { frames, observations, mutate: () => contentChanged(), flush: () => { while (frames.length) frames.shift()() }, dashboard, original, selectors, settings, saved, editor, grid, window, toolbar, button, controls: toolbar.querySelector('.overview-controls'), account: id => { account = id; editor.refresh() } }
+  return { frames, observations, arrangements, mutate: () => contentChanged(), flush: () => { while (frames.length) frames.shift()() }, dashboard, original, selectors, settings, saved, editor, grid, window, toolbar, button, controls: toolbar.querySelector('.overview-controls'), account: id => { account = id; editor.refresh() } }
 }
 
 test('auto layout uses the existing panels and restores their homes outside overview', () => {
@@ -299,14 +300,14 @@ test('content and collapse changes reflow retained panels at full column width w
   assert.ok(Math.abs(displayedHeight(f, 'inventory') - 61) < 1)
 })
 
-test('natural inventory and wrapping macro content fit with edit bars and at UI zoom', () => {
+test('natural inventory and wrapping macro content fit with overlay handles and at UI zoom', () => {
   const f = fixture(model.presets.Default, 'auto', nodes => {
     measuredPanel(nodes['.inventory-panel'], 58, 390)
     measuredPanel(nodes['#macro-section'], 38, 90, 'macro-header')
   })
   f.grid.height = 720; f.button('Edit layout').dispatch('click')
-  assert.ok(displayedHeight(f, 'inventory') - model.editBarHeight >= 390)
-  assert.ok(displayedHeight(f, 'macro') - model.editBarHeight >= 90)
+  assert.ok(displayedHeight(f, 'inventory') >= 390)
+  assert.ok(displayedHeight(f, 'macro') >= 90)
   const inventory = f.selectors['.inventory-panel'], header = inventory.querySelector('.panel-header')
   f.grid.clientWidth = 1200
   f.grid.getBoundingClientRect = () => ({ width: 840, height: 504, top: 0 })
@@ -320,7 +321,7 @@ test('natural inventory and wrapping macro content fit with edit bars and at UI 
   f.selectors['#macro-section'].height = 90 * .7
   f.selectors['#macro-section'].querySelector('.macro-header').height = 38 * .7
   f.editor.fit(true)
-  assert.ok(displayedHeight(f, 'inventory') - model.editBarHeight >= 390)
+  assert.ok(displayedHeight(f, 'inventory') >= 390)
   assert.equal(f.grid.classList.contains('overview-measuring'), false)
 })
 
@@ -350,4 +351,105 @@ test('moving a retained handle uses the latest content and viewport arrangement'
   assert.equal(saved.y, before + 25)
   assert.equal(saved.w, 12)
   assert.equal(f.settings.overviewLayout.globalMode, 'manual')
+})
+
+
+function moduleGeometry(f) {
+  return f.grid.children.filter(node => node.dataset.module).map(node => [node.dataset.module, node.style.gridColumn, node.style.gridRow])
+}
+
+test('arrange observer echoes and unchanged content do not arrange again', () => {
+  const f = fixture(model.presets.Default, 'auto', nodes => {
+    measuredPanel(nodes['.inventory-panel'], 58, 390)
+    measuredPanel(nodes['#macro-section'], 38, 90, 'macro-header')
+  })
+  f.button('Edit layout').dispatch('click')
+  const before = moduleGeometry(f), calls = f.arrangements.length
+  for (let frame = 0; frame < 20; frame++) {
+    f.editor.fit() // ResizeObserver notification after assigning rows.
+    f.mutate(); f.mutate(); f.flush() // HUD/chat redraw without new size inputs.
+    assert.deepEqual(moduleGeometry(f), before)
+  }
+  assert.equal(f.arrangements.length, calls, 'observer echoes never invoke the arranger')
+  assert.equal(f.saved.length, 0)
+})
+
+test('content heights must change by more than 8px from the last applied measurement', () => {
+  const f = fixture(model.presets.Default, 'auto', nodes => measuredPanel(nodes['#macro-section'], 38, 90, 'macro-header'))
+  const macro = f.selectors['#macro-section'], before = moduleGeometry(f), calls = f.arrangements.length
+  for (const height of [94, 98, 86, 90, 98]) {
+    macro.height = height; f.mutate(); f.flush()
+    assert.deepEqual(moduleGeometry(f), before)
+    assert.equal(f.arrangements.length, calls)
+  }
+  macro.height = 99; f.mutate(); f.mutate()
+  assert.equal(f.frames.length, 1)
+  f.flush()
+  assert.equal(f.arrangements.length, calls + 1)
+  assert.notDeepEqual(moduleGeometry(f), before)
+  f.mutate(); f.flush()
+  assert.equal(f.arrangements.length, calls + 1)
+})
+
+test('empty state changes arrange even when content height stays the same', () => {
+  const f = fixture([...model.presets.Default, { id: 'scoreboard' }], 'auto', nodes => {
+    const board = nodes['#scoreboard-panel']
+    measuredPanel(board, 42, 73)
+    const empty = new Element(); empty.className = 'module-empty'; board.append(empty)
+  })
+  const board = f.selectors['#scoreboard-panel'], calls = f.arrangements.length
+  assert.equal(board.parentNode.classList.contains('overview-empty'), true)
+  board.querySelector('.module-empty').remove(); f.mutate(); f.flush()
+  assert.equal(f.arrangements.length, calls + 1)
+  assert.equal(board.parentNode.classList.contains('overview-empty'), false)
+})
+
+test('editing uses natural content rather than assigned heights and preserves every module row', () => {
+  const f = fixture(model.presets.Default, 'auto', nodes => {
+    measuredPanel(nodes['.inventory-panel'], 58, 390)
+    measuredPanel(nodes['#macro-section'], 38, 90, 'macro-header')
+  })
+  f.grid.height = 900; f.editor.fit()
+  for (const [selector, naturalHeight] of [['#macro-section', 90], ['.inventory-panel', 390]]) {
+    const node = f.selectors[selector]
+    node.getBoundingClientRect = () => {
+      assert.equal(f.grid.classList.contains('overview-measuring'), true, 'read intrinsic size with grid allocation removed')
+      return { height: naturalHeight }
+    }
+  }
+  const normal = moduleGeometry(f), consoleHeight = displayedHeight(f, 'console')
+  for (let i = 0; i < 3; i++) {
+    f.button('Edit layout').dispatch('click')
+    assert.deepEqual(moduleGeometry(f), normal)
+    assert.equal(displayedHeight(f, 'console'), consoleHeight)
+    assert.equal(f.grid.querySelector('.overview-module-bar').hidden, false)
+    f.mutate(); f.flush()
+    assert.deepEqual(moduleGeometry(f), normal)
+    f.button('Done editing').dispatch('click')
+    assert.deepEqual(moduleGeometry(f), normal)
+  }
+})
+
+test('renderer coalesces resize callbacks and an arrange-caused resize does not arrange again', () => {
+  const f = fixture(), source = fs.readFileSync(path.join(__dirname, '../src/renderer.js'), 'utf8')
+  const observed = []
+  let resize, panelFits = 0
+  const context = {
+    document: { querySelector: () => f.selectors['.inventory-panel'] }, el: { dashboard: f.dashboard }, state: { settings: {} },
+    overviewEditor: f.editor, applyPanelLayout() { panelFits++ },
+    ResizeObserver: class { constructor(fn) { resize = fn } observe(node) { observed.push(node) } },
+    requestAnimationFrame: f.window.requestAnimationFrame, window: f.window
+  }
+  vm.runInNewContext(source.slice(source.indexOf('function observePanelFit()'), source.indexOf('function bindSplitter(')) + '\nobservePanelFit()', context)
+  f.flush()
+  assert.deepEqual(observed, [f.selectors['.inventory-panel'], f.dashboard, f.grid])
+  f.grid.height = 900
+  resize(); resize(); f.window.dispatch('resize')
+  assert.equal(f.frames.length, 1, 'viewport changes coalesce in one frame')
+  f.flush()
+  const arranged = moduleGeometry(f), calls = f.arrangements.length
+  resize(); f.flush()
+  assert.equal(f.arrangements.length, calls, 'grid resize caused by arrange is ignored')
+  assert.deepEqual(moduleGeometry(f), arranged)
+  assert.equal(panelFits, 3)
 })

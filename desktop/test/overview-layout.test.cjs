@@ -283,14 +283,47 @@ test('natural inventory height takes priority over console preferences when the 
   assert.ok(moduleHeight(small, 'inventory') < 390, 'only scroll when the full grid cannot fit')
 })
 
-test('edit bars are reserved for every module without clipping compact or collapsed content', () => {
+test('edit bars overlay every module without changing content allocation', () => {
   const measurements = { macro: { naturalHeight: 90 }, inventory: { naturalHeight: 390 }, movement: { collapsed: true, headerHeight: 48 }, scoreboard: { empty: true, naturalHeight: 73 } }
   const result = layout.autoArrange([...layout.presets.Default, { id: 'scoreboard' }], { width: 1200, height: 720, measurements, editing: true })
   for (const [id, expected] of [['macro', 90], ['inventory', 390], ['movement', 48], ['scoreboard', 73]]) {
-    assert.ok(moduleHeight(result, id) - layout.editBarHeight >= expected - 1, id + ': content survives editing')
+    assert.ok(moduleHeight(result, id) >= expected - 1, id + ': content survives editing')
   }
   const css = fs.readFileSync(path.join(__dirname, '../src/styles.css'), 'utf8')
-  assert.match(css, new RegExp('\\.overview-module-bar \\{ flex: 0 0 ' + layout.editBarHeight + 'px; height: ' + layout.editBarHeight + 'px'))
+  assert.match(css, new RegExp('\\.overview-module-bar \\{ position: absolute;[^}]*height: ' + layout.editBarHeight + 'px'))
+  assert.match(css, /\.overview-measuring > \.overview-module \{ height: max-content; align-self: start/)
   assert.match(css, /\.overview-module > \.collapsed \{[^}]*align-self: stretch; width: 100%/)
   assert.match(css, /\.overview-module > \.movement-panel\.collapsed \{ display: block/)
+})
+
+
+test('arranging its own output repeatedly is idempotent for unchanged inputs', () => {
+  const measurements = { macro: { naturalHeight: 90 }, inventory: { naturalHeight: 390 },
+    movement: { collapsed: true, headerHeight: 48 }, scoreboard: { empty: true, naturalHeight: 73 } }
+  for (const width of [600, 1200]) for (const height of [480, 720, 1600]) for (const editing of [false, true]) {
+    const options = { width, height, measurements, editing }
+    const expected = layout.autoArrange(Object.keys(layout.names), options)
+    let result = expected
+    for (let frame = 0; frame < 20; frame++) {
+      result = layout.autoArrange(result.layout, options)
+      assert.deepEqual(result, expected)
+    }
+  }
+})
+
+test('editing preserves normal module rows, heights and the console grow share', () => {
+  const measurements = { macro: { naturalHeight: 90 }, inventory: { naturalHeight: 390 },
+    movement: { collapsed: true, headerHeight: 48 }, scoreboard: { empty: true, naturalHeight: 73 } }
+  for (const width of [600, 1200]) for (const height of [480, 720, 1600]) {
+    const options = { width, height, measurements }
+    const normal = layout.autoArrange(Object.keys(layout.names), options)
+    assert.deepEqual(layout.autoArrange(normal.layout, { ...options, editing: true }), normal)
+  }
+  const growth = editing => {
+    const small = layout.autoArrange(layout.presets.Default, { height: 900, measurements, editing })
+    const large = layout.autoArrange(small.layout, { height: 1100, measurements, editing })
+    return moduleHeight(large, 'console') - moduleHeight(small, 'console')
+  }
+  assert.ok(growth(true) > 0)
+  assert.equal(growth(true), growth(false))
 })
