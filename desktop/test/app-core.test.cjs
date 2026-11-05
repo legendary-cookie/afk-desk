@@ -386,3 +386,13 @@ test('consumable settings default off, clamp and survive updates', () => {
   assert.equal(restored.autoOminousBottle, true)
   assert.equal(restored.autoGoldenApplePreference, 'enchanted')
 })
+
+test('Bedrock deposit target is per-account, validated and preserved on partial edits', () => {
+  const target = { x: -4, y: 65, z: 12 }
+  const base = { label: 'test', username: 'test', host: 'localhost', edition: 'bedrock' }
+  const saved = validateAccount({ ...base, bedrockDepositTarget: target }, null, null)
+  assert.deepEqual(saved.bedrockDepositTarget, target)
+  assert.deepEqual(validateAccount(base, saved, null).bedrockDepositTarget, target)
+  assert.equal(validateAccount({ ...base, bedrockDepositTarget: null }, saved, null).bedrockDepositTarget, null)
+  assert.throws(() => validateAccount({ ...base, bedrockDepositTarget: { ...target, y: 1.5 } }, null, null), /integer/)
+})

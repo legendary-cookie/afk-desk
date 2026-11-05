@@ -118,6 +118,7 @@ const el = Object.fromEntries([
   'proxy-enabled', 'proxy-fields', 'proxy-type', 'proxy-host', 'proxy-port', 'proxy-username', 'proxy-password', 'proxy-password-help', 'proxy-clear-password', 'share-proxy-pool',
   'proxy-label', 'proxy-max-sessions', 'alert-disconnect', 'alert-errors', 'alert-health', 'anti-afk', 'anti-afk-min-delay', 'anti-afk-max-delay', 'anti-afk-duration', 'anti-afk-look-degrees',
   'anti-afk-chat-enabled', 'anti-afk-chat-message', 'anti-afk-chat-interval', 'anti-afk-walk-distance', 'anti-afk-jump', 'anti-afk-look', 'anti-afk-sneak', 'anti-afk-swing', 'anti-afk-walk', 'environmental-movement', 'auto-reconnect', 'auto-reconnect-delay', 'auto-reconnect-backoff',
+  'bedrock-deposit-target', 'bedrock-deposit-x', 'bedrock-deposit-y', 'bedrock-deposit-z', 'bedrock-deposit-facing',
   'auto-reconnect-max-delay', 'auto-reconnect-rate-limit-delay', 'auto-reconnect-max', 'connect-timeout', 'reconnect-reset-delay', 'auto-deposit-setting', 'auto-deposit-range', 'auto-deposit-mode', 'auto-deposit-interval-wrap', 'auto-deposit-interval', 'auto-deposit-interval-unit', 'auto-deposit-full-threshold', 'auto-deposit-threshold-wrap', 'join-message', 'server-change-message', 'message-delay', 'server-change-retry-minutes',
   'form-error', 'delete-account', 'duplicate-profile', 'login-dialog', 'login-code', 'open-login-private', 'open-login', 'close-login', 'ui-scale', 'ui-scale-value',
   'wall-dialog', 'wall-grid', 'close-wall', 'wall-fps', 'wall-max-live',
@@ -189,6 +190,15 @@ function bindEvents() {
       const link = await api.shareExport('profile', el['account-id'].value)
       await navigator.clipboard.writeText(link)
       toast('Profile share link copied.')
+    } catch (error) { toast(cleanError(error), 'error') }
+  })
+  el['bedrock-deposit-facing'].addEventListener('click', async () => {
+    try {
+      const snapshot = await api.getWorldSnapshot(el['account-id'].value, 2)
+      if (!snapshot?.position) throw new Error('Connect this account first.')
+      const yaw = snapshot.yaw * Math.PI / 180, pitch = snapshot.pitch * Math.PI / 180
+      const direction = { x: -Math.sin(yaw) * Math.cos(pitch), y: -Math.sin(pitch), z: Math.cos(yaw) * Math.cos(pitch) }
+      for (const axis of ['x', 'y', 'z']) el['bedrock-deposit-' + axis].value = Math.floor(snapshot.position[axis] + (axis === 'y' ? 1.62 : 0) + 2 * direction[axis])
     } catch (error) { toast(cleanError(error), 'error') }
   })
   el['auto-deposit-mode'].addEventListener('change', updateAutoDepositFields)
@@ -1075,6 +1085,7 @@ function openAccountDialog(account, importing = false) {
   el['auto-reconnect-max'].value = account?.autoReconnectMaxAttempts ?? 0
   el['connect-timeout'].value = account?.connectTimeoutSeconds ?? 60
   el['reconnect-reset-delay'].value = account?.reconnectResetDelay ?? 60
+  for (const axis of ['x', 'y', 'z']) el['bedrock-deposit-' + axis].value = account?.bedrockDepositTarget?.[axis] ?? ''
   el['auto-deposit-setting'].checked = account?.autoDepositToChest === true
   el['auto-deposit-range'].value = account?.autoDepositRange ?? 5
   el['auto-deposit-mode'].value = account?.autoDepositMode || 'immediate'
@@ -1186,6 +1197,7 @@ async function saveAccount(event) {
     autoReconnectMaxAttempts: Number(el['auto-reconnect-max'].value),
     connectTimeoutSeconds: Number(el['connect-timeout'].value),
     reconnectResetDelay: Number(el['reconnect-reset-delay'].value),
+    bedrockDepositTarget: ['x', 'y', 'z'].every(axis => el['bedrock-deposit-' + axis].value !== '') ? Object.fromEntries(['x', 'y', 'z'].map(axis => [axis, Number(el['bedrock-deposit-' + axis].value)])) : null,
     autoDepositToChest: el['auto-deposit-setting'].checked,
     autoDepositRange: Number(el['auto-deposit-range'].value),
     autoDepositMode: el['auto-deposit-mode'].value,
@@ -2806,6 +2818,7 @@ async function runWorldAction(action) {
 
 function syncEditionFields(changePort = true) {
   const bedrock = el.edition.value === 'bedrock'
+  el['bedrock-deposit-target'].hidden = !bedrock
   el.version.disabled = bedrock
   if (bedrock) el.version.value = ''
   el['modded-fields'].hidden = bedrock
