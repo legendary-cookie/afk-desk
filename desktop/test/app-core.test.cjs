@@ -350,3 +350,15 @@ test('account safety settings default off, clamp values and survive partial upda
   assert.equal(restored.autoEatAllowGoldenApples, true)
   assert.equal(restored.scheduleStart, '22:00')
 })
+
+test('auto armor account settings default, persist and clamp', () => {
+  const base = { username: 'user', host: 'localhost' }
+  const defaults = validateAccount(base, null, null)
+  assert.equal(defaults.autoArmor, false)
+  assert.equal(defaults.autoArmorThreshold, 5)
+  const saved = validateAccount({ ...base, autoArmor: true, autoArmorThreshold: 150 }, null, null)
+  assert.equal(saved.autoArmorThreshold, 100)
+  const restored = validateAccount(base, saved, null)
+  assert.equal(restored.autoArmor, true)
+  assert.equal(restored.autoArmorThreshold, 100)
+})

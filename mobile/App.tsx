@@ -16,6 +16,7 @@ type ProxyConfig = {enabled: boolean; type: 'socks5' | 'http'; host: string; por
 type Account = {
   id: string; username: string; minecraftName?: string; host: string; port: string; version: string; skinUrl?: string;
   antiAfk: boolean; antiAfkInterval: string; antiAfkChatEnabled: boolean; antiAfkChatMessage: string; antiAfkChatIntervalSec: string; autoReconnect: boolean; autoReconnectDelay: string;
+  autoArmor: boolean; autoArmorThreshold: string;
   autoReconnectMaxAttempts: string; connectOnStartup: boolean; joinMessage: string;
   serverChangeMessage: string; messageDelay: string; autoDepositToChest: boolean;
   autoDepositRange: string; autoDepositMode: 'immediate' | 'interval' | 'inventoryFull' | 'intervalOrFull';
@@ -36,6 +37,7 @@ const EMPTY_PROXY: ProxyConfig = {enabled: false, type: 'socks5', host: '', port
 const blankAccount = (): Account => ({
   id: `${Date.now()}-${Math.random().toString(16).slice(2)}`, username: '', host: '', port: '25565', version: '',
   antiAfk: true, antiAfkInterval: '45', antiAfkChatEnabled: false, antiAfkChatMessage: '', antiAfkChatIntervalSec: '300', autoReconnect: true, autoReconnectDelay: '5', autoReconnectMaxAttempts: '0',
+  autoArmor: false, autoArmorThreshold: '5',
   connectOnStartup: false, joinMessage: '', serverChangeMessage: '', messageDelay: '6',
   autoDepositToChest: false, autoDepositRange: '5', autoDepositMode: 'immediate', autoDepositInterval: '300',
   autoDepositFullThreshold: '0', serverChangeRetryMinutes: '30', proxy: {...EMPTY_PROXY},
@@ -45,6 +47,8 @@ const normalizeAccount = (account: Partial<Account>): Account => ({
   ...blankAccount(), ...account,
   antiAfkChatEnabled: account.antiAfkChatEnabled === true,
   antiAfkChatIntervalSec: String(Math.max(10, Math.min(Math.round(Number(account.antiAfkChatIntervalSec) || 300), 86400))),
+  autoArmor: account.autoArmor === true,
+  autoArmorThreshold: String(Math.max(0, Math.min(100, Number(account.autoArmorThreshold ?? 5) || 0))),
   autoDepositToChest: account.autoDepositToChest === true,
   autoDepositRange: String(Math.max(1, Math.min(Math.round(Number(account.autoDepositRange) || 5), 16))),
   autoDepositMode: ['immediate', 'interval', 'inventoryFull', 'intervalOrFull'].includes(account.autoDepositMode as string) ? account.autoDepositMode! : 'immediate',
@@ -446,6 +450,8 @@ function AccountModal({streamerMode, value, onClose, onSave, onDelete}: {streame
         <VersionField value={draft.version} onChange={(v: string) => set('version', v)} />
         <Text style={styles.sectionTitle}>Automation</Text>
         <Toggle label="Join when the app starts" value={draft.connectOnStartup} onChange={v => set('connectOnStartup', v)} />
+        <Toggle label="Auto armor" value={draft.autoArmor} onChange={v => set('autoArmor', v)} />
+        <Field label="Replace armor below durability (%)" value={draft.autoArmorThreshold} onChange={(v: string) => set('autoArmorThreshold', v)} keyboardType="number-pad" />
         <Toggle label="Auto reconnect" value={draft.autoReconnect} onChange={v => set('autoReconnect', v)} />
         <Field label="Reconnect delay (seconds)" value={draft.autoReconnectDelay} onChange={(v: string) => set('autoReconnectDelay', v)} keyboardType="number-pad" />
         <Field label="Maximum attempts (0 = unlimited)" value={draft.autoReconnectMaxAttempts} onChange={(v: string) => set('autoReconnectMaxAttempts', v)} keyboardType="number-pad" />

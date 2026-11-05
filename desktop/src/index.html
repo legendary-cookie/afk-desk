@@ -325,6 +325,8 @@
           <div class="field full" id="auto-deposit-interval-wrap"><span>Deposit interval</span><div class="settings-visual-grid"><input id="auto-deposit-interval" type="number" min="1" max="86400" value="300" /><select id="auto-deposit-interval-unit"><option value="1">Seconds</option><option value="60">Minutes</option><option value="3600">Hours</option></select></div><small>Stored as seconds. The interval starts when you join or after a successful deposit.</small></div>
           <label class="field full" id="auto-deposit-threshold-wrap"><span>Free slots remaining to count as full</span><input id="auto-deposit-full-threshold" type="number" min="0" max="35" value="0" /><small>Counts unlocked main-inventory slots only; armor and offhand are ignored. 0 means every unlocked main slot is occupied.</small></label>
           <div class="form-section full"><h3>Safety</h3><p>Safety actions are off by default. Online hours use this device's local time.</p></div>
+          <label class="check-row"><input id="safety-armor" type="checkbox" /> Auto armor</label>
+          <label class="field"><span>Replace armor below durability (%)</span><input id="safety-armor-threshold" type="number" min="0" max="100" value="5" /></label>
           <label class="check-row"><input id="safety-eat" type="checkbox" /> Auto-eat</label>
           <label class="field"><span>Eat at food level</span><input id="safety-food" type="number" min="0" max="20" value="14" /></label>
           <label class="field"><span>Food priority</span><select id="safety-food-priority"><option value="hotbar">Hotbar first</option><option value="nutrition">Most nutritious first</option></select></label>

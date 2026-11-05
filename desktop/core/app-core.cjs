@@ -1005,6 +1005,8 @@ function validateAccount(input, existing, secretBox, normalizeSkinUrl = defaultN
     autoDepositMode: ['immediate', 'interval', 'inventoryFull', 'intervalOrFull'].includes(input?.autoDepositMode ?? existing?.autoDepositMode) ? (input?.autoDepositMode ?? existing?.autoDepositMode) : 'immediate',
     autoDepositInterval: Math.round(bounded(input?.autoDepositInterval ?? existing?.autoDepositInterval, 1, 86400, 300)),
     autoDepositFullThreshold: Math.round(bounded(input?.autoDepositFullThreshold ?? existing?.autoDepositFullThreshold, 0, 35, 0)),
+    autoArmor: (input?.autoArmor ?? existing?.autoArmor) === true,
+    autoArmorThreshold: bounded(input?.autoArmorThreshold ?? existing?.autoArmorThreshold, 0, 100, 5),
     autoEat: (input?.autoEat ?? existing?.autoEat) === true,
     autoEatThreshold: bounded(input?.autoEatThreshold ?? existing?.autoEatThreshold, 0, 20, 14),
     autoTotem: (input?.autoTotem ?? existing?.autoTotem) === true,

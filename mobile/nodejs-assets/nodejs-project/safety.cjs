@@ -1,5 +1,45 @@
 'use strict'
 
+// Inventory slots 5–8 are the player's equipped armor.
+const armorSlots = [['head', 5, 'helmet'], ['torso', 6, 'chestplate'], ['legs', 7, 'leggings'], ['feet', 8, 'boots']]
+const armorTiers = { leather: 1, golden: 2, chainmail: 3, iron: 4, diamond: 5, netherite: 6 }
+function armorStats(item, suffix, registry) {
+  const match = /^(leather|golden|chainmail|iron|diamond|netherite)_(helmet|chestplate|leggings|boots)$/.exec(item?.name || '')
+  if (!match || match[2] !== suffix) return null
+  const maximum = Number(item.maxDurability)
+  const durability = maximum > 0 ? Math.max(0, Math.min(100, 100 * (maximum - (Number(item.durabilityUsed) || 0)) / maximum)) : 100
+  let enchants = []
+  try { enchants = item.enchants || [] } catch {}
+  const levels = enchants?.levels || enchants
+  const entries = Array.isArray(levels) ? levels : levels instanceof Map ? [...levels].map(([name, level]) => ({ name, level })) : Object.entries(levels || {}).map(([name, level]) => ({ name, level }))
+  const protection = entries.reduce((best, e) => {
+    const id = e.name ?? e.id
+    const name = registry?.enchantments?.[id]?.name ?? id
+    return String(name).replace(/^minecraft:/, '') === 'protection' ? Math.max(best, Number(e.lvl ?? e.level) || 0) : best
+  }, 0)
+  return { tier: armorTiers[match[1]], protection, durability }
+}
+function chooseArmor(bot, account, destination, slot, suffix) {
+  const locks = new Set((account.lockedInventorySlots || []).map(Number))
+  if (locks.has(slot)) return null
+  const threshold = Math.max(0, Math.min(100, Number(account.autoArmorThreshold ?? 5) || 0))
+  const current = bot.inventory?.slots?.[slot]
+  // Do not displace non-armor equipment such as elytra, or binding-cursed armor.
+  const currentStats = armorStats(current, suffix, bot.registry)
+  if (current && !currentStats) return null
+  try {
+    const enchants = current?.enchants || []
+    const levels = enchants.levels || enchants
+    if (Array.isArray(levels) ? levels.some(e => /(?:binding_curse|curse_of_binding)$/.test(String(e.name ?? e.id))) : Object.keys(levels || {}).some(key => /(?:binding_curse|curse_of_binding)$/.test(key))) return null
+  } catch { return null }
+  const candidates = (bot.inventory?.items?.() || []).filter(item => item.slot >= 9 && item.slot <= 44 && !locks.has(Number(item.slot))).map(item => ({ item, stats: armorStats(item, suffix, bot.registry) })).filter(entry => entry.stats)
+  if (currentStats) candidates.push({ item: current, stats: currentStats })
+  candidates.sort((a, b) => {
+    const healthy = x => x.durability >= threshold ? 1 : 0
+    return healthy(b.stats) - healthy(a.stats) || b.stats.tier - a.stats.tier || b.stats.protection - a.stats.protection || b.stats.durability - a.stats.durability
+  })
+  return candidates[0]?.item === current ? null : candidates[0]?.item || null
+}
 function shouldEat(account, bot) {
   return account.autoEat === true && Number.isFinite(bot.food) && bot.food <= (account.autoEatThreshold ?? 14) && !bot.currentWindow
 }
@@ -67,6 +107,16 @@ function installSafety(manager, account, session, state) {
           return
         }
       }
+      if (config.autoArmor && !bot.currentWindow && !session.depositing && !session.inputClaims?.get('rightClick')?.size) {
+        await manager.withInventoryAction(account.id, async () => {
+          for (const [destination, slot, suffix] of armorSlots) {
+            const current = session.account
+            if (manager.sessions.get(account.id) !== session || !session.ready || !current.autoArmor || bot.currentWindow || session.depositing || session.inputClaims?.get('rightClick')?.size) return
+            const item = chooseArmor(bot, current, destination, slot, suffix)
+            if (item) await bot.equip(item, destination)
+          }
+        })
+      }
       if (shouldEat(config, bot) && !session.depositing && !session.inputClaims?.get('rightClick')?.size) {
         await manager.withInventoryAction(account.id, async () => {
           const current = session.account
@@ -105,4 +155,4 @@ function installSafety(manager, account, session, state) {
   bot.on('health', tick)
   bot.inventory?.on?.('updateSlot', tick)
 }
-module.exports = { shouldEat, pickFood, shouldLowHealthAct, isWithinSchedule, deferSafety, installSafety }
+module.exports = { chooseArmor, armorStats, shouldEat, pickFood, shouldLowHealthAct, isWithinSchedule, deferSafety, installSafety }
