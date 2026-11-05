@@ -69,3 +69,135 @@ test('value wires are evaluated from current account state', async () => {
   assert.deepEqual(validateGraph(graph), [])
   assert.deepEqual((await run(graph)).calls, [['selectHotbar', { slot: 20 }]])
 })
+
+// Exercise the interpreter independently of the scheduler so value wiring and
+// control routing can be checked with deterministic account state.
+async function interpret(nodes, edges, overrides = {}) {
+  const { runGraph } = require('../electron/macro/graph-interpreter.cjs')
+  const calls = [], variables = {}, account = {}, persistent = {}
+  const ctx = { macro: { nodes: [{ id: 'start', kind: 'trigger.manual', params: {} }, ...nodes], edges, nodeStepBudget: overrides.budget || 20 }, accountId: 'a', variables, record: { trigger: 'manual' }, signal: new AbortController().signal }
+  const engine = {
+    _state: () => ({ inventory: [{ name: 'stone', count: 3 }], entities: [{ type: 'player', distance: 2 }, { type: 'mob', distance: 1 }], health: 12, food: 8, position: { x: 1 } }),
+    _unit: () => 0.5, _gate: async () => {}, _throwIfAborted: () => {}, _sleep: async () => {}, now: () => 0,
+    _evaluate: (_ctx, value) => !!value, getPersistentVariables: () => persistent,
+    graphAccountVariables: new Map([['a', account]]),
+    _stepSet: async (_ctx, p) => { variables[p.variable] = p.value; if (p.persist) persistent[p.variable] = p.value },
+    _stepFacade: async (_ctx, p, type, _path, throws) => { if (p.fail && throws) throw new Error('boom'); calls.push([type, p]) },
+    _stepWait: async () => {}, _stepStop: async () => { throw new Error('stop') }
+  }
+  await runGraph(engine, ctx)
+  return { calls, variables, account, persistent }
+}
+const n = (id, kind, params = {}) => ({ id, kind, params })
+const e = (id, from, port, to, input = 'in') => ({ id, from: { node: from, port }, to: { node: to, port: input } })
+
+test('switch, parallel and merge route branches once', async () => {
+  const nodes = [n('s', 'switch', { value: 'b', cases: ['a', 'b'] }), n('p', 'parallel'), n('a', 'selectHotbar', { slot: 1 }), n('b', 'selectHotbar', { slot: 2 }), n('m', 'merge'), n('end', 'selectHotbar', { slot: 3 })]
+  const edges = [e('1', 'start', 'out', 's'), e('2', 's', 'case1', 'p'), e('3', 'p', 'out', 'a'), e('4', 'p', 'out', 'b'), e('5', 'a', 'out', 'm'), e('6', 'b', 'out', 'm'), e('7', 'm', 'out', 'end')]
+  const result = await interpret(nodes, edges)
+  assert.deepEqual(result.calls.map(c => c[1].slot), [1, 2, 3])
+})
+
+test('try/catch routes facade errors to its error port', async () => {
+  const nodes = [n('try', 'tryCatch'), n('bad', 'selectHotbar', { slot: 1, fail: true }), n('catch', 'selectHotbar', { slot: 2 }), n('end', 'selectHotbar', { slot: 3 })]
+  const edges = [e('1', 'start', 'out', 'try'), e('2', 'try', 'try', 'bad'), e('3', 'try', 'error', 'catch'), e('4', 'try', 'out', 'end')]
+  const result = await interpret(nodes, edges)
+  assert.equal(result.variables.error, 'boom')
+  assert.deepEqual(result.calls.map(c => c[1].slot), [2, 3])
+})
+
+test('data nodes compute values through wires', async () => {
+  const cases = [
+    ['math', { a: 6, b: 2, operation: 'divide' }, 3], ['compare', { a: 2, b: 1, operator: '>' }, true],
+    ['textFormat', { text: 'hello' }, 'hello'], ['regexExtract', { text: 'abc42', pattern: '(\\d+)', group: 1 }, '42'],
+    ['random', { min: 2, max: 4 }, 3], ['inventoryCount', { name: 'stone' }, 3], ['entityCount', {}, 2],
+    ['health', {}, 12], ['food', {}, 8], ['position', {}, { x: 1 }], ['nearestEntity', {}, { type: 'mob', distance: 1 }]
+  ]
+  for (const [kind, params, expected] of cases) {
+    const nodes = [n('data', kind, params), n('set', 'setVar', { variable: 'result' })]
+    const result = await interpret(nodes, [e('1', 'start', 'out', 'set'), e('2', 'data', 'value', 'set', 'value')])
+    assert.deepEqual(result.variables.result, expected, kind)
+  }
+})
+
+test('forEach exposes each item and waitUntil proceeds on a true condition', async () => {
+  const nodes = [n('loop', 'forEach', { source: 'entities' }), n('set', 'setVar', { variable: 'item' }), n('wait', 'waitUntil', { condition: true }), n('end', 'selectHotbar', { slot: 4 })]
+  const edges = [e('1', 'start', 'out', 'loop'), e('2', 'loop', 'each', 'set'), e('3', 'loop', 'item', 'set', 'value'), e('4', 'loop', 'done', 'wait'), e('5', 'wait', 'out', 'end')]
+  const result = await interpret(nodes, edges)
+  assert.equal(result.variables.item.type, 'mob')
+  assert.equal(result.calls[0][1].slot, 4)
+})
+
+test('step budget terminates a control cycle with a wait', async () => {
+  const nodes = [n('wait', 'wait', { ms: 1 })]
+  await assert.rejects(interpret(nodes, [e('1', 'start', 'out', 'wait'), e('2', 'wait', 'out', 'wait')], { budget: 3 }), /step budget/)
+})
+
+test('account and persistent variable scopes are available to getVar', async () => {
+  for (const scope of ['account', 'persistent']) {
+    const nodes = [n('set', 'setVar', { variable: 'x', value: 7, scope }), n('get', 'getVar', { variable: 'x', scope }), n('out', 'setVar', { variable: 'result' })]
+    const result = await interpret(nodes, [e('1', 'start', 'out', 'set'), e('2', 'set', 'out', 'out'), e('3', 'get', 'value', 'out', 'value')])
+    assert.equal(result.variables.result, 7, scope)
+  }
+})
+
+test('different event triggers start only their connected branch', async () => {
+  const { TriggerMatcher } = require('../electron/macro/triggers.cjs')
+  const calls = [], facade = {}
+  for (const method of FACADE_METHODS) facade[method] = async (_account, args) => { calls.push([method, args]); return '' }
+  facade.state = () => ({ online: true }); facade.sessionId = () => 's'; facade.releaseOwner = () => {}
+  const engine = new MacroEngine({ facade, matcher: new TriggerMatcher(), resolveTargets: () => ['a'] })
+  const macro = { id: 'multi', enabled: true, version: 3, defaultDelayMs: 0, nodes: [n('join', 'trigger.join'), n('death', 'trigger.death'), n('a', 'selectHotbar', { slot: 1 }), n('b', 'selectHotbar', { slot: 2 })], edges: [e('1', 'join', 'out', 'a'), e('2', 'death', 'out', 'b')] }
+  engine.setLibrary([macro])
+  engine.onBotEvent({ type: 'spawn', accountId: 'a', sessionId: 's' })
+  await new Promise(resolve => setTimeout(resolve, 20))
+  engine.onBotEvent({ type: 'death', accountId: 'a', sessionId: 's' })
+  await new Promise(resolve => setTimeout(resolve, 20))
+  assert.deepEqual(calls.map(c => c[1].slot), [1, 2])
+  await engine.shutdown()
+})
+
+function liveEngine(state) {
+  const facade = {}
+  for (const method of FACADE_METHODS) facade[method] = async () => ''
+  facade.state = account => state[account] || {}; facade.sessionId = () => 's'; facade.releaseOwner = () => {}
+  const matcher = { setMacros() {}, onEvent() { return [] }, timedTriggers() { return [] }, resetAccount() {} }
+  return new MacroEngine({ facade, matcher, resolveTargets: () => ['a', 'b'] })
+}
+function waitingGraph(extra = {}) {
+  return { id: 'waiting', version: 3, enabled: true, ...extra, nodes: [n('start', 'trigger.manual'), n('parallel', 'parallel'), n('w1', 'wait', { ms: 10000 }), n('w2', 'wait', { ms: 10000 })], edges: [e('1', 'start', 'out', 'parallel'), e('2', 'parallel', 'out', 'w1'), e('3', 'parallel', 'out', 'w2')] }
+}
+test('cancellation interrupts both parallel waits', async () => {
+  const engine = liveEngine({ a: { online: true } })
+  engine.setLibrary([waitingGraph()])
+  const run = engine.run('a', 'waiting')
+  await new Promise(resolve => setTimeout(resolve, 10))
+  await engine.stop('a')
+  assert.equal((await run).status, 'cancelled')
+  await engine.shutdown()
+})
+test('graph timeout stops a run', async () => {
+  const engine = liveEngine({ a: { online: true } })
+  engine.setLibrary([waitingGraph({ maxRuntimeMs: 20 })])
+  assert.equal((await engine.run('a', 'waiting')).status, 'stopped')
+  await engine.shutdown()
+})
+test('allAccounts stop condition stops other graph runs', async () => {
+  const state = { a: { online: true, health: 20 }, b: { online: true, health: 20 } }
+  const engine = liveEngine(state)
+  engine.setLibrary([waitingGraph({ stopWhen: [{ type: 'healthBelow', value: 5, allAccounts: true }] })])
+  const a = engine.run('a', 'waiting'), b = engine.run('b', 'waiting')
+  await new Promise(resolve => setTimeout(resolve, 10))
+  state.a.health = 1
+  engine.onBotEvent({ type: 'telemetry', accountId: 'a', sessionId: 's', payload: { health: 1 } })
+  assert.deepEqual([(await a).status, (await b).status], ['stopped', 'stopped'])
+  await engine.shutdown()
+})
+
+test('while and each inventory and player collection use the current account state', async () => {
+  for (const [source, expected] of [['items', 'stone'], ['players', 'player']]) {
+    const nodes = [n('while', 'while', { condition: false }), n('loop', 'forEach', { source }), n('set', 'setVar', { variable: 'last' })]
+    const result = await interpret(nodes, [e('1', 'start', 'out', 'while'), e('2', 'while', 'done', 'loop'), e('3', 'loop', 'each', 'set'), e('4', 'loop', 'item', 'set', 'value')])
+    assert.equal(result.variables.last.name || result.variables.last.type, expected)
+  }
+})
