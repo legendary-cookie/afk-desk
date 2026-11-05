@@ -811,7 +811,7 @@ class AppCore {
 
   emitMacroRunEvent(event) {
     this._sendUi(IPC.event, event)
-    if (event.accountId) this._persistEventSafely(event.accountId, 'macro', event)
+    if (event.accountId && !['graphNode', 'graphValue', 'graphError'].includes(event.status)) this._persistEventSafely(event.accountId, 'macro', event)
     if (event.status === 'failed') {
       this.notifyMacro({ accountId: event.accountId, macroName: this.macroLibrary.get(event.macroId)?.name, status: 'failed', error: event.error?.message || event.reason || 'Macro failed' })
     }

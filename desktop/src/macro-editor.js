@@ -442,6 +442,7 @@
     // Live run tracking: key `${macroId}:${accountId}` -> RunEvent, and macroId -> latest status summary
     const liveByMacroAccount = new Map()
     const lastStatusByMacro = new Map()
+    const graphLive = new Map()
     const runsCache = new Map()
 
     function bind() {
@@ -1785,6 +1786,8 @@
     function renderSteps() {
       const container = el['macro-step-list']
       if (!container || !draft) return
+      const accountId = el['macro-watch-account']?.value || state.selectedId || ''
+      window.afkMacroGraphLive.render(el['macro-graph-live'], draft, graphLive.get(JSON.stringify([draft.id, accountId])), maskText)
       const steps = Array.isArray(draft.steps) ? draft.steps : (draft.steps = [])
       if (el['macro-steps-count']) el['macro-steps-count'].textContent = String(countStepsRecursive(steps))
 
@@ -2783,6 +2786,13 @@
     function handleMacroRunEvent(event) {
       if (!event || !event.macroId) return
       const key = `${event.macroId}:${event.accountId || ''}`
+      const graphKey = JSON.stringify([event.macroId, event.accountId || ''])
+      const graph = macros.find(m => m.id === event.macroId)
+      graphLive.set(graphKey, window.afkMacroGraphLive.update(graphLive.get(graphKey), event, graph))
+      if (['graphNode', 'graphValue', 'graphError'].includes(event.status)) {
+        if (el['automation-dialog']?.open && draft?.id === event.macroId) renderSteps()
+        return
+      }
       liveByMacroAccount.set(key, event)
       lastStatusByMacro.set(event.macroId, {
         status: event.status,

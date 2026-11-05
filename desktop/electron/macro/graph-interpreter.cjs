@@ -9,9 +9,13 @@ async function runGraph(engine, ctx) {
   const graph = ctx.macro, errors = validateGraph(graph)
   if (errors.length) throw new MacroActionError('INVALID', `${errors[0].code}: ${errors[0].message}`)
   const nodes = new Map(graph.nodes.map((node, index) => [node.id, { node, index }]))
-  const outgoing = (id, port) => graph.edges.filter(e => e.from.node === id && e.from.port === port).map(e => e.to.node)
+  const outgoing = (id, port) => graph.edges.filter(e => e.from.node === id && e.from.port === port).map(e => { emit({ status: 'graphValue', edgeId: e.id, value: 'flow' }); return e.to.node })
   const incoming = (id, port) => graph.edges.find(e => e.to.node === id && e.to.port === port)
-  const counts = new Map(), activeValues = new Set(), loopItems = new Map()
+  const counts = new Map(), activeValues = new Set(), loopItems = new Map(), reportedErrors = new WeakSet()
+  const emit = data => engine._emit?.({ runId: ctx.runId, macroId: ctx.macroId, accountId: ctx.accountId, ...data })
+  function displayValue(value) {
+    try { return String(typeof value === 'string' ? value : JSON.stringify(value) ?? String(value)).slice(0, 500) } catch { return '[Unserializable value]' }
+  }
   const budget = Number.isFinite(graph.nodeStepBudget) ? Math.max(1, Math.floor(graph.nodeStepBudget)) : 10000
   function value(id, port) {
     const key = `${id}:${port}`
@@ -40,6 +44,12 @@ async function runGraph(engine, ctx) {
         case 'compare': switch (p.operator) { case '!=': return p.a !== p.b; case '<': return p.a < p.b; case '<=': return p.a <= p.b; case '>': return p.a > p.b; case '>=': return p.a >= p.b; default: return p.a === p.b }
         default: throw new MacroActionError('UNSUPPORTED', `Unsupported value node ${node.kind}.`)
       }
+    } catch (error) {
+      if (error instanceof Error && !reportedErrors.has(error)) {
+        reportedErrors.add(error)
+        emit({ status: 'graphError', nodeId: id, error: { message: String(error.message).slice(0, 500) } })
+      }
+      throw error
     } finally { activeValues.delete(key) }
   }
   function params(node) {
@@ -47,11 +57,23 @@ async function runGraph(engine, ctx) {
     for (const [name, spec] of Object.entries(NODE_KINDS[node.kind].inputs)) {
       if (spec.type === 'control') continue
       const edge = incoming(node.id, name)
-      if (edge) result[name] = value(edge.from.node, edge.from.port)
+      if (edge) {
+        result[name] = value(edge.from.node, edge.from.port)
+        emit({ status: 'graphValue', edgeId: edge.id, value: displayValue(result[name]) })
+      }
     }
     return result
   }
   async function walk(id, options = {}) {
+    try { return await walkNode(id, options) } catch (error) {
+      if (error instanceof Error && !ctx.signal.aborted && error.code !== 'ABORTED' && !reportedErrors.has(error)) {
+        reportedErrors.add(error)
+        emit({ status: 'graphError', nodeId: id, error: { message: String(error.message).slice(0, 500) } })
+      }
+      throw error
+    }
+  }
+  async function walkNode(id, options = {}) {
     if (!id) return
     engine._throwIfAborted(ctx)
     const { node, index } = nodes.get(id), path = [index]
@@ -60,6 +82,7 @@ async function runGraph(engine, ctx) {
     counts.set(id, visits)
     if (visits > budget) throw new MacroActionError('INVALID', `Node ${id} exceeded its step budget.`)
     if (node.disabled) { for (const next of outgoing(id, 'out')) await walk(next, options); return }
+    emit({ status: 'graphNode', nodeId: id })
     const p = params(node), type = node.kind
     if (type.startsWith('trigger.')) { for (const next of outgoing(id, 'out')) await walk(next, options); return }
     if (type === 'if') {

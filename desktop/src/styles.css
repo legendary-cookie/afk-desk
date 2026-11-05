@@ -945,3 +945,15 @@ dialog.macro-templates-dialog {
 .settings-tools { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
 .share-import-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 4px; }
 .share-import-row small { flex: 1 1 220px; opacity: .75; }
+
+.macro-graph-status { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.macro-graph-viewport { overflow: auto; max-height: 420px; border: 1px solid var(--border); background: var(--bg); }
+.macro-graph-surface { position: relative; }
+.macro-graph-wires { position: absolute; inset: 0; pointer-events: none; }
+.macro-graph-wires line { stroke: var(--muted); stroke-width: 2; }
+.macro-graph-node { position: absolute; width: 160px; min-height: 70px; padding: 8px; border: 1px solid var(--border-strong); background: var(--surface-raised); border-radius: 6px; overflow-wrap: anywhere; }
+.macro-graph-node small { display: block; color: var(--muted); }
+.macro-graph-node.live-running { border: 2px solid var(--accent); }
+.macro-graph-node.live-failed { border-color: var(--danger); }
+.macro-graph-error { color: var(--danger); font-size: 11px; }
+.macro-graph-wire-label { position: absolute; z-index: 1; background: var(--surface); color: var(--text); font-size: 10px; max-width: 150px; overflow-wrap: anywhere; }
