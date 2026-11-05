@@ -231,6 +231,13 @@ test('AppCore start and shutdown with fake managers disconnects bots, flushes no
   assert.equal(core.started, true)
   assert.ok(core.commands)
 
+  const overview = core.settings.get().overviewLayout
+  assert.deepEqual(Object.keys(overview).sort(), ['global', 'globalMode', 'overrideModes', 'overrides', 'version'])
+  assert.equal(overview.globalMode, 'auto')
+  const customized = { ...overview, globalMode: 'manual', overrides: { 'acc-1': [] }, overrideModes: { 'acc-1': 'auto' } }
+  core.settings.save({ ...core.settings.get(), overviewLayout: customized })
+  assert.deepEqual(core.settings.get().overviewLayout, customized)
+
   const saved = core.accounts.save({
     id: 'acc-1',
     host: 'play.example.com',

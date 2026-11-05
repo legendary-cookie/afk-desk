@@ -948,36 +948,33 @@ dialog.macro-templates-dialog {
 .dashboard[data-view="overview"] .topbar-actions .button { min-height: 34px; padding-inline: 10px; font-size: 11px; }
 .dashboard[data-view="overview"] > .status-banner, .dashboard[data-view="overview"] > .workspace-tabs { flex-shrink: 0; }
 .overview-toolbar { flex: 0 0 auto; margin: 0 0 8px; }
+.overview-layout-notice { margin-left: 10px; color: var(--muted); font-size: 11px; }
+.overview-layout-notice[hidden] { display: none; }
+.overview-layout-notice .text-button { font-size: inherit; }
 .overview-toolbar > .button { min-height: 30px; font-size: 11px; }
 .overview-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
 .overview-controls[hidden], .overview-module-bar[hidden], .overview-module-resize[hidden], .overview-modules[hidden], .overview-toolbar[hidden] { display: none; }
 .overview-controls span { color: var(--muted); font-size: 11px; }
-.overview-modules { flex: 1 1 0; min-height: 0; display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); grid-template-rows: repeat(var(--overview-rows, 12), minmax(0, 1fr)); gap: 8px; }
-.overview-module { min-width: 0; min-height: 0; position: relative; display: flex; flex-direction: column; }
+.overview-modules { flex: 1 1 0; min-height: 0; display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); grid-template-rows: repeat(var(--overview-rows, 1000), minmax(0, 1fr)); column-gap: 8px; row-gap: 0; }
+.overview-module { padding-bottom: 8px; min-width: 0; min-height: 0; position: relative; display: flex; flex-direction: column; }
 .overview-module > .panel, .overview-module > .macro-section { flex: 1 1 auto; min-height: 0; overflow: hidden; }
 .overview-module > .macro-section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); }
-.overview-modules:not(.overview-fitted) > .overview-module:has(> .macro-section) { align-self: start; }
-.overview-modules:not(.overview-fitted) > .overview-module > .macro-section { flex: 0 0 auto; }
-.overview-module .macro-pad { flex-wrap: wrap; max-height: none; overflow: visible; }
-.overview-module .details-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.overview-modules:not(.overview-auto) > .overview-module:has(> .macro-section) { align-self: start; }
+.overview-modules:not(.overview-auto) > .overview-module > .macro-section { flex: 0 0 auto; }
+.overview-module .macro-pad { flex-wrap: wrap; min-height: 0; overflow: auto; }
+.overview-module[data-module="details"] > .panel, .overview-module[data-module="scoreboard"] > .panel, .overview-module[data-module="effects"] > .panel, .overview-module[data-module="bossBars"] > .panel, .overview-module[data-module="nextRuns"] > .panel, .overview-module > .macro-section { display: flex; flex-direction: column; }
+.overview-module .macro-header { flex-shrink: 0; }
+.overview-module .details-list { grid-template-columns: repeat(2, minmax(0, 1fr)); align-content: start; }
 .overview-module .details-list div { display: block; padding: 4px 6px; }
 .overview-module .details-list dt { font-size: 10px; }
+.overview-module .game-hud, .overview-module .details-list, .overview-module #overview-next-runs { flex: 1 1 auto; min-height: 0; overflow: auto; }
 .overview-module .panel-header { min-height: 42px; padding: 6px 12px; flex-shrink: 0; }
 .overview-module .panel-header h2 { font-size: 12px; }
 .overview-module .inventory-header { min-height: 58px; }
 .overview-module-bar { flex: 0 0 auto; display: flex; background: var(--surface-raised); }
 .overview-module-handle { flex: 1; min-width: 0; text-align: left; cursor: grab; touch-action: none; }
 .overview-module-resize { position: absolute; right: 0; bottom: 0; cursor: nwse-resize; touch-action: none; z-index: 2; }
-/* Default: chat consumes spare height; the pad and inventory keep their natural height. */
-.overview-fitted { grid-template-columns: minmax(0, 2fr) minmax(320px, 1fr); grid-template-rows: minmax(0, 1fr); }
-.overview-primary, .overview-secondary { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; }
-.overview-primary > [data-module="console"] { flex: 1 1 0; min-height: 120px; }
-.overview-primary > [data-module="macro"] { flex: 0 0 auto; }
-.overview-primary > [data-module="inventory"] { flex: 0 1 auto; max-height: 55%; }
-.overview-primary > .inventory-resizer { flex: 0 0 6px; margin-block: -7px; }
-.overview-primary .inventory-panel { height: auto; }
-.overview-secondary > .overview-module { flex: 0 0 auto; }
-.overview-secondary > .overview-module > .panel { height: auto; }
+.overview-module .inventory-panel { height: auto; max-height: none; }
 /* The shared map is tucked beside movement; adding Minimap lifts it into its own module. */
 .movement-panel:has(> .minimap) { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 .movement-panel:has(> .minimap) > .panel-header { grid-column: 1 / -1; }
@@ -993,8 +990,8 @@ dialog.macro-templates-dialog {
 .minimap canvas[hidden], .minimap.map-empty .minimap-options { display: none; }
 .minimap.map-empty p { color: var(--muted); }
 .module-empty { color: var(--muted); font-size: 11px; line-height: 1.4; }
-.overview-module.overview-empty { align-self: start; }
-.overview-module.overview-empty > .panel { flex: 0 0 auto; height: auto; }
+.overview-module.overview-empty { align-self: stretch; }
+.overview-module.overview-empty > .panel { height: auto; }
 #overview-next-runs { margin: 0; padding: 10px 24px; font-size: 11px; }
 #overview-next-runs.module-empty { padding: 10px 12px; list-style: none; }
 @media (max-height: 850px) {

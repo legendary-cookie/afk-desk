@@ -2049,7 +2049,6 @@ function bindPanelResizers() {
     applyPanelLayout(state.settings)
   }
   const resizeInventory = (inventoryHeight) => {
-    if (overviewEditor?.resizeInventory(inventoryHeight)) return
     const dashboardHeight = el.dashboard?.clientHeight || 700
     const minimum = minimumInventoryHeight()
     const reservedWorkspace = innerHeight <= 680 ? 190 : 285
@@ -2064,7 +2063,7 @@ function bindPanelResizers() {
     keys: { ArrowLeft: 1, ArrowRight: -1 }
   })
   bindSplitter(el['inventory-resizer'], {
-    axis: 'y', value: () => overviewEditor?.inventoryHeight() || state.settings.inventoryHeight || 220,
+    axis: 'y', value: () => state.settings.inventoryHeight || 220,
     resize: (start, delta) => resizeInventory(start - delta),
     keys: { ArrowUp: 1, ArrowDown: -1 }
   })
@@ -2086,12 +2085,17 @@ function toggleInventory() {
 function observePanelFit() {
   const inventoryHeader = document.querySelector('.inventory-header')
   if (!inventoryHeader || typeof ResizeObserver !== 'function') return
-  const observer = new ResizeObserver(() => {
+  const fit = () => {
     if (el.dashboard.hidden) return
     applyPanelLayout(state.settings)
-  })
+    overviewEditor?.fit()
+  }
+  const observer = new ResizeObserver(fit)
   observer.observe(inventoryHeader)
-  window.addEventListener('resize', () => requestAnimationFrame(() => applyPanelLayout(state.settings)))
+  observer.observe(el.dashboard)
+  const overviewGrid = el.dashboard.querySelector('.overview-modules')
+  if (overviewGrid) observer.observe(overviewGrid)
+  window.addEventListener('resize', () => requestAnimationFrame(fit))
   requestAnimationFrame(() => applyPanelLayout(state.settings))
 }
 

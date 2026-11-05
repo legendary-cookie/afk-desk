@@ -18,8 +18,8 @@ test('presets have no collisions or duplicate modules and are independent', () =
 test('global and per-account layouts persist, including an empty layout', t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'overview-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
   const store = new SettingsStore(dir)
-  store.save({ overviewLayout: { version: layout.version, global: layout.presets.Compact, overrides: { one: [], two: layout.presets.Monitoring } } })
-  assert.deepEqual(store.get().overviewLayout, { version: layout.version, global: layout.presets.Compact, overrides: { one: [], two: layout.presets.Monitoring } })
+  store.save({ overviewLayout: { version: layout.version, global: layout.presets.Compact, overrides: { one: [], two: layout.presets.Monitoring }, globalMode: 'manual', overrideModes: { one: 'auto', two: 'manual' } } })
+  assert.deepEqual(store.get().overviewLayout, { version: layout.version, global: layout.presets.Compact, overrides: { one: [], two: layout.presets.Monitoring }, globalMode: 'manual', overrideModes: { one: 'auto', two: 'manual' } })
 })
 test('default includes only five core modules; optional modules have independent picker sizes', () => {
   const modules = ['scoreboard', 'effects', 'bossBars', 'nextRuns', 'minimap']
@@ -101,40 +101,134 @@ test('next runs uses the selected account and masks labels', async () => {
 })
 
 
-test('layout version migrates old global and account layouts once, retaining new edits', () => {
-  for (const version of [undefined, 1]) {
-    const migrated = layout.normalizeSettings({ version, global: [], overrides: { old: layout.presets.Compact } })
-    assert.deepEqual(migrated, { version: 2, global: layout.presets.Default, overrides: {} })
+test('migration retains module selection and custom positions per scope, and is idempotent', () => {
+  for (const version of [undefined, 1, 2]) {
+    const custom = [{ id: 'console', x: 2, y: 0, w: 6, h: 5 }, { id: 'scoreboard', x: 8, y: 0, w: 4, h: 3 }]
+    const migrated = layout.normalizeSettings({ version, global: custom, overrides: { old: [], custom } })
+    assert.equal(migrated.version, layout.version)
+    assert.equal(migrated.globalMode, 'manual')
+    assert.deepEqual(migrated.overrideModes, { old: 'manual', custom: 'manual' })
+    assert.deepEqual(migrated.overrides.old, [])
+    assert.deepEqual(migrated.global, [{ id: 'console', x: 2, y: 0, w: 6, h: 1000 }, { id: 'scoreboard', x: 8, y: 0, w: 4, h: 600 }])
     assert.deepEqual(layout.normalizeSettings(migrated), migrated)
   }
-  const edited = { version: 2, global: [], overrides: { fresh: layout.presets.Compact, empty: [] } }
-  assert.deepEqual(layout.normalizeSettings(edited), edited)
-  assert.equal(layout.isDefault([...layout.presets.Default].reverse()), true)
-  assert.equal(layout.isDefault(layout.presets.Compact), false)
+  const oldDefault = [{ id: 'console', x: 0, y: 0, w: 8, h: 6 }, { id: 'details', x: 8, y: 0, w: 4, h: 6 }, { id: 'movement', x: 8, y: 6, w: 4, h: 6 }, { id: 'macro', x: 0, y: 6, w: 8, h: 1 }, { id: 'inventory', x: 0, y: 7, w: 8, h: 5 }]
+  const migrated = layout.normalizeSettings({ version: 2, global: oldDefault, overrides: { default: oldDefault } })
+  assert.equal(migrated.globalMode, 'auto')
+  assert.equal(migrated.overrideModes.default, 'auto')
+  const sized = layout.normalizeSettings({ version: 2, global: oldDefault, overrides: { default: oldDefault }, inventoryHeight: 280 })
+  assert.equal(sized.globalMode, 'manual')
+  assert.equal(sized.overrideModes.default, 'manual')
+  assert.equal(sized.global.find(item => item.id === 'inventory').h, 467)
+  assert.deepEqual(sized.global, sized.overrides.default)
+  assert.deepEqual(layout.normalizeSettings(sized), sized)
+  assert.equal(layout.normalizeSettings().globalMode, 'auto')
+  assert.deepEqual(layout.normalizeSettings({ version: layout.version, global: [], overrides: { fresh: [] }, globalMode: 'invalid', overrideModes: { fresh: 'manual', missing: 'manual' } }), { version: layout.version, global: [], overrides: { fresh: [] }, globalMode: 'auto', overrideModes: { fresh: 'manual' } })
 })
 
-test('row pitch follows available viewport height and includes grid gaps', () => {
-  const rows = layout.rowCount(layout.presets.Default)
-  assert.equal(rows, 12)
+test('row pitch uses the displayed tracks and horizontal gaps', () => {
+  assert.equal(layout.rowCount(layout.presets.Default), layout.rows)
   for (const height of [460, 720, 800]) {
-    const pitch = layout.gridMetrics(1200, height, rows)
-    assert.equal(pitch.y * rows - 8, height)
+    const pitch = layout.gridMetrics(1200, height, layout.rows)
+    assert.equal(pitch.y * layout.rows, height)
     assert.equal(pitch.x * 12 - 8, 1200)
   }
 })
 
-test('overview CSS bounds the grid and gives content its natural height', () => {
+function assertArranged(ids, options = {}) {
+  const arranged = layout.autoArrange(ids, options), items = arranged.layout
+  assert.equal(items.length, new Set(ids.map(item => typeof item === 'string' ? item : item.id)).size)
+  assert.deepEqual(layout.normalize(items), items, 'arrangement needs no collision repair')
+  assert.equal(Math.min(...items.map(item => item.x)), 0)
+  assert.equal(Math.max(...items.map(item => item.x + item.w)), options.columns || 12)
+  for (const item of items) {
+    assert.ok(item.x >= 0 && item.x + item.w <= (options.columns || 12), item.id + ': horizontal bounds')
+    assert.ok(item.y >= 0 && item.h > 0 && item.y + item.h <= arranged.rows, item.id + ': vertical bounds')
+    const pixels = item.h * arranged.height / arranged.rows - 8, hint = layout.registry[item.id]
+    assert.ok(pixels >= hint.minHeight - 1, item.id + ': minimum content height')
+    assert.ok(pixels <= hint.maxHeight + 1, item.id + ': maximum content height')
+    for (const other of items) if (other !== item) assert.ok(item.x >= other.x + other.w || item.x + item.w <= other.x || item.y >= other.y + other.h || item.y + item.h <= other.y, item.id + ' overlaps ' + other.id)
+  }
+  return arranged
+}
+
+test('every module has complete and consistent size hints', () => {
+  assert.deepEqual(Object.keys(layout.registry).sort(), Object.keys(layout.names).sort())
+  for (const hint of Object.values(layout.registry)) {
+    for (const key of ['minWidth', 'minHeight', 'preferredWidth', 'preferredHeight', 'maxHeight']) assert.ok(Number.isFinite(hint[key]) && hint[key] > 0)
+    assert.ok(hint.minWidth <= hint.preferredWidth)
+    assert.ok(hint.minHeight <= hint.preferredHeight && hint.preferredHeight <= hint.maxHeight)
+    assert.ok(['main', 'side'].includes(hint.group))
+  }
+  for (const id of ['macro', 'scoreboard', 'effects', 'bossBars', 'nextRuns']) assert.equal(layout.registry[id].grow, 0)
+  assert.ok(layout.registry.console.grow > layout.registry.details.grow)
+  assert.ok(layout.registry.inventory.grow > layout.registry.minimap.grow)
+})
+
+test('default, extended, all, and single module arrangements fit the grid without overlaps', () => {
+  const defaults = layout.presets.Default.map(item => item.id)
+  const sets = [defaults, [...defaults, 'scoreboard', 'effects', 'bossBars'], Object.keys(layout.names), ...Object.keys(layout.names).map(id => [id])]
+  for (const ids of sets) for (const width of [480, 899, 900, 1060, 1610]) for (const height of [460, 580, 880]) {
+    const result = assertArranged(ids, { width, height })
+    assert.ok(result.height >= result.minHeight)
+    assert.equal(result.height, Math.max(height, result.minHeight))
+    assert.deepEqual(layout.autoArrange([...ids].reverse(), { width, height }), result, 'input order does not affect placement')
+  }
+  assert.deepEqual(layout.autoArrange([]).layout, [])
+  assert.deepEqual(layout.autoArrange(['unknown', 'console', 'console']).layout, layout.autoArrange(['console']).layout)
+  assert.deepEqual(layout.autoArrange(['console'], { width: Infinity, height: NaN }), layout.autoArrange(['console']))
+})
+
+test('compact panels share rows while main and side keep their columns', () => {
+  const result = assertArranged(Object.keys(layout.names), { width: 1200, height: 900 })
+  const byId = Object.fromEntries(result.layout.map(item => [item.id, item]))
+  for (const id of ['console', 'macro', 'inventory']) assert.equal(byId[id].x, 0)
+  for (const id of ['details', 'movement', 'minimap', 'scoreboard', 'effects', 'bossBars', 'nextRuns']) assert.ok(byId[id].x >= 8)
+  assert.equal(byId.scoreboard.y, byId.effects.y)
+  assert.equal(byId.bossBars.y, byId.nextRuns.y)
+  const small = assertArranged([...layout.presets.Default, { id: 'scoreboard' }, { id: 'effects' }], { width: 900, height: 700 })
+  assert.equal(small.layout.find(item => item.id === 'scoreboard').y, small.layout.find(item => item.id === 'effects').y)
+  const narrow = assertArranged(layout.presets.Default, { width: 700, height: 700 })
+  for (const item of narrow.layout) { assert.equal(item.x, 0); assert.equal(item.w, 12) }
+  assertArranged(Object.keys(layout.names), { columns: 6, width: 700, height: 900 })
+})
+
+test('adding a side module leaves the main column unchanged and keeps side order', () => {
+  const defaults = layout.presets.Default.map(item => item.id), options = { width: 1200, height: 900 }
+  const before = layout.autoArrange(defaults, options).layout
+  const after = layout.autoArrange([...defaults, 'scoreboard'], options).layout
+  for (const id of ['console', 'macro', 'inventory', 'details', 'movement']) assert.deepEqual(after.find(item => item.id === id), before.find(item => item.id === id), id + ' is stable')
+  const paired = layout.autoArrange([...defaults, 'scoreboard', 'effects'], options).layout
+  for (const id of defaults) assert.deepEqual(paired.find(item => item.id === id), after.find(item => item.id === id))
+})
+
+test('viewport scaling respects compact heights and gives growing modules the spare height', () => {
+  let previous
+  for (const [width, height] of [[1060, 500], [1300, 650], [1610, 850]]) {
+    const result = assertArranged(layout.presets.Default, { width, height })
+    assert.equal(result.height, height, 'fitting content never adds page height')
+    const heights = Object.fromEntries(result.layout.map(item => [item.id, item.h * height / result.rows - 8]))
+    if (previous) { assert.ok(heights.console > previous.console); assert.ok(heights.inventory > previous.inventory) }
+    assert.ok(heights.macro <= layout.registry.macro.preferredHeight + 1)
+    previous = heights
+  }
+  const a = assertArranged(['console', 'inventory'], { width: 1200, height: 850 })
+  const b = assertArranged(['console', 'inventory'], { width: 1200, height: 940 })
+  const growth = id => b.layout.find(item => item.id === id).h * b.height / b.rows - a.layout.find(item => item.id === id).h * a.height / a.rows
+  assert.ok(Math.abs(growth('console') / growth('inventory') - 5 / 4) < .05)
+})
+
+test('overview CSS bounds content and uses tracks without multiplying the row gap', () => {
   const css = fs.readFileSync(path.join(__dirname, '../src/styles.css'), 'utf8')
   const overview = css.slice(css.indexOf('/* The overview uses'), css.indexOf('\n.game-hud '))
   assert.match(overview, /height: 100%; min-height: 0/)
-  assert.match(overview, /grid-template-rows: repeat\(var\(--overview-rows, 12\), minmax\(0, 1fr\)\)/)
-  assert.doesNotMatch(overview, /grid-auto-rows: 52px|overflow: auto/)
-  assert.match(overview, /\[data-module="macro"\] \{ flex: 0 0 auto/)
+  assert.match(overview, /grid-template-rows: repeat\(var\(--overview-rows, 1000\), minmax\(0, 1fr\)\)/)
+  assert.match(overview, /column-gap: 8px; row-gap: 0/)
+  assert.match(overview, /\.overview-module \{ padding-bottom: 8px/)
+  assert.match(overview, /\.game-hud, \.overview-module \.details-list,[^}]*flex: 1 1 auto; min-height: 0; overflow: auto/)
   assert.match(overview, /\.inventory-panel \{ height: auto/)
-  assert.match(overview, /\.overview-module\.overview-empty \{ align-self: start/)
   assert.match(overview, /\.movement-panel > \.minimap canvas \{[^}]*height: auto/)
 })
-
 
 test('an unavailable minimap hides its canvas and collapses only its standalone wrapper', () => {
   const vm = require('node:vm')

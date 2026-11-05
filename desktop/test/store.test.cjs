@@ -5,7 +5,7 @@ const os = require('node:os')
 const path = require('node:path')
 const { AccountStore, SettingsStore, normalizeSettings, startupConnectionDelay } = require('../electron/store.cjs')
 const betaDefaults = {
-  overviewLayout: { version: 2, global: require('../src/overview-layout.js').presets.Default, overrides: {} },
+  overviewLayout: { version: 3, global: require('../src/overview-layout.js').presets.Default, overrides: {}, globalMode: 'auto', overrideModes: {} },
   onboardingDone: false, streamerMode: false, updateCheckEnabled: true, notificationsEnabled: false, useLauncherPackCache: true, wallFps: 1, wallMaxLive: 4, workspaceDesign: 'hybrid', colorTheme: 'obsidian',
   povRefreshMs: 1500, povFrameRate: 30, povRadius: 6, povColumns: 3,
   povMaxFeeds: 9, povViewMode: 'perspective', povShowHud: true
@@ -164,14 +164,14 @@ test('custom nodes persist only in the macros library and keep the settings sche
 })
 
 
-test('overview migration preserves account overrides and inventory sizing only from this layout version', t => {
+test('overview migration retains module selections and persists modes for each scope', t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'overview-migration-'))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
   const store = new SettingsStore(directory)
-  fs.writeFileSync(store.file, JSON.stringify({ overviewLayout: { global: [], overrides: { old: [] } } }))
-  assert.deepEqual(store.get().overviewLayout, betaDefaults.overviewLayout)
-  const edited = { version: 2, global: [], overrides: { fresh: [] }, inventoryHeight: 340 }
+  fs.writeFileSync(store.file, JSON.stringify({ overviewLayout: { version: 2, global: [], overrides: { old: [] } } }))
+  assert.deepEqual(store.get().overviewLayout, { version: 3, global: [], overrides: { old: [] }, globalMode: 'manual', overrideModes: { old: 'manual' } })
+  const edited = { version: 3, global: [], overrides: { fresh: [] }, globalMode: 'auto', overrideModes: { fresh: 'manual' } }
   store.save({ ...store.get(), overviewLayout: edited })
   assert.deepEqual(store.get().overviewLayout, edited)
-  assert.equal(normalizeSettings({ overviewLayout: { ...edited, inventoryHeight: 9999 } }).overviewLayout.inventoryHeight, 600)
+  assert.deepEqual(Object.keys(store.get().overviewLayout).sort(), ['global', 'globalMode', 'overrideModes', 'overrides', 'version'])
 })

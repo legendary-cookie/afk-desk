@@ -16,31 +16,47 @@ window.createOverviewEditor = function ({ dashboard, settings, accountId, save, 
   const picker = document.createElement('select'); picker.setAttribute('aria-label', 'Add module')
   const add = document.createElement('button'); add.type = 'button'; add.textContent = 'Add module'
   const help = document.createElement('span'); help.textContent = 'Drag a module or its corner. Focus its handle and use arrows to move, or Shift + arrows to resize.'
-  controls.append(overrideLabel, preset, apply, reset, picker, add, help); toolbar.append(edit, controls)
+  const autoLabel = document.createElement('label'); const auto = document.createElement('input'); auto.type = 'checkbox'; auto.setAttribute('aria-label', 'Automatically arrange modules'); autoLabel.append(auto, ' Auto-arrange')
+  const arrange = document.createElement('button'); arrange.type = 'button'; arrange.textContent = 'Auto-arrange'
+  const notice = document.createElement('span'); notice.className = 'overview-layout-notice'
+  const restore = document.createElement('button'); restore.type = 'button'; restore.className = 'text-button'; restore.textContent = 'Auto-arrange'
+  notice.append('Manual layout · ', restore)
+  controls.append(overrideLabel, autoLabel, arrange, preset, apply, reset, picker, add, help); toolbar.append(edit, notice, controls)
   const grid = document.createElement('div'); grid.className = 'overview-modules'
   dashboard.append(toolbar, grid)
-  let editing = false, currentAccount = null, active = false, layout = [], saving = Promise.resolve()
+  let editing = false, currentAccount = null, active = false, layout = [], mode = 'auto', lastSize = '', saving = Promise.resolve()
   function config() { return model.normalizeSettings(settings().overviewLayout) }
   function persist() {
     const data = config()
-    if (override.checked && currentAccount) data.overrides[currentAccount] = model.normalize(layout)
-    else data.global = model.normalize(layout)
+    if (override.checked && currentAccount) { data.overrides[currentAccount] = model.normalize(layout); data.overrideModes[currentAccount] = mode }
+    else { data.global = model.normalize(layout); data.globalMode = mode }
     settings().overviewLayout = data
     saving = saving.catch(() => {}).then(() => save(data)).catch(error => report(error))
   }
+  function viewport() {
+    const rect = grid.getBoundingClientRect(), area = dashboard.getBoundingClientRect()
+    // client sizes are CSS pixels, including when the app uses CSS zoom.
+    const scale = grid.clientWidth > 0 ? rect.width / grid.clientWidth : 1
+    return { width: grid.clientWidth || rect.width, height: Math.max(1, Number.isFinite(area.bottom - rect.top) ? (area.bottom - rect.top) / scale : rect.height) }
+  }
+  function fit() {
+    if (!active || mode !== 'auto') return
+    const size = viewport(), key = `${size.width}:${Math.round(size.height)}`
+    if (lastSize !== key) draw()
+  }
   function draw() {
+    auto.checked = mode === 'auto'; notice.hidden = mode === 'auto'
+    const size = viewport(); lastSize = `${size.width}:${Math.round(size.height)}`
+    const arranged = mode === 'auto' ? model.autoArrange(layout, size) : null
+    if (arranged) layout = arranged.layout
+    grid.style.minHeight = arranged ? `${arranged.minHeight}px` : '0px'
+    grid.classList.toggle('overview-auto', mode === 'auto')
     // Detach panels before replacing their wrappers (macro and minimap can be nested).
     for (const node of Object.values(nodes)) node.remove()
     inventoryResizer.remove()
     grid.replaceChildren()
     dashboard.classList.toggle('overview-editing', editing)
-    const fitted = model.isDefault(layout) && !editing
-    const inventorySize = config().inventoryHeight
-    grid.classList.toggle('overview-fitted', fitted)
     grid.style.setProperty('--overview-rows', model.rowCount(layout))
-    const primary = document.createElement('div'); primary.className = 'overview-primary'
-    const secondary = document.createElement('div'); secondary.className = 'overview-secondary'
-    if (fitted) grid.append(primary, secondary)
     const byId = new Map(layout.map(item => [item.id, item]))
     for (const [id, node] of Object.entries(nodes)) {
       const item = byId.get(id)
@@ -55,12 +71,13 @@ window.createOverviewEditor = function ({ dashboard, settings, accountId, save, 
       const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = '×'; remove.setAttribute('aria-label', `Remove ${model.names[id]}`)
       const resize = document.createElement('button'); resize.type = 'button'; resize.className = 'overview-module-resize'; resize.textContent = '◢'; resize.setAttribute('aria-label', `Resize ${model.names[id]}`); resize.hidden = !editing
       function change(dx, dy, sizing) {
-        const updated = { ...item, ...(sizing ? { w: Math.max(1, Math.min(12 - item.x, item.w + dx)), h: Math.max(1, Math.min(30, item.h + dy)) } : { x: Math.max(0, Math.min(12 - item.w, item.x + dx)), y: Math.max(0, item.y + dy) }) }
+        const updated = { ...item, ...(sizing ? { w: Math.max(1, Math.min(12 - item.x, item.w + dx)), h: Math.max(1, Math.min(3000, item.h + dy)) } : { x: Math.max(0, Math.min(12 - item.w, item.x + dx)), y: Math.max(0, item.y + dy) }) }
+        mode = 'manual'
         layout = model.normalize([updated, ...layout.filter(entry => entry.id !== id)]); persist(); draw()
         grid.querySelector(`[data-handle="${id}"]`)?.focus()
       }
       handle.dataset.handle = id
-      handle.addEventListener('keydown', event => { const delta = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[event.key]; if (delta) { event.preventDefault(); change(...delta, event.shiftKey) } })
+      handle.addEventListener('keydown', event => { const delta = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[event.key]; if (delta) { event.preventDefault(); change(delta[0], delta[1] * 25, event.shiftKey) } })
       function drag(event, sizing) {
         if (event.button !== 0) return
         event.preventDefault()
@@ -70,18 +87,10 @@ window.createOverviewEditor = function ({ dashboard, settings, accountId, save, 
         window.addEventListener('pointerup', up, { once: true })
       }
       handle.addEventListener('pointerdown', event => drag(event, false)); resize.addEventListener('pointerdown', event => drag(event, true))
-      resize.addEventListener('keydown', event => { const delta = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[event.key]; if (delta) { event.preventDefault(); change(...delta, true) } })
-      remove.addEventListener('click', () => { layout = layout.filter(entry => entry.id !== id); persist(); draw() })
+      resize.addEventListener('keydown', event => { const delta = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[event.key]; if (delta) { event.preventDefault(); change(delta[0], delta[1] * 25, true) } })
+      remove.addEventListener('click', () => { layout = layout.filter(entry => entry.id !== id); draw(); persist() })
       bar.append(handle, remove); wrapper.append(bar, node, resize)
-      if (fitted) {
-        wrapper.style.gridColumn = ''; wrapper.style.gridRow = ''
-        if (id === 'inventory') {
-          primary.append(inventoryResizer)
-          if (inventorySize !== undefined) wrapper.style.height = `${inventorySize}px`
-        }
-        const column = ['details', 'movement'].includes(id) ? secondary : primary
-        column.append(wrapper)
-      } else grid.append(wrapper)
+      grid.append(wrapper)
     }
     // A standalone map is opt-in. Otherwise it lives beside the movement buttons.
     if (!byId.has('minimap') && byId.has('movement')) { nodes.minimap.hidden = false; nodes.movement.append(nodes.minimap) }
@@ -97,23 +106,21 @@ window.createOverviewEditor = function ({ dashboard, settings, accountId, save, 
     }
     toolbar.hidden = false; grid.hidden = false
     if (!active || id !== currentAccount || force) {
-      active = true; currentAccount = id; const data = config(); override.checked = Object.hasOwn(data.overrides, id); layout = model.normalize(override.checked ? data.overrides[id] : data.global); draw()
+      active = true; currentAccount = id; const data = config(); override.checked = Object.hasOwn(data.overrides, id); layout = model.normalize(override.checked ? data.overrides[id] : data.global); mode = override.checked ? data.overrideModes[id] : data.globalMode; draw()
     }
   }
   edit.addEventListener('click', () => { editing = !editing; edit.textContent = editing ? 'Done editing' : 'Edit layout'; edit.setAttribute('aria-pressed', String(editing)); controls.hidden = !editing; draw() })
-  override.addEventListener('change', () => { const data = config(); if (override.checked) data.overrides[currentAccount] = model.normalize(layout); else { delete data.overrides[currentAccount]; layout = model.normalize(data.global) } settings().overviewLayout = data; saving = saving.catch(() => {}).then(() => save(data)).catch(error => report(error)); draw() })
-  apply.addEventListener('click', () => { layout = model.normalize(model.presets[preset.value]); persist(); draw() })
-  reset.addEventListener('click', () => { const data = config(); delete data.inventoryHeight; settings().overviewLayout = data; layout = model.normalize(model.presets.Default); persist(); draw() })
-  add.addEventListener('click', () => { const item = model.moduleDefaults[picker.value]; if (item) { layout = model.normalize([...layout, { ...item, y: Math.max(0, ...layout.map(entry => entry.y + entry.h)) }]); persist(); draw() } })
-  return { refresh, inventoryHeight() {
-    return grid.classList.contains('overview-fitted') ? grid.querySelector('[data-module="inventory"]')?.getBoundingClientRect().height : null
-  }, resizeInventory(height) {
-    if (!grid.classList.contains('overview-fitted')) return false
-    const inventorySize = Math.max(120, Math.min(height, grid.clientHeight * .55))
-    const data = config(); data.inventoryHeight = inventorySize; settings().overviewLayout = data
-    persist()
-    const wrapper = grid.querySelector('[data-module="inventory"]')
-    if (wrapper) wrapper.style.height = `${inventorySize}px`
-    return true
-  } }
+  override.addEventListener('change', () => {
+    const data = config()
+    if (override.checked && currentAccount) { data.overrides[currentAccount] = model.normalize(layout); data.overrideModes[currentAccount] = mode }
+    else { delete data.overrides[currentAccount]; delete data.overrideModes[currentAccount]; layout = model.normalize(data.global); mode = data.globalMode }
+    settings().overviewLayout = data; persist(); draw()
+  })
+  function arrangeNow() { mode = 'auto'; draw(); persist() }
+  arrange.addEventListener('click', arrangeNow); restore.addEventListener('click', arrangeNow)
+  auto.addEventListener('change', () => { mode = auto.checked ? 'auto' : 'manual'; draw(); persist() })
+  apply.addEventListener('click', () => { layout = model.normalize(model.presets[preset.value]); mode = 'manual'; draw(); persist() })
+  reset.addEventListener('click', () => { layout = model.normalize(model.presets.Default); arrangeNow() })
+  add.addEventListener('click', () => { const item = model.moduleDefaults[picker.value]; if (item) { layout = model.normalize([...layout, { ...item, y: Math.max(0, ...layout.map(entry => entry.y + entry.h)) }]); draw(); persist() } })
+  return { refresh, fit }
 }
