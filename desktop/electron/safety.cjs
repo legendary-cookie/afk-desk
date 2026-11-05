@@ -113,7 +113,7 @@ function deferSafety(manager, account, state) {
     state.timer = null
     if (manager.reconnects.get(account.id) !== state || state.manual) return
     const current = state.account
-    if (state.safetyPause === 'health' && current.autoReconnect === false) { manager.reconnects.delete(account.id); manager.status(account.id, 'offline', 'Auto-reconnect disabled.'); return }
+    if (state.safetyPause === 'health' && current.autoReconnect === false) { if (!(state.cooldownUntil > Date.now())) manager.reconnects.delete(account.id); manager.status(account.id, 'offline', 'Auto-reconnect disabled.'); return }
     if (Date.now() < (state.cooldownUntil || 0) || !isWithinSchedule(current)) return deferSafety(manager, current, state)
     try { manager.connect(current, { reconnecting: true }) } catch (error) { manager.scheduleReconnect(current, error.message) }
   }, 30000)

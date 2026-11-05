@@ -2,7 +2,7 @@
 
 function stripFormatting(text) { return String(text || '').replace(/§[0-9a-fk-or]/gi, '').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '') }
 function inventorySignature(items) { return (Array.isArray(items) ? items : []).map((item) => `${Number(item?.slot) || 0}:${String(item?.name || '')}:${Number(item?.count) || 0}`).join('|') }
-function createBotEventAdapter({ sessionId = () => null, isManualDisconnect = () => false, now = Date.now } = {}) {
+function createBotEventAdapter({ sessionId = () => null, isManualDisconnect = () => false, isSafetyDisconnect = () => false, now = Date.now } = {}) {
   const spawned = new Map(), world = new Map(), lastSession = new Map(), lastHealth = new Map()
   return function adapt(type, accountId, payload = {}) {
     const sid = sessionId(accountId) || (type === 'status' && ['offline', 'reconnecting'].includes(payload.status) ? lastSession.get(accountId) : null)
@@ -18,8 +18,8 @@ function createBotEventAdapter({ sessionId = () => null, isManualDisconnect = ()
         else events.push(make('serverSwitch'))
         return events
       }
-      if (payload.status === 'offline') { spawned.delete(accountId); world.delete(accountId); lastHealth.delete(accountId); return [make('disconnected', { reason: String(payload.detail || 'Disconnected'), manual: isManualDisconnect(accountId, payload) })] }
-      if (payload.status === 'reconnecting') return [make('disconnected', { reason: String(payload.detail || 'Reconnecting'), manual: false })]
+      if (payload.status === 'offline') { spawned.delete(accountId); world.delete(accountId); lastHealth.delete(accountId); return [make('disconnected', { reason: String(payload.detail || 'Disconnected'), manual: isManualDisconnect(accountId, payload), safety: isSafetyDisconnect(accountId, payload) })] }
+      if (payload.status === 'reconnecting') return [make('disconnected', { reason: String(payload.detail || 'Reconnecting'), manual: false, safety: isSafetyDisconnect(accountId, payload) })]
       return []
     }
     if (type === 'spawn') { if (spawned.get(accountId) === sid) return []; spawned.set(accountId, sid); return [make('spawn')] }

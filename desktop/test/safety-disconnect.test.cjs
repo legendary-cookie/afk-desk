@@ -27,3 +27,17 @@ test('only own totem pop with no remaining totems disconnects', async () => {
   x.client.emit('entity_status', {entityId: 7, entityStatus: 35}); await new Promise(r => setTimeout(r, 550)); assert.equal(x.bot.ended, undefined)
   x.client.emit('entity_status', {entityId: 7, entityStatus: 35}); slots[45] = null; await new Promise(r => setTimeout(r, 550)); assert.match(x.bot.ended, /totems exhausted/); clearInterval(x.session.safetyTimer)
 })
+
+test('manual or macro disconnect preserves an active safety cooldown for the next connect', () => {
+  const { BotManager } = require('../electron/bot-manager.cjs')
+  const state = { account: { id: 'a', host: 'example' }, cooldownUntil: Date.now() + 120000, safetyPause: 'health' }
+  const manager = { profilesPath: '/tmp', reconnects: new Map([['a', state]]), sessions: new Map(), clearReconnectTimer() {}, status() {}, scheduleReconnectTimer() { return { unref() {} } } }
+  BotManager.prototype.disconnect.call(manager, 'a')
+  assert.equal(manager.reconnects.get('a'), state)
+  BotManager.prototype.connect.call(manager, state.account)
+  assert.equal(manager.reconnects.get('a'), state)
+  assert.equal(state.safetyPause, 'health')
+  assert.ok(state.timer)
+  BotManager.prototype.updateAccountConfig.call(manager, { ...state.account, autoReconnect: false })
+  assert.equal(manager.reconnects.get('a'), state)
+})

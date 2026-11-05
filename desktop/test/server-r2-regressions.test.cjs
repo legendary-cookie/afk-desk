@@ -756,3 +756,23 @@ test('Security re-review 5: browser mode remote access settings section is read-
   delete globalThis.afkDesk
   bridge._close()
 })
+
+test('browser graph contract and macro save/list/export preserve v3 fields', async t => {
+  const f = fixture(t)
+  const graph = { id: 'g', name: 'Graph', version: 3, nodes: [{ id: 'n', kind: 'wait', params: { ms: 500 }, position: { x: 1, y: 2 } }], edges: [], vars: [{ name: 'v', value: 3 }] }
+  const contract = { graphKinds: { wait: { params: { ms: { type: 'number', default: 500 } }, inputs: { in: { type: 'control' } } } }, triggers: {}, steps: {}, conditions: {} }
+  f.core.macros.contract = () => contract
+  f.core.macros.save = value => value
+  f.core.macros.list = () => ({ macros: [graph], customNodes: [], validation: {} })
+  f.core.macros.exportJson = () => JSON.stringify({ version: 3, macros: [graph] })
+  assert.deepEqual((await f.invoke('macros:contract')).json.result, contract)
+  assert.deepEqual((await f.invoke('macros:save', graph)).json.result, graph)
+  assert.deepEqual((await f.invoke('macros:list')).json.result.macros[0], graph)
+  assert.deepEqual(JSON.parse((await f.invoke('macros:export', ['g'])).json.result).macros[0], graph)
+  const requests = []
+  const bridge = createBrowserBridge({ WebSocketImpl: null, fetchImpl: async (url, init) => { if (url === '/api/login') return { ok: true, json: async () => ({ ok: true, scope: 'admin', csrfToken: 'csrf' }) }; const body = JSON.parse(init.body); requests.push(body); return { ok: true, json: async () => ({ ok: true, result: contract }) } } })
+  await bridge.login(PASSWORD)
+  await bridge.macros.contract()
+  assert.equal(requests[0].channel, 'macros:contract')
+  bridge._close()
+})

@@ -149,6 +149,8 @@
         return
       }
       const params = Object.fromEntries(Object.entries(kinds[kind].params || {}).filter(([, field]) => field.default !== undefined).map(([key, field]) => [key, clone(field.default)]))
+      if (kind === 'wait') { delete params.minMs; delete params.maxMs }
+      if (kind === 'repeat') { delete params.while; delete params.maxIterations }
       const node = { id: id(), kind, params, position: { x: snap(p.x), y: snap(p.y) } }
       try { const next = insert(graph, node, edgeId); selected = new Set([node.id]); commit(next) } catch (error) { report(error) }
     }
@@ -269,7 +271,13 @@
       if (options.createSchemaFields) {
         const fields = options.createSchemaFields(specFor(node)?.params || {}, node.params || {}, (key, value) => {
           const next = clone(graph), params = next.nodes.find(item => item.id === node.id).params
-          if (value === undefined) delete params[key]; else params[key] = value
+          if (value === undefined) delete params[key]; else {
+            params[key] = value
+            if (node.kind === 'wait' && ['ms', 'jitterMs'].includes(key)) { delete params.minMs; delete params.maxMs }
+            if (node.kind === 'wait' && ['minMs', 'maxMs'].includes(key)) { delete params.ms; delete params.jitterMs }
+            if (node.kind === 'repeat' && key === 'times') { delete params.while; delete params.maxIterations }
+            if (node.kind === 'repeat' && ['while', 'maxIterations'].includes(key)) delete params.times
+          }
           commit(next)
         }, 0, options.conditionEditor)
         // Sensitive editable values stay intact in the model while hidden from

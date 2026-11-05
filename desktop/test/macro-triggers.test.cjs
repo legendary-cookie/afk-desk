@@ -765,3 +765,13 @@ test('player appearance regex never evaluates overlong usernames', () => {
   const { matcher } = setup([macro('p', { type: 'playerAppears', ignoreRegex: '^Friend' })])
   assert.deepEqual(matcher.onEvent(ev('playerAppears', 'a1', { username: 'x'.repeat(17) })), [])
 })
+
+test('restart recipe excludes safety and manual disconnects while ordinary disconnect triggers still fire', () => {
+  const { RECIPES } = require('../src/macro-editor.js')
+  const { triggerMacro } = require('../electron/macro/graph-interpreter.cjs')
+  const recipe = triggerMacro({ ...RECIPES['server-restart'](), id: 'restart', enabled: true })
+  const { matcher } = setup([recipe, macro('ordinary', { type: 'disconnected' })])
+  assert.deepEqual(ids(matcher.onEvent(ev('disconnected', 'a1', { safety: true }))), ['ordinary'])
+  assert.deepEqual(ids(matcher.onEvent(ev('disconnected', 'a1', { manual: true }))), ['ordinary'])
+  assert.deepEqual(ids(matcher.onEvent(ev('disconnected', 'a1', {}))).sort(), ['ordinary', 'restart'])
+})

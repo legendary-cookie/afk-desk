@@ -86,3 +86,13 @@ test('registered macro IPC enforces payload limits and validation and runs throu
   assert.deepEqual(Manager.java.sent, ['ipc works'])
   assert.ok(handlers.has('macros:stop'))
 })
+
+
+test('disconnect events carry safety and manual state to recipe triggers', () => {
+  let safety = true, manual = false
+  const adapt = createBotEventAdapter({ sessionId: () => 's', isSafetyDisconnect: () => safety, isManualDisconnect: () => manual })
+  assert.equal(adapt('status', 'a', { status: 'reconnecting' })[0].payload.safety, true)
+  safety = false; manual = true
+  const payload = adapt('status', 'a', { status: 'offline' })[0].payload
+  assert.equal(payload.safety, false); assert.equal(payload.manual, true)
+})

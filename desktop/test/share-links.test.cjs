@@ -56,3 +56,12 @@ test('graph shares retain executable wiring and redact node identifiers and text
   assert.equal(data.nodes[1].params.message, '')
   assert.deepEqual(require('../electron/macro/graph-model.cjs').validateGraph(data).filter(error => ['UNKNOWN_KIND', 'UNKNOWN_PORT', 'DANGLING_EDGE'].includes(error.code)), [])
 })
+
+test('graph shares redact string leaves in arrays, including nested custom nodes', () => {
+  const definition = { id: 'custom', name: 'Custom', version: 3, inputs: {}, outputs: {}, nodes: [{ id: 's', kind: 'switch', params: { cases: ['/login inner-password', 2, ['nested-secret']] }, position: { x: 0, y: 0 } }], edges: [] }
+  const graph = { version: 3, nodes: [{ id: 's', kind: 'switch', params: { cases: ['/login private-password', 4] }, position: { x: 0, y: 0 } }, { id: 'g', kind: 'group', params: { definition }, position: { x: 0, y: 0 } }], edges: [] }
+  const result = share.decode(share.encode('macro', share.macroData(graph, model))).data
+  assert.doesNotMatch(JSON.stringify(result), /password|nested-secret/)
+  assert.deepEqual(result.nodes[0].params.cases, ['', 4])
+  assert.deepEqual(result.nodes[1].params.definition.nodes[0].params.cases, ['', 2, ['']])
+})

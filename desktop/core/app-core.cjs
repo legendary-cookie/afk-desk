@@ -402,6 +402,7 @@ class AppCore {
     for (const warning of migration.warnings) this.diagnosticLog.write({ event: 'warning', at: this.now(), message: warning })
     this.botEventAdapter = createBotEventAdapter({
       sessionId: (id) => this.facade?.sessionId(id),
+      isSafetyDisconnect: (id) => Boolean((typeof this.botManager.manager === 'function' ? this.botManager.manager(id) : this.botManager)?.reconnects?.get(id)?.safetyPause),
       isManualDisconnect: (id) => (typeof this.botManager.manager === 'function' ? this.botManager.manager(id) : this.botManager)?.reconnects?.get(id)?.manual === true
     })
     try {
