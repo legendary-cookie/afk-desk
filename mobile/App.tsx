@@ -13,6 +13,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 const APP_VERSION: string = require('./package.json').version;
 const {maskNames, addRecent} = require('./mobile-ui-logic.cjs');
 const {graphCards} = require('./macro-graph-view.cjs');
+const {loadMacroLibrary, saveMacroLibrary, syncMacroLibrary, toggleMacro, storeGraph} = require('./macro-library.cjs');
 
 type ProxyConfig = {enabled: boolean; type: 'socks5' | 'http'; host: string; port: string; username: string; password: string};
 type Account = {
@@ -102,6 +103,18 @@ function App(): React.JSX.Element {
   const [selectedId, setSelectedId] = useState('');
   const [sessions, setSessions] = useState<Record<string, Session>>({});
   const [engineReady, setEngineReady] = useState(false);
+  const [macros, setMacros] = useState<any[]>([]);
+  const [macrosLoaded, setMacrosLoaded] = useState(false);
+  useEffect(() => {
+    loadMacroLibrary(AsyncStorage).then((saved: any[]) => { setMacros(saved); setMacrosLoaded(true); })
+      .catch(() => Alert.alert('Storage error', 'Saved macros could not be loaded.'));
+  }, []);
+  useEffect(() => {
+    if (!engineReady || !macrosLoaded) return;
+    syncMacroLibrary(engineCommand, macros)
+      .catch((error: Error) => Alert.alert('Macros', error.message));
+  }, [engineReady, macrosLoaded, macros]);
+  const changeMacros = async (next: any[]) => { await saveMacroLibrary(AsyncStorage, next); setMacros(next); };
   const [upcomingRuns, setUpcomingRuns] = useState<{kind: string; at: number}[]>([]);
   const [editing, setEditing] = useState<Account | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -118,6 +131,8 @@ function App(): React.JSX.Element {
   const [followLatest, setFollowLatest] = useState(true);
   const [loginCode, setLoginCode] = useState<{code: string; verificationUri?: string} | null>(null);
   const accountsRef = useRef(accounts);
+  const streamerModeRef = useRef(streamerMode);
+  streamerModeRef.current = streamerMode;
   const logListRef = useRef<ScrollView>(null);
   const completionRequest = useRef(0);
   accountsRef.current = accounts;
@@ -166,6 +181,7 @@ function App(): React.JSX.Element {
       if (type === 'window') updateSession(accountId, old => ({...old, serverWindow: payload.open ? payload : null}));
       if (type === 'safety-disconnect' && payload.notify) Alert.alert('Safety disconnect', `Disconnected: ${['low health', 'low armor durability', 'totems exhausted'].includes(payload.reason) ? payload.reason : 'safety protection'}.`);
       if (type === 'login-code') setLoginCode(payload);
+      if (type === 'macro-notify') Alert.alert('Macro', maskNames(payload.message, accountsRef.current, streamerModeRef.current));
       if (type === 'identity') {
         setAccounts(old => old.map(item => item.id === accountId ? {...item, minecraftName: payload.username || item.minecraftName, skinUrl: payload.skinUrl || item.skinUrl} : item));
       }
@@ -392,8 +408,8 @@ function App(): React.JSX.Element {
       engineCommand({action: 'disconnect', accountId: account.id}).catch(() => {});
       setAccounts(old => old.filter(item => item.id !== account.id)); setSelectedId(accounts.find(item => item.id !== account.id)?.id || ''); setEditing(null);
     }} />
-    <ShareModal visible={shareOpen} accounts={accounts} selected={selected} streamerMode={streamerMode} onClose={() => setShareOpen(false)} onProfile={data => { setShareOpen(false); setSettingsOpen(false); setEditing(normalizeAccount({...blankAccount(), ...data, port: String(data.port ?? '25565')})); }} />
-    <GraphModal visible={graphOpen} accounts={accounts} streamerMode={streamerMode} onClose={() => setGraphOpen(false)} />
+    <ShareModal visible={shareOpen} accounts={accounts} selected={selected} macros={macros} loaded={macrosLoaded} onMacrosChange={changeMacros} streamerMode={streamerMode} onClose={() => setShareOpen(false)} onProfile={data => { setShareOpen(false); setSettingsOpen(false); setEditing(normalizeAccount({...blankAccount(), ...data, port: String(data.port ?? '25565')})); }} />
+    <GraphModal visible={graphOpen} accountId={selected?.id} accounts={accounts} macros={macros} loaded={macrosLoaded} onMacrosChange={changeMacros} streamerMode={streamerMode} onClose={() => setGraphOpen(false)} />
     <SettingsModal onGraph={() => setGraphOpen(true)} onShare={() => setShareOpen(true)} streamerMode={streamerMode} onStreamerMode={changeStreamerMode} visible={settingsOpen} accounts={accounts} onClose={() => setSettingsOpen(false)} onChange={setAccounts} />
     <ServerMenuModal value={session?.serverWindow || null} onClick={slot => selected && engineCommand({action: 'window-click', accountId: selected.id, slot}).catch((error: Error) => Alert.alert('Menu action failed', error.message))} onClose={() => selected && engineCommand({action: 'window-close', accountId: selected.id}).catch((error: Error) => Alert.alert('Close menu failed', error.message))} />
     <Modal transparent visible={Boolean(loginCode)} animationType="fade"><View style={styles.backdrop}><View style={styles.modalCard}><Text style={styles.title}>Microsoft sign-in</Text><Text style={styles.modalHelp}>Open Microsoft, switch to the account you want, then enter this code:</Text><Text selectable style={styles.deviceCode}>{loginCode?.code}</Text><Pressable style={styles.primary} onPress={openMicrosoftSignIn}><Text style={styles.primaryText}>Open Microsoft sign-in</Text></Pressable><Pressable style={styles.modalButton} onPress={() => setLoginCode(null)}><Text style={styles.buttonText}>Close</Text></Pressable></View></View></Modal>
@@ -558,21 +574,10 @@ function AccountModal({streamerMode, value, onClose, onSave, onDelete}: {streame
 }
 
 type SharePreview = {kind: 'profile' | 'macro'; data: any; errors: {message: string}[]};
-const MACRO_STORAGE_KEY = 'afkdesk.mobile.sharedMacros.v1';
-function ShareModal({visible, accounts, selected, streamerMode, onClose, onProfile}: {visible: boolean; accounts: Account[]; selected?: Account; streamerMode: boolean; onClose: () => void; onProfile: (data: Partial<Account>) => void}) {
+function ShareModal({visible, accounts, selected, macros, loaded, onMacrosChange, streamerMode, onClose, onProfile}: {visible: boolean; accounts: Account[]; selected?: Account; macros: any[]; loaded: boolean; onMacrosChange: (macros: any[]) => Promise<void>; streamerMode: boolean; onClose: () => void; onProfile: (data: Partial<Account>) => void}) {
   const [link, setLink] = useState('');
   const [preview, setPreview] = useState<SharePreview | null>(null);
-  const [macros, setMacros] = useState<any[]>([]);
-  const [loaded, setLoaded] = useState(false);
-  useEffect(() => {
-    if (!visible) return;
-    setLoaded(false); setPreview(null); setLink('');
-    AsyncStorage.getItem(MACRO_STORAGE_KEY).then(raw => {
-      const value = raw === null ? [] : JSON.parse(raw);
-      if (!Array.isArray(value)) throw new Error('Invalid macro storage');
-      setMacros(value); setLoaded(true);
-    }).catch(() => Alert.alert('Storage error', 'Shared macros could not be loaded.'));
-  }, [visible]);
+  useEffect(() => { if (visible) { setPreview(null); setLink(''); } }, [visible]);
   const exportItem = async (kind: string, data: unknown) => {
     try { const message = await engineCommand<string>({action: 'share-export', kind, data}); await Share.share({message}); }
     catch (error: any) { Alert.alert('Export failed', error.message); }
@@ -587,26 +592,35 @@ function ShareModal({visible, accounts, selected, streamerMode, onClose, onProfi
     if (preview.kind === 'profile') { onProfile(preview.data); return; }
     if (!loaded) return;
     const next = [...macros, preview.data];
-    try { await AsyncStorage.setItem(MACRO_STORAGE_KEY, JSON.stringify(next)); setMacros(next); setPreview(null); setLink(''); Alert.alert('Macro saved', 'The macro is disabled and stored for sharing. Macro execution is not available on mobile.'); }
+    try { await onMacrosChange(next); setPreview(null); setLink(''); Alert.alert('Macro saved', 'The macro is disabled. Enable it below to run on the selected account.'); }
     catch { Alert.alert('Storage error', 'The macro could not be saved.'); }
   };
   return <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}><SafeAreaView style={styles.safe}><View style={styles.modalHeader}><Text style={styles.panelTitle}>Share links</Text><Pressable onPress={onClose}><Text style={styles.link}>Done</Text></Pressable></View><ScrollView contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled">
     <Text style={styles.sectionTitle}>Export</Text><Text style={styles.help}>Links omit account identities, credentials and macro text.</Text>
     {selected && <Pressable style={styles.modalButton} onPress={() => exportItem('profile', selected)}><Text style={styles.buttonText}>Share selected profile</Text></Pressable>}
-    {macros.map((macro, index) => <Pressable key={macro.id || index} style={styles.modalButton} onPress={() => exportItem('macro', macro)}><Text style={styles.buttonText}>Share macro {index + 1}</Text></Pressable>)}
+    {macros.map((macro, index) => <View key={macro.id || index}><Pressable style={styles.modalButton} onPress={() => exportItem('macro', macro)}><Text style={styles.buttonText}>Share macro {index + 1}</Text></Pressable><Pressable disabled={!loaded || !selected} style={styles.modalButton} onPress={() => { if (selected) onMacrosChange(toggleMacro(macros, index, selected.id)).catch(() => Alert.alert('Storage error', 'Macro changes could not be saved.')); }}><Text style={styles.buttonText}>{macro.enabled === false ? 'Enable on selected account' : 'Disable macro'}</Text></Pressable></View>)}
     <Text style={styles.sectionTitle}>Import</Text><TextInput accessibilityLabel="Share link" value={link} onChangeText={value => {setLink(value); setPreview(null);}} autoCapitalize="none" autoCorrect={false} multiline style={styles.input} placeholder="Paste an AFK Desk share link" placeholderTextColor="#626d7b" /><Pressable style={styles.modalButton} onPress={inspect}><Text style={styles.buttonText}>Preview</Text></Pressable>
-    {preview && <><Text style={styles.sectionTitle}>Preview {preview.kind}</Text><Text selectable style={styles.help}>{maskNames(JSON.stringify(preview.data, null, 2), accounts, streamerMode)}</Text>{preview.errors.map((error, index) => <Text key={index} style={styles.help}>{maskNames(error.message, accounts, streamerMode)}</Text>)}<Text style={styles.help}>{preview.kind === 'profile' ? 'Continue to enter an account label and review settings before saving.' : 'Macros are imported disabled. Mobile can store and share them but cannot run them.'}</Text><Pressable style={styles.primary} onPress={save}><Text style={styles.primaryText}>{preview.kind === 'profile' ? 'Continue to account editor' : 'Save macro'}</Text></Pressable></>}
+    {preview && <><Text style={styles.sectionTitle}>Preview {preview.kind}</Text><Text selectable style={styles.help}>{maskNames(JSON.stringify(preview.data, null, 2), accounts, streamerMode)}</Text>{preview.errors.map((error, index) => <Text key={index} style={styles.help}>{maskNames(error.message, accounts, streamerMode)}</Text>)}<Text style={styles.help}>{preview.kind === 'profile' ? 'Continue to enter an account label and review settings before saving.' : 'Macros are imported disabled. Enable a saved macro to run it on the selected account.'}</Text><Pressable style={styles.primary} onPress={save}><Text style={styles.primaryText}>{preview.kind === 'profile' ? 'Continue to account editor' : 'Save macro'}</Text></Pressable></>}
   </ScrollView></SafeAreaView></Modal>;
 }
 
-function GraphModal({visible, accounts, streamerMode, onClose}: {visible: boolean; accounts: Account[]; streamerMode: boolean; onClose: () => void}) {
+function GraphModal({visible, accountId, accounts, macros, loaded, onMacrosChange, streamerMode, onClose}: {visible: boolean; accountId?: string; accounts: Account[]; macros: any[]; loaded: boolean; onMacrosChange: (macros: any[]) => Promise<void>; streamerMode: boolean; onClose: () => void}) {
   const [json, setJson] = useState('');
   const [graph, setGraph] = useState<any>(null);
   const mask = (value: string) => maskNames(value, accounts, streamerMode);
-  const inspect = () => { try { setGraph(graphCards(json)); } catch (error: any) { setGraph(null); Alert.alert('Invalid graph', error.message); } };
+  const inspect = () => { try { setGraph(graphCards(json)); } catch (error: any) { setGraph(null); Alert.alert('Invalid graph', mask(error.message)); } };
+  const command = (action: string) => { if (!accountId) { Alert.alert('Select an account'); return; } engineCommand({action, accountId, ...(action === 'macro-run-graph' ? {graph: JSON.parse(json)} : {})}).catch((error: Error) => Alert.alert('Macro', mask(error.message))); };
+  const save = async () => {
+    try {
+      const next = storeGraph(macros, JSON.parse(json), accountId);
+      await onMacrosChange(next);
+      setJson(JSON.stringify(next[next.length - 1]));
+      Alert.alert('Macro saved', 'Enabled on the selected account. Timer triggers appear in Next runs.');
+    } catch (error: any) { Alert.alert('Macro', mask(error.message)); }
+  };
   return <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}><SafeAreaView style={styles.safe}><View style={styles.modalHeader}><Text style={styles.panelTitle}>Macro graph</Text><Pressable onPress={onClose}><Text style={styles.link}>Done</Text></Pressable></View><ScrollView contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled">
     <Text style={styles.help}>Paste version 3 graph JSON to view its nodes and connections.</Text><TextInput accessibilityLabel="Graph JSON" value={json} onChangeText={value => {setJson(value); setGraph(null);}} secureTextEntry={streamerMode} autoCapitalize="none" autoCorrect={false} style={styles.input} placeholder="Graph JSON" placeholderTextColor="#626d7b" /><Pressable style={styles.modalButton} onPress={inspect}><Text style={styles.buttonText}>View graph</Text></Pressable>
-    {graph && <><Text style={styles.sectionTitle}>{mask(graph.name)}</Text><Text style={styles.help}>Read-only · execution is not available on this device.</Text>{graph.nodes.map((node: any) => <View key={node.id} style={[styles.panel, styles.form]}><Text style={styles.panelTitle}>{mask(node.label)} · {mask(node.id)}</Text><Text style={styles.help}>{mask(node.kind)}{node.disabled ? ' · disabled' : ''}</Text><Text selectable style={styles.help}>{mask(node.params)}</Text><Text style={styles.help}>{node.connections.length ? node.connections.map(mask).join('\n') : 'No outgoing connections'}</Text></View>)}</>}
+    {graph && <><Text style={styles.sectionTitle}>{mask(graph.name)}</Text><Pressable disabled={!loaded || !accountId} style={styles.modalButton} onPress={save}><Text style={styles.buttonText}>Save and enable on selected account</Text></Pressable><Pressable style={styles.modalButton} onPress={() => command('macro-run-graph')}><Text style={styles.buttonText}>Run</Text></Pressable><Pressable style={styles.modalButton} onPress={() => command('macro-stop')}><Text style={styles.buttonText}>Stop</Text></Pressable>{graph.nodes.map((node: any) => <View key={node.id} style={[styles.panel, styles.form]}><Text style={styles.panelTitle}>{mask(node.label)} · {mask(node.id)}</Text><Text style={styles.help}>{mask(node.kind)}{node.disabled ? ' · disabled' : ''}</Text><Text selectable style={styles.help}>{mask(node.params)}</Text><Text style={styles.help}>{node.connections.length ? node.connections.map(mask).join('\n') : 'No outgoing connections'}</Text></View>)}</>}
   </ScrollView></SafeAreaView></Modal>;
 }
 

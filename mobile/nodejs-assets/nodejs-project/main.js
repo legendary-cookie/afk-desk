@@ -2,12 +2,20 @@ const path = require('node:path')
 const bridge = require('rn-bridge')
 const { exportShare, previewShare } = require('./share-bridge.cjs')
 const { BotManager } = require('./bot-manager.cjs')
+const { createMacroRuntime } = require('./macro-runtime.cjs')
 const { validateCommand, isRequestId, getUpcomingRuns } = require('./bridge-command.cjs')
 
+let macros
 const manager = new BotManager({
   profilesPath: path.join(bridge.app.datadir(), 'minecraft-profiles'),
-  emit: (type, accountId, payload) => bridge.channel.post('engine-event', { type, accountId, payload })
+  emit: (type, accountId, payload) => {
+    if (type === 'status' && payload.status === 'online') macros?.event(accountId, 'spawn')
+    if (type === 'status' && ['offline', 'reconnecting'].includes(payload.status)) macros?.event(accountId, 'disconnected')
+    bridge.channel.post('engine-event', { type, accountId, payload })
+  }
 })
+
+macros = createMacroRuntime(manager, event => bridge.channel.post('engine-event', { type: 'macro-run', accountId: event.accountId, payload: event }))
 
 function reply(requestId, ok, value) {
   bridge.channel.post('engine-reply', { requestId, ok, ...(ok ? { value } : { error: String(value?.message || value) }) })
@@ -34,8 +42,12 @@ bridge.channel.on('engine-command', async (rawCommand) => {
       case 'update-account-config': manager.updateAccountConfig(account); break
       case 'share-export': result = exportShare(command.kind, command.data); break
       case 'share-preview': result = previewShare(value); break
-      case 'getUpcomingRuns': result = getUpcomingRuns(manager, accountId); break
+      case 'getUpcomingRuns': result = [...getUpcomingRuns(manager, accountId), ...macros.upcoming(accountId)].sort ( (a, b) => a.at - b.at ); break
+      case 'macro-run-graph': macros.runGraph(accountId, command.graph); break
+      case 'macro-stop': await macros.stop(accountId); break
+      case 'macro-set-library': if (!Array.isArray(command.macros)) throw new Error('Macro library must be an array.'); macros.setLibrary(command.macros); break
       case 'shutdown':
+        await macros.engine.shutdown()
         for (const id of [...manager.sessions.keys()]) manager.disconnect(id)
         break
       default: throw new Error(`Unknown engine action: ${action}`)
