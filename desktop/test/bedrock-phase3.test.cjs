@@ -50,3 +50,45 @@ test('stack request packet matches the supported Bedrock serializer', async () =
   h.client.emit('item_stack_response', { responses: [{ request_id: -1, status: 'ok', containers: [] }] }); await pending
   h.manager.disconnect('phase2')
 })
+
+test('open chest contents transfer both ways and close is reported', async () => {
+  const h = setup(); h.client.emit('inventory_content', { window_id: 0, input: [item(1, 5, 10)] })
+  h.client.emit('container_open', { window_id: 5, window_type: 'container' })
+  h.client.emit('inventory_content', { window_id: 5, input: [{ network_id: 0 }, item(2, 3, 20)] })
+  const deposit = h.manager.depositSlot('phase2', 36, 2); await flush()
+  const action = h.packets('item_stack_request')[0].requests[0].actions[0]
+  assert.equal(action.destination.slot_type.container_id, 'container'); assert.equal(action.count, 2)
+  const { createSerializer } = require('bedrock-protocol/src/transforms/serializer')
+  assert.doesNotThrow(() => createSerializer(h.client.version).createPacketBuffer({ name: 'item_stack_request', params: h.packets('item_stack_request')[0] }))
+  h.client.emit('item_stack_response', { responses: [{ request_id: -1, status: 'ok', containers: [{ slot_type: { container_id: 'container' }, slots: [{ slot: 0, count: 2, item_stack_id: 44 }] }] }] }); await deposit
+  assert.equal(h.session.rawInventory[0].count, 3); assert.equal(h.session.openWindow.slots[0].stack_id, 44)
+  const withdraw = h.manager.clickWindowSlot('phase2', 0); await flush()
+  assert.equal(h.packets('item_stack_request')[1].requests[0].actions[0].source.stack_id, 44)
+  h.client.emit('item_stack_response', { responses: [{ request_id: -3, status: 'ok', containers: [] }] }); await withdraw
+  assert.equal(h.session.rawInventory[9].count, 2)
+  h.manager.closeWindow('phase2'); assert.equal(h.packets('container_close').length, 1)
+  assert.equal(h.events.filter(([type]) => type === 'window').at(-1)[2].open, false)
+  h.manager.disconnect('phase2')
+})
+
+test('container transfer respects locks and rejects a closed window response', async () => {
+  const h = setup(); h.client.emit('inventory_content', { window_id: 0, input: [item(1, 5, 10)] })
+  h.client.emit('container_open', { window_id: 5, window_type: 'container' }); h.client.emit('inventory_content', { window_id: 5, input: [{ network_id: 0 }] })
+  h.manager.setItemLocks('phase2', [36]); await assert.rejects(h.manager.depositSlot('phase2', 36), /locked/)
+  h.manager.setItemLocks('phase2', []); const pending = h.manager.depositSlot('phase2', 36); await flush()
+  h.client.emit('container_close', { window_id: 5 }); h.client.emit('item_stack_response', { responses: [{ request_id: -1, status: 'ok' }] })
+  await assert.rejects(pending, /closed/); assert.equal(h.session.rawInventory[0].count, 5)
+  h.manager.disconnect('phase2')
+})
+
+test('Bedrock macro deposit and close use the open container', async () => {
+  const { createFacade } = require('../electron/macro/facade.cjs')
+  const h = setup(); h.client.emit('inventory_content', { window_id: 0, input: [item(1, 5, 10)] })
+  h.client.emit('container_open', { window_id: 5, window_type: 'container' }); h.client.emit('inventory_content', { window_id: 5, input: [{ network_id: 0 }] })
+  const facade = createFacade({ bots: h.manager, getEdition: () => 'bedrock' })
+  assert.equal(facade.state('phase2').windowOpen, true)
+  const pending = facade.deposit('phase2', { select: { slot: 36 }, count: 2 }); await flush()
+  h.client.emit('item_stack_response', { responses: [{ request_id: -1, status: 'ok', containers: [] }] }); await pending
+  await facade.closeGui('phase2'); assert.equal(facade.state('phase2').windowOpen, false)
+  h.manager.disconnect('phase2')
+})

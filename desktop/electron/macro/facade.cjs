@@ -57,7 +57,7 @@ function createFacade({ bots, notify = () => {}, getEdition = () => 'java', time
       food: bedrock ? session?.food : telemetry.food,
       inventoryFull: online && !hasFreeInventorySlot(inventory),
       inventory: inventory.map(({ name, count, slot }) => ({ name, count, slot })),
-      windowOpen: Boolean(session?.bot?.currentWindow),
+      windowOpen: Boolean(session?.bot?.currentWindow || (bedrock && session?.openWindow)),
       entities: session?.bot?.entity?.position ? Object.values(session.bot.entities || {}).filter((entity) => entity && entity !== session.bot.entity && entity.position).map((entity) => ({ type: entityType(entity), name: entity.name, username: entity.username, distance: Math.hypot(entity.position.x - session.bot.entity.position.x, entity.position.y - session.bot.entity.position.y, entity.position.z - session.bot.entity.position.z) })) : []
     }
   }
@@ -234,6 +234,12 @@ function createFacade({ bots, notify = () => {}, getEdition = () => 'java', time
     },
 
     deposit({ id, step, session, bot, manager }) {
+      if (!bot) {
+        const item = (session.inventory || []).find((entry) => Number.isInteger(step.select?.slot) ? entry.slot === step.select.slot : itemNameMatches(entry, step.select?.name))
+        if (!item) throw notFound('Inventory item not found.')
+        if (lockedSlotSet(session.account).has(Number(item.slot))) throw lockedSlot(item.slot)
+        return manager.depositSlot(id, item.slot, step.count)
+      }
       const item = pickOwnItem(bot, step.select, lockedSlotSet(session.account))
       return manager.depositSlot(id, item.slot, step.count)
     },
