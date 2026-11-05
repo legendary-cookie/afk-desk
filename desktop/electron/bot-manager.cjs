@@ -447,7 +447,7 @@ class BotManager {
       } else if (currentAccount.autoReconnect !== false && !reconnectState.manual) {
         this.scheduleReconnect(currentAccount, session.lastKickReason || session.lastNetworkReason || reason)
       } else {
-        this.reconnects.delete(account.id)
+        if (!(reconnectState.cooldownUntil > Date.now())) this.reconnects.delete(account.id)
         this.status(account.id, 'offline', reason ? `Disconnected: ${reason}` : 'Disconnected')
       }
     })
@@ -458,11 +458,11 @@ class BotManager {
     if (reconnectState) {
       reconnectState.manual = true
       if (reconnectState.timer) this.clearReconnectTimer(reconnectState.timer)
-      this.reconnects.delete(id)
     }
     const session = this.sessions.get(id)
     if (!session) {
       this.status(id, 'offline', 'Disconnected')
+      if (reconnectState && !(reconnectState.cooldownUntil > Date.now())) this.reconnects.delete(id)
       return
     }
     // Detach before quit: its end event may be synchronous or arrive after a new connection.
@@ -471,6 +471,7 @@ class BotManager {
       session.bot.quit('Disconnected from AFK Desk')
     } finally {
       if (!this.sessions.has(id)) this.status(id, 'offline', 'Disconnected')
+      if (reconnectState && this.reconnects.get(id) === reconnectState && !(reconnectState.cooldownUntil > Date.now())) this.reconnects.delete(id)
     }
   }
 
@@ -493,7 +494,7 @@ class BotManager {
       if (state.timer) this.clearReconnectTimer(state.timer)
       state.timer = null
       if (!this.sessions.has(account.id)) {
-        this.reconnects.delete(account.id)
+        if (!(state.cooldownUntil > Date.now())) this.reconnects.delete(account.id)
         this.status(account.id, 'offline', 'Auto-reconnect disabled.')
       }
     }

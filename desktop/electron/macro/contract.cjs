@@ -147,6 +147,7 @@ const condition = label => field('condition', label, { default: { type: 'always'
 const selection = field('object', 'Item selector (slot, name or lore)', { default: { slot: 0 }, required: true })
 const comparator = choice('Comparison', ['==', '!=', '<', '<=', '>', '>='], '>=')
 const triggerSchemas = {
+  disconnected: { excludeSafety: bool('Ignore safety shutdowns'), excludeManual: bool('Ignore manual disconnects') },
   playerAppears: { ignoreRegex: string('Ignore usernames matching regex') },
   timer: { intervalMs: number('Interval (ms)', 1000, 86400000, 60000, true), jitterMs: number('Jitter (ms)', 0, 43200000, 0) },
   schedule: { at: string('Time (HH:MM)', '', true) },

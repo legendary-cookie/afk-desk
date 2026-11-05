@@ -23,11 +23,13 @@ function macroData(input, model) {
   macro.enabled = false
   macro.targets = { mode: 'accounts', accountIds: [] }
   // Arbitrary macro text can contain passwords, account names or webhook URLs.
+  const structural = { type: [...Object.keys(STEP_TYPES), ...Object.keys(TRIGGER_TYPES), ...Object.keys(CONDITION_METADATA), ...Object.keys(NODE_KINDS)], mode: ['all', 'accounts', 'tags'], concurrency: ['skip', 'restart', 'queue', 'parallel'], onError: ['stop', 'continue'], comparator: ['==', '!=', '<', '<=', '>', '>='], match: ['contains', 'glob'], source: ['items', 'players', 'entities'] }
   function clean(value) {
     if (Array.isArray(value)) return value.map(clean)
+    if (typeof value === 'string') return ''
     if (!value || typeof value !== 'object') return value
     const schema = STEP_TYPES[value.type]?.params || TRIGGER_TYPES[value.type]?.params || CONDITION_METADATA[value.type]?.params || NODE_KINDS[value.type]?.params || {}
-    return Object.fromEntries(Object.entries(value).filter(([key]) => !/password|token|secret|webhook|account|username|uuid/i.test(key)).map(([key, val]) => [key, typeof val === 'string' && !(schema[key]?.enum?.includes(val)) && !['type', 'mode', 'concurrency', 'onError', 'comparator', 'match', 'source'].includes(key) ? '' : clean(val)]))
+    return Object.fromEntries(Object.entries(value).filter(([key]) => !/password|token|secret|webhook|account|username|uuid/i.test(key)).map(([key, val]) => [key, typeof val === 'string' && !(schema[key]?.enum?.includes(val)) && !structural[key]?.includes(val) ? '' : typeof val === 'string' ? val : clean(val)]))
   }
   const result = clean(macro)
   if (macro.version === 3) {

@@ -391,6 +391,7 @@
       runAutomation: (id, macroId) => invoke('macros:run', { accountId: id, macroId }),
       stopAutomation: (id) => invoke('macros:stop', { accountId: id }),
       macros: {
+        contract: () => invoke('macros:contract'),
         list: () => invoke('macros:list'),
         save: (macro) => invoke('macros:save', macro),
         remove: (id) => invoke('macros:delete', id),

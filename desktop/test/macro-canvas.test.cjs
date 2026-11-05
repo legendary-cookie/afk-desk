@@ -472,3 +472,26 @@ test('custom group drops onto a wire with typed ports, and streamer refresh cove
   assert.equal(overlay.querySelector('.macro-canvas-inspector input').disabled, true)
   assert.ok(!h.container.textContent.includes('Steve'))
 })
+
+test('wait and repeat canvas nodes default to one mode and switch modes on edits', () => {
+  const h = canvasHarness(graph(), { conditionEditor: () => h.document.createElement('div') })
+  const add = kind => { h.container.querySelectorAll('.macro-canvas-palette button').find(b => b.dataset.kind === kind).fire('click'); return h.canvas.getGraph().nodes.at(-1) }
+  const wait = add('wait')
+  assert.deepEqual(plain(wait.params), { ms: 500, jitterMs: 0 })
+  const change = (label, value) => { const input = h.container.querySelectorAll('input').find(e => e.getAttribute('aria-label') === label); assert.ok(input, label); input.value = value; input.fire('change') }
+  change('Minimum (ms)', '100')
+  let params = h.canvas.getGraph().nodes.find(n => n.id === wait.id).params
+  assert.equal(params.minMs, 100); assert.equal('ms' in params, false); assert.equal('jitterMs' in params, false)
+  change('Duration (ms)', '10000')
+  params = h.canvas.getGraph().nodes.find(n => n.id === wait.id).params
+  assert.equal(params.ms, 10000); assert.equal('minMs' in params, false)
+  const repeat = add('repeat')
+  assert.deepEqual(plain(repeat.params), { times: 1 })
+  const condition = h.container.querySelectorAll('button').find(b => b.textContent === 'Add condition')
+  assert.ok(condition); condition.fire('click')
+  params = h.canvas.getGraph().nodes.find(n => n.id === repeat.id).params
+  assert.equal('times' in params, false); assert.equal(params.while.type, 'always')
+  change('Repeat count', '3')
+  params = h.canvas.getGraph().nodes.find(n => n.id === repeat.id).params
+  assert.equal(params.times, 3); assert.equal('while' in params, false)
+})

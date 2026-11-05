@@ -96,6 +96,7 @@ const CHANNEL_SPECS = Object.freeze({
       return core.logs.list(args)
     }
   },
+  'macros:contract': { scope: 'read', invoke: (core) => core.macros.contract() },
   'macros:list': {
     scope: 'read',
     invoke: (core) => core.macros.list()

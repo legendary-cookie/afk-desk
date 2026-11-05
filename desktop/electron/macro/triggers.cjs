@@ -438,7 +438,10 @@ class TriggerMatcher {
       type: trigger.type,
       cooldownMs: typeof trigger.cooldownMs === 'number' && trigger.cooldownMs > 0 ? trigger.cooldownMs : 0
     }
-    if (trigger.type === 'playerAppears') {
+    if (trigger.type === 'disconnected') {
+      entry.excludeSafety = trigger.excludeSafety === true
+      entry.excludeManual = trigger.excludeManual === true
+    } else if (trigger.type === 'playerAppears') {
       if (trigger.ignoreRegex && !safeRegex(trigger.ignoreRegex)) throw invalid('Invalid or unsafe ignore regex')
       entry.ignoreRegex = trigger.ignoreRegex ? new RegExp(trigger.ignoreRegex) : null
     } else if (trigger.type === 'chat') {
@@ -536,6 +539,7 @@ class TriggerMatcher {
         const reason = payload ? str(payload.reason) : ''
         const manual = payload && payload.manual === true ? 'true' : 'false'
         for (const entry of this._bucket(accountId, 'disconnected') || []) {
+          if ((entry.excludeSafety && payload?.safety) || (entry.excludeManual && payload?.manual)) continue
           this._push(out, entry, accountId, now, { reason, manual }, reason)
         }
         return out

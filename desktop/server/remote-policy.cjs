@@ -41,7 +41,7 @@ function boundedTree(v, depth = 0) {
   if (Array.isArray(v)) return v.length <= 500 && v.every(x => boundedTree(x, depth + 1))
   return v && typeof v === 'object' && Object.keys(v).length <= 64 && Object.entries(v).every(([k, x]) => !['__proto__', 'constructor', 'prototype', 'remoteAccess'].includes(k) && k.length <= 80 && boundedTree(x, depth + 1))
 }
-const macroFields = Object.fromEntries(['id', 'name', 'enabled', 'description', 'version', 'trigger', 'triggers', 'steps', 'targets', 'cooldownMs', 'cooldown', 'concurrency', 'origin', 'createdAt', 'updatedAt', 'stopWhen', 'onError', 'defaultDelayMs', 'maxRuntimeMs', 'notify'].map(k => [k, boundedTree]))
+const macroFields = Object.fromEntries(['id', 'name', 'enabled', 'description', 'version', 'trigger', 'triggers', 'steps', 'targets', 'cooldownMs', 'cooldown', 'concurrency', 'origin', 'createdAt', 'updatedAt', 'stopWhen', 'onError', 'defaultDelayMs', 'maxRuntimeMs', 'notify', 'nodes', 'edges', 'vars', 'migration'].map(k => [k, boundedTree]))
 const shapes = {
   'accounts:save': accountFields,
   'settings:save': settingsFields,
@@ -65,7 +65,7 @@ const shapes = {
   'macros:save': macroFields, 'macros:set-enabled': { macroId: id, enabled: bool },
   'notify:save': { id, type: oneOf('discord', 'telegram'), name: text(40), enabled: bool, events: array(text(40), 20), accountIds: v => v === null || array(id)(v), includeTimestamp: bool, chatId: text(100), webhookUrl: text(2048), botToken: text(256) }
 }
-const noArgs = new Set(['accounts:list', 'app:version', 'app:supported-versions', 'app:capabilities', 'macros:list', 'proxy:health', 'settings:get', 'notify:list'])
+const noArgs = new Set(['accounts:list', 'app:version', 'app:supported-versions', 'app:capabilities', 'macros:list', 'macros:contract', 'proxy:health', 'settings:get', 'notify:list'])
 const idArgs = new Set(['accounts:delete', 'accounts:duplicate-profile', 'logs:clear', 'macros:delete', 'macros:runs', 'notify:delete', 'notify:test'])
 const arrays = new Set(['accounts:reorder', 'macros:export'])
 const required = {
@@ -127,7 +127,7 @@ function validateInvoke(channel, args) {
 function commandInvocation(channel, a) {
   const name = {
     'bot:connect': 'account.connect', 'bot:disconnect': 'account.disconnect', 'bot:chat': 'chat.send',
-    'bot:drop-stack': 'inventory.drop', 'bot:drop-items': 'inventory.drop', 'macros:list': 'macro.list',
+    'bot:drop-stack': 'inventory.drop', 'bot:drop-items': 'inventory.drop',
     'macros:run': 'macro.run', 'macros:stop': 'macro.stop', 'notify:test': 'notify.test', 'audit:recent': 'audit.recent'
   }[channel]
   if (!name) return null
@@ -149,6 +149,18 @@ function outputTree(value, depth = 0) {
   if (Array.isArray(value)) return value.slice(0, 500).map(v => outputTree(v, depth + 1))
   if (!value || typeof value !== 'object') return typeof value === 'string' ? value.slice(0, 4096) : value
   return Object.fromEntries(Object.entries(value).filter(([k]) => outputKeys.has(k)).map(([k, v]) => [k, outputTree(v, depth + 1)]))
+}
+// Macro and contract trees have schema-defined dynamic keys (node kinds, ports and
+// variable names). Keep them bounded without dropping those keys on output.
+function macroTree(value, depth = 0) {
+  if (depth > 12) return null
+  if (Array.isArray(value)) return value.slice(0, 500).map(v => macroTree(v, depth + 1))
+  if (!value || typeof value !== 'object') return typeof value === 'string' ? value.slice(0, 4096) : value
+  return Object.fromEntries(Object.entries(value).slice(0, 500).filter(([k]) => k.length <= 80 && !['__proto__', 'constructor', 'prototype', 'remoteAccess'].includes(k)).map(([k, v]) => [k, macroTree(v, depth + 1)]))
+}
+function projectMacro(value) {
+  if (Array.isArray(value)) return value.slice(0, 500).map(projectMacro)
+  return macroTree(pick(value, macroKeys))
 }
 function remoteAccount(a, core) {
   return { id: a.id, name: a.profileName || a.minecraftName || a.label || 'Minecraft account', server: a.host || a.server || '', edition: a.edition || 'java', status: core.status?.(a.id)?.status || 'offline' }
@@ -195,10 +207,14 @@ function remoteResult(channel, value, core, adminSession) {
   if (['accounts:list', 'accounts:save', 'accounts:duplicate-profile', 'accounts:reorder', 'antiAfk.set'].includes(channel)) return Array.isArray(value) ? value.map(a => remoteAccount(a, core)) : value ? remoteAccount(value, core) : null
   if (channel === 'settings:get' || channel === 'settings:save') return pick(value, Object.keys(settingsFields))
   if (['logs:list', 'audit:recent', 'audit.recent'].includes(channel)) return Array.isArray(value) ? value.slice(0, 500).map(e => remoteLog(e, adminSession)).filter(Boolean) : []
+  if (channel === 'macros:contract') return macroTree(pick(value, ['triggers', 'steps', 'conditions', 'graphKinds']))
+  if (channel === 'macros:list') return { macros: projectMacro(value?.macros || []), customNodes: macroTree(value?.customNodes || []), validation: macroTree(value?.validation || {}) }
   if (channel === 'macros:export') {
-    try { const parsed = JSON.parse(value); return JSON.stringify({ version: parsed.version, macros: project(parsed.macros, macroKeys) }) } catch { return null }
+    try { const parsed = JSON.parse(value); return JSON.stringify({ version: parsed.version, macros: projectMacro(parsed.macros) }) } catch { return null }
   }
   if (channel === 'app:version') return typeof value === 'string' ? value.slice(0, 80) : ''
+  if (['macros:save', 'macros:set-enabled'].includes(channel)) return projectMacro(value)
+  if (channel === 'macros:import') return { macros: projectMacro(value?.macros || []), errors: macroTree(value?.errors || []), warnings: macroTree(value?.warnings || []) }
   const keys = schemas[channel] || (actions.has(channel) ? actionKeys : null)
   return keys ? project(value, keys) : null
 }
