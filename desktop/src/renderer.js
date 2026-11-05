@@ -133,7 +133,7 @@ const el = Object.fromEntries([
   'notification-channel-dialog', 'notification-channel-form', 'notification-channel-dialog-title', 'close-notification-channel', 'notify-channel-id', 'notify-channel-type', 'notify-channel-name', 'notify-channel-enabled', 'notify-discord-fields', 'notify-webhook-url',
   'notify-telegram-fields', 'notify-bot-token', 'notify-chat-id', 'notify-events-grid', 'notify-account-mode', 'notify-accounts-checklist', 'notify-include-timestamp', 'notify-channel-error', 'delete-notification-channel', 'test-notification-channel',
   'cancel-notification-channel', 'save-notification-channel', 'pov-dialog', 'close-pov', 'pov-grid', 'pov-search', 'pov-columns', 'pov-refresh', 'pov-fps', 'pov-view-mode',
-  'pov-pause', 'pov-back-grid', 'pov-radius', 'pov-x', 'pov-y', 'pov-z', 'pov-detail', 'item-tooltip', 'toast-region', 'macro-templates-btn',
+  'pov-pause', 'pov-back-grid', 'pov-radius', 'pov-x', 'pov-y', 'pov-z', 'pov-detail', 'item-tooltip', 'toast-region', 'macro-templates-btn', 'macro-recipes-btn',
   'macro-templates-dialog', 'close-macro-templates', 'macro-templates-grid'
 ].map((id) => [id, document.getElementById(id)]))
 

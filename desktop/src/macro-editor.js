@@ -312,6 +312,17 @@
     })
   })
 
+  // Factories return fresh graphs so the shipped recipes remain immutable.
+  const RECIPES = Object.freeze({
+    'auto-sell': () => recipe('Auto-sell when inventory is full', 'Sends /sell all when the inventory fills. Check the command for your server.', { type: 'inventoryFull' }, [{ type: 'chat', message: '/sell all' }]),
+    'timed-kit': () => recipe('Timed /kit claim', 'Claims /kit daily at noon. Set the time and command for your server.', { type: 'schedule', at: '12:00' }, [{ type: 'chat', message: '/kit' }]),
+    'vote-reminder': () => recipe('Daily vote reminder', 'Shows a desktop reminder daily at noon.', { type: 'schedule', at: '12:00' }, [{ type: 'notify', message: 'Remember to vote for your server.', desktop: true, webhook: false }])
+  })
+  function recipe(name, description, trigger, steps) {
+    const migrate = typeof window === 'undefined' ? require('./macro-graph-edit.js').migrateV2 : window.afkMacroGraphEdit.migrateV2
+    return migrate({ name, description, enabled: false, targets: { mode: 'all' }, trigger, steps, stopWhen: [], concurrency: 'skip', onError: 'stop', defaultDelayMs: 0, maxRuntimeMs: null })
+  }
+
   function newMacroId() {
     if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
     return `macro-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
@@ -457,7 +468,8 @@
       el['close-automation']?.addEventListener('click', () => el['automation-dialog']?.close())
       el['macro-library-search']?.addEventListener('input', renderLibraryList)
       el['macro-new-btn']?.addEventListener('click', () => createNewMacro())
-      el['macro-templates-btn']?.addEventListener('click', openTemplatesDialog)
+      el['macro-templates-btn']?.addEventListener('click', () => openTemplatesDialog(false))
+      el['macro-recipes-btn']?.addEventListener('click', () => openTemplatesDialog(true))
       el['close-macro-templates']?.addEventListener('click', closeTemplatesDialog)
       el['macro-template-picker']?.addEventListener('change', (event) => {
         const key = event.target.value
@@ -680,8 +692,10 @@
       picker.replaceChildren(placeholder, ...options)
     }
 
-    function openTemplatesDialog() {
-      renderTemplatesGrid()
+    function openTemplatesDialog(recipes = false) {
+      const title = document.getElementById('macro-templates-dialog-title')
+      if (title) title.textContent = recipes ? 'Recipes' : 'Macro templates'
+      renderTemplatesGrid(recipes)
       el['macro-templates-dialog']?.showModal()
     }
 
@@ -689,10 +703,10 @@
       el['macro-templates-dialog']?.close()
     }
 
-    function renderTemplatesGrid() {
+    function renderTemplatesGrid(recipes = false) {
       const grid = el['macro-templates-grid']
       if (!grid) return
-      grid.replaceChildren(...Object.entries(TEMPLATES).map(([key, make]) => {
+      grid.replaceChildren(...Object.entries(recipes ? RECIPES : TEMPLATES).map(([key, make]) => {
         const tpl = make()
         const card = document.createElement('div')
         card.className = 'macro-template-card'
@@ -715,13 +729,13 @@
 
         const badge = document.createElement('span')
         badge.className = 'macro-template-badge'
-        const triggerType = tpl.trigger?.type || 'manual'
+        const triggerType = tpl.trigger?.type || tpl.nodes?.find(node => node.kind.startsWith('trigger.'))?.kind.slice(8) || 'manual'
         badge.textContent = `Trigger: ${TRIGGER_TYPES[triggerType]?.label || triggerType}`
 
         const useBtn = document.createElement('button')
         useBtn.type = 'button'
         useBtn.className = 'button primary compact-btn'
-        useBtn.textContent = 'Use template'
+        useBtn.textContent = recipes ? 'Duplicate' : 'Use template'
         useBtn.addEventListener('click', () => {
           closeTemplatesDialog()
           const copy = make()
@@ -3137,7 +3151,7 @@
     }
   }
 
-  const exposed = { createMacroEditor, createSchemaFields, TEMPLATES, paletteGroups, serializeDraft, parseDraft }
+  const exposed = { createMacroEditor, createSchemaFields, TEMPLATES, RECIPES, paletteGroups, serializeDraft, parseDraft }
   if (typeof window !== 'undefined') {
     window.afkMacroEditor = exposed
   }
