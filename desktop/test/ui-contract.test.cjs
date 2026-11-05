@@ -534,11 +534,12 @@ test('renderer element-id list has no holes and every id exists in index.html', 
   assert.deepEqual(missing, [])
 })
 
-test('upcoming runs are exposed over IPC and shown per account', () => {
+test('upcoming runs use existing IPC and appear in connection details without sidebar rows', () => {
   const read = (file) => fs.readFileSync(path.join(__dirname, '..', file), 'utf8')
   assert.match(read('electron/main.cjs'), /bot:upcoming-runs.*core\.bots\.getUpcomingRuns/)
   assert.match(read('electron/preload.cjs'), /getUpcomingRuns:.*bot:upcoming-runs/)
   const renderer = read('src/renderer.js')
-  assert.match(renderer, /summary\.textContent = 'Next runs'/)
-  assert.match(renderer, /api\.getUpcomingRuns\(account\.id\)/)
+  assert.match(renderer, /getElementById\('detail-next-runs'\)/)
+  assert.match(renderer, /api\.getUpcomingRuns\(id\)/)
+  assert.doesNotMatch(renderer, /upcoming-runs|summary\.textContent = 'Next runs'/)
 })

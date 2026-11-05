@@ -161,19 +161,20 @@
                   <div><dt>Closest container</dt><dd id="detail-chest">Not found</dd></div>
                   <div><dt>Safety status</dt><dd id="detail-safety">—</dd></div>
                   <div><dt>Dimension</dt><dd id="detail-dimension">—</dd></div>
+                  <div><dt>Next run</dt><dd id="detail-next-runs">No scheduled runs</dd></div>
                 </dl>
               </section>
 
               <div id="game-hud">
-                <section id="scoreboard-panel" class="panel"><header class="panel-header"><h2>Scoreboard</h2></header><div id="hud-scoreboard" class="game-hud"></div></section>
-                <section id="effects-panel" class="panel"><header class="panel-header"><h2>Effects</h2></header><div id="hud-effects" class="game-hud"></div></section>
-                <section id="boss-bars-panel" class="panel"><header class="panel-header"><h2>Boss bars</h2></header><div id="hud-boss-bars" class="game-hud"></div></section>
+                <section id="scoreboard-panel" class="panel"><header class="panel-header"><h2>Scoreboard</h2></header><div id="hud-scoreboard" class="game-hud module-empty">No scoreboard on this server</div></section>
+                <section id="effects-panel" class="panel"><header class="panel-header"><h2>Effects</h2></header><div id="hud-effects" class="game-hud module-empty">No active effects.</div></section>
+                <section id="boss-bars-panel" class="panel"><header class="panel-header"><h2>Boss bars</h2></header><div id="hud-boss-bars" class="game-hud module-empty">No active boss bars.</div></section>
               </div>
-              <section id="next-runs-panel" class="panel"><header class="panel-header"><h2>Next runs</h2></header><ul id="overview-next-runs"><li>Select an account to view scheduled runs.</li></ul></section>
+              <section id="next-runs-panel" class="panel"><header class="panel-header"><h2>Next runs</h2></header><ul id="overview-next-runs" class="module-empty"><li>Select an account to view scheduled runs.</li></ul></section>
 
-                <section id="minimap-panel" class="panel minimap"><header class="panel-header"><h2>Minimap</h2></header>
+                <section id="minimap-panel" class="panel minimap map-empty"><header class="panel-header"><h2>Minimap</h2></header>
                   <div class="minimap-options"><label>Radius <input id="minimap-radius" type="number" min="16" max="96" value="32" /></label><label>View <select id="minimap-mode"><option value="surface">Surface</option><option value="cave">Cave / at Y</option></select></label></div>
-                  <canvas id="minimap-canvas" width="256" height="256" aria-label="Top-down map of the area around the bot"></canvas>
+                  <canvas id="minimap-canvas" hidden width="256" height="256" aria-label="Top-down map of the area around the bot"></canvas>
                   <p id="minimap-status" aria-live="polite">Connect to view the map.</p>
               </section>
               <section id="movement-panel" class="panel movement-panel collapsible collapsed" aria-labelledby="movement-title">

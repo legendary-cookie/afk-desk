@@ -369,8 +369,10 @@ function refreshStreamerDisplay() {
 }
 
 let overviewEditor
+let renderOverviewRuns
 function render() {
   overviewEditor?.refresh()
+  renderOverviewRuns?.()
   el['streamer-quick-toggle'].setAttribute('aria-pressed', String(state.settings.streamerMode === true))
   renderAccountList()
   const account = selectedAccount()
@@ -437,30 +439,7 @@ function renderAccountList() {
     const up = createOrderButton(account, 'up', index === 0)
     const down = createOrderButton(account, 'down', index === state.accounts.length - 1)
     controls.append(up, down)
-    const upcoming = document.createElement('details')
-    upcoming.className = 'upcoming-runs'
-    const summary = document.createElement('summary')
-    summary.textContent = 'Next runs'
-    const list = document.createElement('ul')
-    upcoming.append(summary, list)
-    let refreshTimer
-    const refresh = async () => {
-      if (!upcoming.open || !upcoming.isConnected) return
-      try {
-        const runs = await api.getUpcomingRuns(account.id)
-        if (!upcoming.open || !upcoming.isConnected) return
-        list.replaceChildren(...(runs.length ? runs.map((entry) => {
-          const item = document.createElement('li')
-          const seconds = Math.max(0, Math.ceil((entry.at - Date.now()) / 1000))
-          const relative = seconds < 60 ? `${seconds}s` : seconds < 3600 ? `${Math.ceil(seconds / 60)}m` : `${Math.ceil(seconds / 3600)}h`
-          item.textContent = `${entry.label} · in ${relative}`
-          return item
-        }) : [Object.assign(document.createElement('li'), { textContent: 'No scheduled runs' })]))
-      } catch { list.replaceChildren(Object.assign(document.createElement('li'), { textContent: 'Unable to load runs' })) }
-      if (upcoming.open && upcoming.isConnected) refreshTimer = setTimeout(refresh, 5000)
-    }
-    upcoming.addEventListener('toggle', () => { clearTimeout(refreshTimer); if (upcoming.open) void refresh() })
-    row.append(button, controls, upcoming)
+    row.append(button, controls)
     row.addEventListener('dragstart', (event) => {
       if (state.accounts.length < 2) return event.preventDefault()
       state.draggedAccountId = account.id
@@ -2070,6 +2049,7 @@ function bindPanelResizers() {
     applyPanelLayout(state.settings)
   }
   const resizeInventory = (inventoryHeight) => {
+    if (overviewEditor?.resizeInventory(inventoryHeight)) return
     const dashboardHeight = el.dashboard?.clientHeight || 700
     const minimum = minimumInventoryHeight()
     const reservedWorkspace = innerHeight <= 680 ? 190 : 285
@@ -2084,7 +2064,7 @@ function bindPanelResizers() {
     keys: { ArrowLeft: 1, ArrowRight: -1 }
   })
   bindSplitter(el['inventory-resizer'], {
-    axis: 'y', value: () => state.settings.inventoryHeight || 220,
+    axis: 'y', value: () => overviewEditor?.inventoryHeight() || state.settings.inventoryHeight || 220,
     resize: (start, delta) => resizeInventory(start - delta),
     keys: { ArrowUp: 1, ArrowDown: -1 }
   })
@@ -2704,12 +2684,17 @@ function renderGameHud(hud) {
   const boardRoot = document.getElementById('hud-scoreboard'), bossRoot = document.getElementById('hud-boss-bars'), effectsRoot = document.getElementById('hud-effects')
   if (!boardRoot || !bossRoot || !effectsRoot) return
   boardRoot.replaceChildren(); bossRoot.replaceChildren(); effectsRoot.replaceChildren()
-  if (hud?.scoreboard) { const board = document.createElement('div'); board.className = 'hud-scoreboard'; board.append(hudLine(hud.scoreboard.title, 'hud-title')); for (const item of hud.scoreboard.lines) board.append(hudLine(item.text)); boardRoot.append(board) }
+  if (hud?.scoreboard && [hud.scoreboard.title, ...(hud.scoreboard.lines || []).map(item => item.text)].some(parts => hudText(parts).trim())) { const board = document.createElement('div'); board.className = 'hud-scoreboard'; board.append(hudLine(hud.scoreboard.title, 'hud-title')); for (const item of hud.scoreboard.lines || []) board.append(hudLine(item.text)); boardRoot.append(board) }
   for (const bar of hud?.bossBars || []) { const row = document.createElement('div'); row.className = 'hud-boss'; row.append(hudLine(bar.title, 'hud-title')); const track = document.createElement('div'); track.className = 'hud-bar'; const fill = document.createElement('div'); fill.style.width = `${bar.health * 100}%`; fill.style.backgroundColor = ({pink:'#ff80b5', blue:'#5555ff', red:'#ff5555', green:'#55cc55', yellow:'#eeee55', purple:'#aa55cc', white:'#eeeeee'})[bar.color]; track.append(fill); if (bar.divisions) track.style.setProperty('--divisions', String(bar.divisions)); track.classList.add('divided'); row.append(track); bossRoot.append(row) }
   for (const effect of hud?.effects || []) { const row = document.createElement('div'); row.textContent = maskText(`${effect.label} ${effect.countdown}`); effectsRoot.append(row) }
-  if (!boardRoot.childNodes.length) boardRoot.textContent = 'No active scoreboard.'
+  if (!boardRoot.childNodes.length) boardRoot.textContent = 'No scoreboard on this server'
   if (!bossRoot.childNodes.length) bossRoot.textContent = 'No active boss bars.'
-  if (!effectsRoot.childNodes.length) effectsRoot.textContent = 'No active effects.' 
+  if (!effectsRoot.childNodes.length) effectsRoot.textContent = 'No active effects.'
+  for (const root of [boardRoot, bossRoot, effectsRoot]) {
+    const empty = !root.children.length
+    root.classList.toggle('module-empty', empty)
+    root.closest('.overview-module')?.classList.toggle('overview-empty', empty)
+  }
 }
 function drawGameHud(context, canvas, hud) {
   if (!hud) return
@@ -2940,6 +2925,14 @@ function toast(message, kind = '') {
 
 init().catch((error) => toast(cleanError(error), 'error'))
 
+function setMinimapAvailable(canvas, available) {
+  canvas.hidden = !available
+  const panel = canvas.closest('.minimap')
+  panel.classList.toggle('map-empty', !available)
+  const wrapper = panel.parentElement
+  if (wrapper?.dataset.module === 'minimap') wrapper.classList.toggle('overview-empty', !available)
+}
+
 function startMinimap() {
   const radius = document.getElementById('minimap-radius')
   const mode = document.getElementById('minimap-mode')
@@ -2949,12 +2942,13 @@ function startMinimap() {
   mode.addEventListener('change', () => localStorage.setItem('minimap-mode', mode.value))
   let busy = false
   async function refresh() {
-    if (busy || !document.getElementById('minimap-canvas').getClientRects().length) return
+    if (busy || !document.getElementById('minimap-panel').getClientRects().length) return
     const id = state.selectedId
     const canvas = document.getElementById('minimap-canvas')
     const status = document.getElementById('minimap-status')
     if (!id || !['online', 'connected'].includes(getStatus(id).status)) {
       canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height)
+      setMinimapAvailable(canvas, false)
       status.textContent = 'Connect to view the map.'
       return
     }
@@ -2962,34 +2956,57 @@ function startMinimap() {
     try {
       const map = await api.getMinimapSnapshot(id, Number(radius.value), mode.value)
       if (id !== state.selectedId) return
+      setMinimapAvailable(canvas, !!(map.grid && map.position))
       drawMinimap(canvas, map)
       const g = map.goal, p = map.position
       status.textContent = g && p ? `Walking to ${g.x} ${g.y} ${g.z} (${Math.ceil(Math.hypot(g.x - p.x, g.y - p.y, g.z - p.z))} blocks)` : (map.grid ? 'N ↑ · Nearby players and mobs' : 'Map data unavailable for this account.')
     } catch (_) {
       canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height)
+      setMinimapAvailable(canvas, false)
       status.textContent = 'Map data unavailable.'
     } finally { busy = false }
   }
   setInterval(refresh, 2000)
   const runsList = document.getElementById('overview-next-runs')
-  let runsBusy = false
+  const detailsRuns = document.getElementById('detail-next-runs')
+  let runsBusy = false, latestRuns = null
+  function showRuns(message, empty = true) {
+    runsList.textContent = message
+    detailsRuns.textContent = message
+    detailsRuns.title = message
+    runsList.classList.toggle('module-empty', empty)
+    runsList.closest('.overview-module')?.classList.toggle('overview-empty', empty)
+  }
+  function renderRuns() {
+    if (!state.selectedId) { showRuns('Select an account to view scheduled runs.'); return }
+    if (latestRuns?.id !== state.selectedId) { showRuns('Loading scheduled runs…'); return }
+    if (!latestRuns.runs.length) { showRuns('No scheduled runs'); return }
+    const labels = latestRuns.runs.map(entry => {
+      const seconds = Math.max(0, Math.ceil((entry.at - Date.now()) / 1000))
+      const relative = seconds < 60 ? `${seconds}s` : seconds < 3600 ? `${Math.ceil(seconds / 60)}m` : `${Math.ceil(seconds / 3600)}h`
+      return maskText(`${entry.label} · in ${relative}`)
+    })
+    showRuns(labels[0], false)
+    detailsRuns.title = labels.join('\n')
+    runsList.replaceChildren(...labels.map(label => Object.assign(document.createElement('li'), { textContent: label })))
+  }
   async function refreshOverviewRuns() {
-    if (runsBusy || !runsList.getClientRects().length) return
+    if (runsBusy || (!runsList.getClientRects().length && !detailsRuns.getClientRects().length)) return
     const id = state.selectedId
-    if (!id) { runsList.textContent = 'Select an account to view scheduled runs.'; return }
+    if (!id) { renderRuns(); return }
     runsBusy = true
     try {
       const runs = await api.getUpcomingRuns(id)
       if (id !== state.selectedId) return
-      runsList.replaceChildren(...(runs.length ? runs.map(entry => {
-        const item = document.createElement('li')
-        const seconds = Math.max(0, Math.ceil((entry.at - Date.now()) / 1000))
-        const relative = seconds < 60 ? `${seconds}s` : seconds < 3600 ? `${Math.ceil(seconds / 60)}m` : `${Math.ceil(seconds / 3600)}h`
-        item.textContent = maskText(`${entry.label} · in ${relative}`)
-        return item
-      }) : [Object.assign(document.createElement('li'), { textContent: 'No scheduled runs' })]))
-    } catch { if (id === state.selectedId) runsList.textContent = 'Unable to load runs' } finally { runsBusy = false }
+      latestRuns = { id, runs }
+      renderRuns()
+    } catch { if (id === state.selectedId) showRuns('Unable to load runs') } finally {
+      runsBusy = false
+      if (id !== state.selectedId) void refreshOverviewRuns()
+    }
   }
+  // Re-mask cached labels immediately on account changes and streamer toggles.
+  renderOverviewRuns = () => { renderRuns(); if (latestRuns?.id !== state.selectedId) void refreshOverviewRuns() }
   setInterval(refreshOverviewRuns, 5000)
   void refreshOverviewRuns()
   document.querySelector('[data-collapse-target="movement-panel"]').addEventListener('click', refresh)
