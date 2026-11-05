@@ -34,3 +34,18 @@ Thumbs.db
 .idea/
 .vscode/
 *.log
+
+# agent scratch files
+/.codex-*
+/.t[0-9]*
+/.fix*
+/.rev*
+/.review*
+/.run*
+/.om*
+/.brief*
+/.out*
+/.chain*
+/.[cde][0-9]*
+/.test.txt
+/parity-output.txt
