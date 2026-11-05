@@ -1,6 +1,7 @@
 'use strict'
 const { gzipSync, gunzipSync } = require('node:zlib')
 const { TRIGGER_TYPES, STEP_TYPES, CONDITION_METADATA } = require('./macro/contract.cjs')
+const { NODE_KINDS } = require('./macro/graph-contract.cjs')
 
 const MAX_SIZE = 256 * 1024
 // Only connection and non-text behavior settings are portable. In particular,
@@ -29,6 +30,29 @@ function macroData(input, model) {
     return Object.fromEntries(Object.entries(value).filter(([key]) => !/password|token|secret|webhook|account|username|uuid/i.test(key)).map(([key, val]) => [key, typeof val === 'string' && !(schema[key]?.enum?.includes(val)) && !['type', 'mode', 'concurrency', 'onError', 'comparator', 'match', 'source'].includes(key) ? '' : clean(val)]))
   }
   const result = clean(macro)
+  if (macro.version === 3) {
+    // Graph identifiers are arbitrary user text. Replace them consistently while
+    // retaining only contract-defined kinds and ports.
+    const ids = new Map(), byId = new Map()
+    result.nodes = []
+    for (const node of macro.nodes) {
+      if (!node || typeof node.id !== 'string' || ids.has(node.id) || !NODE_KINDS[node.kind]) continue
+      const id = `n${ids.size + 1}`
+      ids.set(node.id, id)
+      byId.set(node.id, node)
+      const params = clean({ ...node.params, type: node.kind.startsWith('trigger.') ? node.kind.slice(8) : node.kind })
+      delete params.type
+      result.nodes.push({ id, kind: node.kind, params, position: { x: Number.isFinite(node.position?.x) ? node.position.x : 0, y: Number.isFinite(node.position?.y) ? node.position.y : 0 }, ...(node.disabled ? { disabled: true } : {}) })
+    }
+    result.edges = []
+    for (const edge of macro.edges) {
+      const from = byId.get(edge?.from?.node), to = byId.get(edge?.to?.node)
+      if (!from || !to || !Object.hasOwn(NODE_KINDS[from.kind].outputs, edge.from.port) || !Object.hasOwn(NODE_KINDS[to.kind].inputs, edge.to.port)) continue
+      result.edges.push({ id: `e${result.edges.length + 1}`, from: { node: ids.get(from.id), port: edge.from.port }, to: { node: ids.get(to.id), port: edge.to.port } })
+    }
+    result.vars = []
+    delete result.migration
+  }
   result.name = 'Shared macro'
   return result
 }

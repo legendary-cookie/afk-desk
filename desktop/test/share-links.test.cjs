@@ -43,3 +43,16 @@ test('macro shares retain validated structural choices while redacting text', ()
   assert.equal(steps[2].button, 'right')
   assert.doesNotMatch(JSON.stringify(shared), /secret/)
 })
+
+test('graph shares retain executable wiring and redact node identifiers and text', () => {
+  const input = { version: 3, name: 'private', targets: { mode: 'all' }, nodes: [
+    { id: 'secret-trigger', kind: 'trigger.manual', params: {}, position: { x: 20, y: 0 } },
+    { id: 'secret-action', kind: 'chat', params: { message: '/login password' }, position: { x: 40, y: 0 } }
+  ], edges: [{ id: 'secret-edge', from: { node: 'secret-trigger', port: 'out' }, to: { node: 'secret-action', port: 'in' } }], vars: [] }
+  const data = share.decode(share.encode('macro', share.macroData(input, model))).data
+  assert.doesNotMatch(JSON.stringify(data), /secret|password|private/)
+  assert.deepEqual(data.nodes.map(node => node.kind), ['trigger.manual', 'chat'])
+  assert.deepEqual(data.edges[0], { id: 'e1', from: { node: 'n1', port: 'out' }, to: { node: 'n2', port: 'in' } })
+  assert.equal(data.nodes[1].params.message, '')
+  assert.deepEqual(require('../electron/macro/graph-model.cjs').validateGraph(data).filter(error => ['UNKNOWN_KIND', 'UNKNOWN_PORT', 'DANGLING_EDGE'].includes(error.code)), [])
+})
