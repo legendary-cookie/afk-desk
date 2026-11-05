@@ -186,7 +186,7 @@ for (const [type, spec] of Object.entries(TRIGGER_TYPES)) spec.params = triggerS
 for (const [type, spec] of Object.entries(STEP_TYPES)) spec.params = stepSchemas[type] || {}
 for (const [type, spec] of Object.entries(CONDITION_METADATA)) spec.params = conditionSchemas[type] || {}
 
-const RUN_STATUSES = Object.freeze(['started', 'step', 'stepFailed', 'skipped', 'completed', 'failed', 'cancelled', 'interrupted', 'stopped'])
+const RUN_STATUSES = Object.freeze(['started', 'step', 'stepFailed', 'graphNode', 'graphValue', 'graphError', 'skipped', 'completed', 'failed', 'cancelled', 'interrupted', 'stopped'])
 
 const ERROR_CODES = Object.freeze({
   OFFLINE: 'OFFLINE', // account not online / no live session
@@ -367,7 +367,7 @@ class MacroActionError extends Error {
  * @typedef {{ online: boolean, sessionId: string|null, edition: 'java'|'bedrock', health?: number, food?: number,
  *             inventoryFull?: boolean, windowOpen?: boolean, inventory?: {name:string,count:number,slot:number}[] }} AccountState
  * @typedef {{ runId: string, macroId: string, accountId: string, status: (typeof RUN_STATUSES)[number],
- *             stepPath?: number[], stepType?: string, error?: { code: string, message: string }, at: number }} RunEvent
+ *             stepPath?: number[], stepType?: string, nodeId?: string, edgeId?: string, value?: string, error?: { code?: string, message: string }, at: number }} RunEvent
  * @typedef {{ runId: string, status: string, startedAt: number, endedAt: number, trigger: string,
  *             steps: { path: number[], type: string, ok: boolean, ms: number, error?: string }[] }} RunRecord
  * @typedef {{ runId: string, status: string }} RunResult

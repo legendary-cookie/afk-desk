@@ -16,6 +16,7 @@
 // droppedSteps.
 
 const { LIMITS, ENGINE_STEP_TYPES, FACADE_METHODS, ERROR_CODES, MacroActionError, assertFacade } = require('./contract.cjs')
+const { runGraph, triggerMacro } = require('./graph-interpreter.cjs')
 
 const MAX_TIMEOUT_MS = 2147483647
 const MAX_WAIT_MS = 86400000
@@ -338,7 +339,16 @@ class MacroEngine {
       }
     }
     try {
-      this.matcher.setMacros([...next.values()].map((entry) => entry.macro), (macro) => this._targetsOf(macro))
+      this.graphTriggerIds = new Map()
+      const matcherMacros = [...next.values()].flatMap(({ macro }) => {
+        if (macro.version !== 3) return [macro]
+        return (macro.nodes || []).filter(n => n && !n.disabled && typeof n.kind === 'string' && n.kind.startsWith('trigger.')).map(n => {
+          const id = `graph-trigger:${JSON.stringify([macro.id, n.id])}`
+          this.graphTriggerIds.set(id, { macroId: macro.id, nodeId: n.id })
+          return { ...macro, id, trigger: { ...n.params, type: n.kind.slice(8) } }
+        })
+      })
+      this.matcher.setMacros(matcherMacros, (macro) => this._targetsOf(macro))
     } catch (error) {
       this._emitEngineError(null, error)
     }
@@ -356,7 +366,7 @@ class MacroEngine {
   run(accountId, macroId, { trigger, variables } = {}) {
     if (this.closed) return Promise.reject(new MacroActionError(ERROR_CODES.INVALID, 'Macro engine is shut down.'))
     if (typeof accountId !== 'string' || !accountId) return Promise.reject(new MacroActionError(ERROR_CODES.INVALID, 'An account id is required.'))
-    const entry = this.macros.get(macroId)
+    const entry = this.macros.get(this.graphTriggerIds?.get(macroId)?.macroId || macroId)
     if (!entry) return Promise.reject(new MacroActionError(ERROR_CODES.NOT_FOUND, 'Macro not found.'))
     if (entry.macro.enabled === false) return Promise.reject(new MacroActionError(ERROR_CODES.INVALID, 'Macro is disabled.'))
     return this._request(accountId, entry.macro, { triggerType: typeof trigger === 'string' && trigger ? trigger : 'manual', variables })
@@ -450,11 +460,13 @@ class MacroEngine {
     for (const match of list(matches)) {
       if (!match || typeof match !== 'object') continue
       const target = typeof match.accountId === 'string' && match.accountId ? match.accountId : accountId
-      const entry = this.macros.get(match.macroId)
+      const graphTrigger = this.graphTriggerIds?.get(match.macroId)
+      const entry = this.macros.get(graphTrigger?.macroId || match.macroId)
       if (!entry || entry.macro.enabled === false) continue
       this._request(target, entry.macro, {
         triggerType: typeof match.triggerType === 'string' && match.triggerType ? match.triggerType : type,
         variables: match.variables,
+        triggerNodeId: graphTrigger?.nodeId,
         reason: typeof match.reason === 'string' ? match.reason : undefined
       }).catch((error) => this._emitEngineError(target, error))
     }
@@ -476,7 +488,7 @@ class MacroEngine {
     const wanted = new Map()
     for (const item of entries) {
       if (!item || typeof item.macroId !== 'string' || !item.trigger || !TIMED_TRIGGER_TYPES.has(item.trigger.type)) continue
-      const entry = this.macros.get(item.macroId)
+      const entry = this.macros.get(this.graphTriggerIds?.get(item.macroId)?.macroId || item.macroId)
       if (!entry || entry.macro.enabled === false) continue
       wanted.set(item.macroId, { trigger: item.trigger, sig: stableStringify(item.trigger) })
     }
@@ -524,14 +536,14 @@ class MacroEngine {
     const session = this.sessions.get(accountId)
     if (!session || !session.joined || session.sessionId !== timed.sessionId) return
     this._armTimed(accountId, macroId, timed)
-    const entry = this.macros.get(macroId)
+    const entry = this.macros.get(this.graphTriggerIds?.get(macroId)?.macroId || macroId)
     if (!entry || entry.macro.enabled === false) return
     // A tick while the account is busy is skipped, never queued.
     if (this.isRunning(accountId)) {
       this._emitSkipped(accountId, macroId, timed.trigger.type, 'busy')
       return
     }
-    this._start(accountId, entry.macro, { triggerType: timed.trigger.type })
+    this._start(accountId, entry.macro, { triggerType: timed.trigger.type, triggerNodeId: this.graphTriggerIds?.get(macroId)?.nodeId })
   }
 
   _cancelTimed(accountId) {
@@ -587,6 +599,7 @@ class MacroEngine {
       macroId: macro.id,
       accountId,
       macro,
+      triggerNodeId: trigger.triggerNodeId,
       owner: `macro:${runId}`,
       controller,
       signal: controller.signal,
@@ -601,7 +614,7 @@ class MacroEngine {
     }
     this.runs.set(accountId, ctx)
     this._emit({ runId, macroId: macro.id, accountId, status: 'started', trigger: trigger.triggerType, ...(trigger.reason ? { reason: trigger.reason } : {}) })
-    const maxRuntimeMs = finiteOr(macro.maxRuntimeMs, null)
+    const maxRuntimeMs = finiteOr(macro.maxRuntimeMs, macro.version === 3 ? 300000 : null)
     if (maxRuntimeMs !== null && maxRuntimeMs > 0) {
       ctx.maxRuntimeCancel = this.scheduler.after(maxRuntimeMs, () => this._requestStop(ctx, 'stopped', 'maxRuntime'))
     }
@@ -612,7 +625,8 @@ class MacroEngine {
   async _execute(ctx) {
     let end
     try {
-      await this._runSteps(ctx, list(ctx.macro.steps), [], 0)
+      if (ctx.macro.version === 3) await runGraph(this, ctx)
+      else await this._runSteps(ctx, list(ctx.macro.steps), [], 0)
       end = { status: 'completed' }
     } catch (error) {
       if (error instanceof RunEnd) end = error
@@ -761,7 +775,7 @@ class MacroEngine {
     }
   }
 
-  async _stepFacade(ctx, step, type, stepPath) {
+  async _stepFacade(ctx, step, type, stepPath, throwFailures = false) {
     if (!FACADE_STEP_TYPES.has(type)) {
       await this._gate(ctx, stepPath, type || 'unknown')
       const info = { code: ERROR_CODES.UNSUPPORTED, message: `Unsupported step type "${String(type).slice(0, 40)}".` }
@@ -812,6 +826,7 @@ class MacroEngine {
       throw new RunEnd('interrupted', 'sessionChanged', { code: ERROR_CODES.SESSION_CHANGED, message: 'The account session changed during the step.' })
     }
     this._record(ctx, stepPath, type, !failure, elapsed, failure)
+    if (failure && throwFailures) throw new MacroActionError(failure.code, failure.message)
     if (failure) this._stepFailed(ctx, stepPath, type, failure)
   }
 

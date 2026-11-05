@@ -65,6 +65,10 @@ test('registered macro IPC enforces payload limits and validation and runs throu
   const event = { sender: windows[0].webContents, senderFrame: windows[0].webContents.mainFrame }
   const invoke = (channel, payload) => handlers.get(channel)(event, payload)
   invoke('accounts:save', { id: 'a', host: 'localhost', username: 'a@example.com', antiAfk: false })
+  const graph = { id: 'graph', name: 'Graph', version: 3, targets: { mode: 'all' }, nodes: [{ id: 'start', kind: 'trigger.manual', params: {}, position: { x: 10, y: 20 } }], edges: [], vars: [{ name: 'value', value: 1 }] }
+  const graphSaved = invoke('macros:save', graph)
+  assert.deepEqual(graphSaved.nodes, graph.nodes)
+  assert.deepEqual(invoke('macros:list').macros.find(m => m.id === 'graph').vars, graph.vars)
   assert.throws(() => invoke('macros:save', { name: 'x'.repeat(300000) }), /256 KB/)
   assert.throws(() => invoke('macros:save', { id: 'bad', name: 'Bad', targets: { mode: 'all' }, trigger: { type: 'manual' }, steps: [] }), /validation|step/i)
   invoke('macros:save', { id: 'chat', name: 'Chat', targets: { mode: 'all' }, trigger: { type: 'manual' }, defaultDelayMs: 0, steps: [{ type: 'chat', message: 'ipc works' }] })
