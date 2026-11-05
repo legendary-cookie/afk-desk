@@ -1,4 +1,5 @@
 'use strict'
+const { boundedAction, INVENTORY_TIMEOUT_MS } = require('./inventory-action.cjs')
 
 // Inventory slots 5–8 are the player's equipped armor.
 const armorSlots = [['head', 5, 'helmet'], ['torso', 6, 'chestplate'], ['legs', 7, 'leggings'], ['feet', 8, 'boots']]
@@ -40,8 +41,8 @@ function chooseArmor(bot, account, destination, slot, suffix) {
   })
   return candidates[0]?.item === current ? null : candidates[0]?.item || null
 }
-function shouldEat(account, bot) {
-  return account.autoEat === true && Number.isFinite(bot.food) && bot.food <= (account.autoEatThreshold ?? 14) && !bot.currentWindow
+function shouldEat(account, bot, ignoreWindow = false) {
+  return account.autoEat === true && Number.isFinite(bot.food) && bot.food <= (account.autoEatThreshold ?? 14) && (ignoreWindow || !bot.currentWindow)
 }
 function pickFood(items, foods, locked = [], priority = 'hotbar', allowGoldenApples = false) {
   const locks = new Set(locked.map(Number))
@@ -68,8 +69,8 @@ function bottleAmplifier(item) {
   while (value && typeof value === 'object') value = value.value
   return Number.isInteger(Number(value)) && value != null ? Number(value) : 0
 }
-function pickConsumable(account, bot, lastDamage, lastBottle, now = Date.now()) {
-  if (bot.currentWindow || !(bot.health > 0)) return null
+function pickConsumable(account, bot, lastDamage, lastBottle, now = Date.now(), ignoreWindow = false) {
+  if ((!ignoreWindow && bot.currentWindow) || !(bot.health > 0)) return null
   const locks = new Set((account.lockedInventorySlots || []).map(Number))
   const items = (bot.inventory?.items?.() || []).filter(item => item.slot >= 9 && item.slot <= 44 && !locks.has(Number(item.slot)))
   if (account.autoGoldenApple && (bot.health <= (Number(account.autoGoldenAppleHealth ?? 10)) || (lastDamage != null && now - lastDamage < 10000 && (!hasEffect(bot, 'Absorption') || !hasEffect(bot, 'Regeneration'))))) {
@@ -84,15 +85,25 @@ function pickConsumable(account, bot, lastDamage, lastBottle, now = Date.now()) 
   }
   return null
 }
-async function consumeItem(bot, item) {
+async function consumeItem(bot, item, signal) {
   if (item.name !== 'ominous_bottle') return bot.consume()
   // Mineflayer's consume() rejects bottles at full hunger, though the game allows them.
   const type = item.type, count = item.count
   await new Promise((resolve, reject) => {
-    const finish = error => { clearTimeout(timer); bot.removeListener('heldItemChanged', changed); bot.deactivateItem(); error ? reject(error) : resolve() }
+    let finished = false
+    const finish = error => {
+      if (finished) return
+      finished = true
+      clearTimeout(timer); bot.removeListener('heldItemChanged', changed); signal?.removeEventListener('abort', aborted)
+      try { bot.deactivateItem() } catch (failure) { error ||= failure }
+      error ? reject(error) : resolve()
+    }
+    const aborted = () => finish(signal.reason)
     const changed = held => { if (!held || held.type !== type || held.count !== count) finish() }
     const timer = setTimeout(() => finish(new Error('Bottle consumption timed out')), 5000)
     bot.on('heldItemChanged', changed)
+    signal?.addEventListener('abort', aborted, { once: true })
+    if (signal?.aborted) { aborted(); return }
     try { bot.activateItem() } catch (error) { finish(error) }
   })
 }
@@ -119,13 +130,13 @@ function deferSafety(manager, account, state) {
     state.timer = null
     if (manager.reconnects.get(account.id) !== state || state.manual) return
     const current = state.account
-    if (state.safetyPause === 'health' && current.autoReconnect === false) { manager.reconnects.delete(account.id); manager.status(account.id, 'offline', 'Auto-reconnect disabled.'); return }
+    if (state.safetyPause === 'health' && current.autoReconnect === false) { if (!(state.cooldownUntil > Date.now())) manager.reconnects.delete(account.id); manager.status(account.id, 'offline', 'Auto-reconnect disabled.'); return }
     if (Date.now() < (state.cooldownUntil || 0) || !isWithinSchedule(current)) return deferSafety(manager, current, state)
     try { manager.connect(current, { reconnecting: true }) } catch (error) { manager.scheduleReconnect(current, error.message) }
   }, 30000)
   state.timer?.unref?.()
 }
-function installSafety(manager, account, session, state) {
+function installSafety(manager, account, session, state, { actionTimeoutMs = INVENTORY_TIMEOUT_MS, cleanupTimeoutMs = 2000 } = {}) {
   const bot = session.bot
   let previousHealth = bot.health, lastDamage = null, lastBottle = null
   let popPending = false, popTimer = null, disconnecting = false
@@ -137,76 +148,161 @@ function installSafety(manager, account, session, state) {
     manager.emit('safety-disconnect', account.id, { reason, health: bot.health, cooldownUntil: state.cooldownUntil, notify: session.account.safetyDisconnectNotify === true })
     bot.end('Safety protection: ' + reason)
   }
+  const equipmentWanted = () => {
+    const current = session.account
+    const locks = new Set((current.lockedInventorySlots || []).map(Number))
+    const totem = (current.autoTotem || current.lowHealthTotem && shouldLowHealthAct(current, bot.health)) && !locks.has(45) && bot.inventory?.slots?.[45]?.name !== 'totem_of_undying' && bot.inventory?.items?.().some(item => item.name === 'totem_of_undying' && !locks.has(Number(item.slot)))
+    return Boolean(totem || current.autoArmor && armorSlots.some(([destination, slot, suffix]) => chooseArmor(bot, current, destination, slot, suffix)))
+  }
+  const consumableWanted = () => {
+    const current = session.account
+    return Boolean(pickConsumable(current, bot, lastDamage, lastBottle, Date.now(), true) || shouldEat(current, bot, true) && pickFood(bot.inventory?.items?.(), bot.registry?.foodsByName, current.lockedInventorySlots, current.autoEatPriority, current.autoEatAllowGoldenApples))
+  }
+  const waits = new Map()
+  let activeAction = null
+  const status = message => {
+    if (session.safetyStatus === message) return
+    session.safetyStatus = message
+    manager.emitTelemetry?.(account.id)
+  }
+  const waiting = (label, reason) => {
+    const message = `${label} waiting: ${reason}`
+    status(message)
+    const now = Date.now()
+    if (!waits.has(message) || now - waits.get(message) >= 60000) {
+      waits.set(message, now)
+      manager.emit('log', account.id, { kind: 'info', message, at: now })
+    }
+  }
+  const wanted = () => {
+    const config = session.account
+    if (config.autoOminousBottle) return 'Ominous Bottle'
+    if (config.autoGoldenApple) return 'Golden Apple'
+    if (shouldEat(config, bot)) return 'Auto eat'
+    if (config.autoTotem || config.lowHealthTotem && shouldLowHealthAct(config, bot.health)) return 'Auto totem'
+    if (config.autoArmor) return 'Auto armor'
+    return null
+  }
+  const blocked = () => !session.ready || session.switching ? 'server not ready'
+    : session.depositing ? 'deposit in progress'
+      : bot.currentWindow ? 'server menu open'
+        : session.inputClaims?.get('rightClick')?.size ? 'right click owned by another action' : null
+  const run = async (label, action) => {
+    activeAction = label
+    const previousStatus = session.safetyStatus
+    status(`${label}: waiting for inventory`)
+    try {
+      await boundedAction(scope => manager.withInventoryAction(account.id, async () => {
+        scope.check()
+        if (manager.sessions.get(account.id) !== session) return
+        const reason = blocked()
+        if (reason) { waiting(label, reason); return }
+        status(`${label}: in progress`)
+        await action(scope)
+        if (session.safetyStatus === `${label}: in progress`) status(previousStatus || 'Idle')
+      }, { timeoutMs: actionTimeoutMs }), actionTimeoutMs, label)
+    } catch (error) {
+      waiting(label, String(error.message || error))
+      // The wait log above is rate limited, including repeated timeouts.
+    } finally { activeAction = null }
+  }
   const tick = async () => {
     if (Number.isFinite(bot.health)) {
       if (Number.isFinite(previousHealth) && bot.health < previousHealth) lastDamage = Date.now()
       previousHealth = bot.health
     }
-    if (manager.sessions.get(account.id) !== session || session.safetyBusy) return
+    if (manager.sessions.get(account.id) !== session) return
     const config = session.account
+    const label = wanted()
+    // Reserve the next free inventory turn before auto-deposit can start again.
+    const consumablePending = consumableWanted()
+    session.safetyPending = consumablePending || equipmentWanted()
+    if (session.safetyBusy) { if (label) waiting(label, `${activeAction || 'another safety action'} in progress`); return }
     if (!isWithinSchedule(config)) { state.safetyPause = 'schedule'; bot.end('Outside online hours'); return }
-    if (!session.ready) return
+    if (!session.ready || session.switching) { if (label) waiting(label, 'server not ready'); return }
     if (config.lowHealthDisconnect && Number.isFinite(bot.health) && bot.health >= 0 && bot.health <= Number(config.lowHealthThreshold ?? 6)) { disconnect('low health'); return }
     if (config.armorDisconnect && armorSlots.some(([, slot]) => {
       const item = bot.inventory?.slots?.[slot], max = Number(item?.maxDurability), used = Number(item?.durabilityUsed ?? 0)
       return Number.isFinite(max) && max > 0 && Number.isFinite(used) && 100 * (max - used) / max <= Number(config.armorDisconnectThreshold ?? 5)
     })) { disconnect('low armor durability'); return }
+    const reason = blocked()
+    if (reason) { if (label) waiting(label, reason); return }
     session.safetyBusy = true
     try {
-      if (config.autoTotem || shouldLowHealthAct(config, bot.health)) {
-        if ((config.autoTotem || config.lowHealthTotem && shouldLowHealthAct(config, bot.health)) && !bot.currentWindow && !session.depositing && !session.inputClaims?.get('rightClick')?.size) {
-          await manager.withInventoryAction(account.id, async () => {
-            const current = session.account
-            const locks = new Set((current.lockedInventorySlots || []).map(Number))
-            if (manager.sessions.get(account.id) !== session || bot.currentWindow || session.depositing || session.inputClaims?.get('rightClick')?.size || !(current.autoTotem || current.lowHealthTotem && shouldLowHealthAct(current, bot.health)) || locks.has(45) || bot.inventory?.slots?.[45]?.name === 'totem_of_undying') return
-            const totem = bot.inventory?.items?.().find(item => item.name === 'totem_of_undying' && !locks.has(Number(item.slot)))
-            if (totem) await bot.equip(totem, 'off-hand')
-          })
-        }
-
-      }
-      if (config.autoArmor && !bot.currentWindow && !session.depositing && !session.inputClaims?.get('rightClick')?.size) {
-        await manager.withInventoryAction(account.id, async () => {
-          for (const [destination, slot, suffix] of armorSlots) {
-            const current = session.account
-            if (manager.sessions.get(account.id) !== session || !session.ready || !current.autoArmor || bot.currentWindow || session.depositing || session.inputClaims?.get('rightClick')?.size) return
-            const item = chooseArmor(bot, current, destination, slot, suffix)
-            if (item) await bot.equip(item, destination)
-          }
-        })
-      }
-      if ((pickConsumable(config, bot, lastDamage, lastBottle) || shouldEat(config, bot)) && !session.depositing && !session.inputClaims?.get('rightClick')?.size) {
-        await manager.withInventoryAction(account.id, async () => {
+      // Consumables must not sit behind an armor/totem equip that the server
+      // never acknowledges. Each action also gets its own bounded queue wait.
+      if (consumablePending) {
+        const food = pickConsumable(config, bot, lastDamage, lastBottle) || pickFood(bot.inventory?.items?.(), bot.registry?.foodsByName, config.lockedInventorySlots, config.autoEatPriority, config.autoEatAllowGoldenApples)
+        const actionLabel = food?.name === 'ominous_bottle' ? 'Ominous Bottle' : food?.name?.includes('golden_apple') ? 'Golden Apple' : 'Auto eat'
+        await run(actionLabel, async scope => {
           const current = session.account
-          if (manager.sessions.get(account.id) !== session || !session.ready || session.depositing || bot.currentWindow || session.inputClaims?.get('rightClick')?.size) return
           const locks = new Set((current.lockedInventorySlots || []).map(Number))
           const food = pickConsumable(current, bot, lastDamage, lastBottle) || (shouldEat(current, bot) && pickFood(bot.inventory?.items?.(), bot.registry?.foodsByName, [...locks], current.autoEatPriority, current.autoEatAllowGoldenApples))
           if (!food) return
           const source = Number(food.slot)
           const target = source >= 36 && source <= 44 ? source : Array.from({ length: 9 }, (_, i) => i + 36).find(slot => !locks.has(slot))
-          if (target === undefined) return
+          if (target === undefined) { waiting(actionLabel, 'all hotbar slots locked'); return }
           const previous = bot.quickBarSlot
           let swapped = false
           let release
           session.safetyInputDone = new Promise(resolve => { release = resolve })
           try {
-            if (source !== target) { await bot.moveSlotItem(source, target); swapped = true }
+            if (source !== target) { await scope.wait(() => bot.moveSlotItem(source, target)); swapped = true }
+            scope.check()
+            if (blocked()) { waiting(actionLabel, blocked()); return }
             bot.setQuickBarSlot(target - 36)
-            if (!bot.currentWindow && !session.depositing && manager.sessions.get(account.id) === session && (food.name !== 'ominous_bottle' || (!hasRaid(bot) && !['BadOmen', 'RaidOmen', 'TrialOmen'].some(effect => hasEffect(bot, effect))))) { await consumeItem(bot, food); if (food.name === 'ominous_bottle') lastBottle = Date.now(); if (food.name === 'golden_apple' || food.name === 'enchanted_golden_apple') lastDamage = null }
+            if (food.name === 'ominous_bottle' && (hasRaid(bot) || ['BadOmen', 'RaidOmen', 'TrialOmen'].some(effect => hasEffect(bot, effect)))) return
+            await scope.wait(() => consumeItem(bot, food, scope.signal))
+            if (food.name === 'ominous_bottle') lastBottle = Date.now()
+            if (food.name === 'golden_apple' || food.name === 'enchanted_golden_apple') lastDamage = null
+            status(`${actionLabel}: consumed`)
           } finally {
             try {
-              while (swapped && manager.sessions.get(account.id) === session && bot.currentWindow) await new Promise(resolve => setTimeout(resolve, 50))
-              if (swapped && manager.sessions.get(account.id) === session) {
-                if (bot.inventory?.slots?.[target]) await bot.moveSlotItem(target, source)
-                else if (bot.inventory?.slots?.[source]) await bot.moveSlotItem(source, target)
-              }
-              if (Number.isInteger(previous) && manager.sessions.get(account.id) === session) bot.setQuickBarSlot(previous)
-            } finally { session.safetyInputDone = null; release() }
+              // Never wait indefinitely for a GUI to close or a stack to return.
+              if (swapped && !scope.signal.aborted) await scope.wait(() => boundedAction(async cleanup => {
+                while (manager.sessions.get(account.id) === session && bot.currentWindow) await cleanup.wait(() => new Promise(resolve => setTimeout(resolve, 50)))
+                if (manager.sessions.get(account.id) !== session) return
+                if (bot.inventory?.slots?.[target]) await cleanup.wait(() => bot.moveSlotItem(target, source))
+                else if (bot.inventory?.slots?.[source]) await cleanup.wait(() => bot.moveSlotItem(source, target))
+              }, cleanupTimeoutMs, 'Inventory restoration', scope.signal))
+            } finally {
+              try {
+                if (Number.isInteger(previous) && manager.sessions.get(account.id) === session) bot.setQuickBarSlot(previous)
+                if (scope.signal.aborted) { try { bot.deactivateItem?.() } catch {} }
+              } finally { session.safetyInputDone = null; release() }
+            }
+          }
+        })
+      } else if (config.autoOminousBottle) {
+        const locks = new Set((config.lockedInventorySlots || []).map(Number))
+        const bottle = bot.inventory?.items?.().some(item => item.name === 'ominous_bottle' && item.slot >= 9 && item.slot <= 44 && !locks.has(Number(item.slot)))
+        waiting('Ominous Bottle', !(bot.health > 0) ? 'player not alive' : !bottle ? 'no unlocked bottles' : hasRaid(bot) ? 'raid active' : ['BadOmen', 'RaidOmen', 'TrialOmen'].some(effect => hasEffect(bot, effect)) ? 'omen effect active' : 'cooldown')
+      }
+      if (config.autoTotem || config.lowHealthTotem && shouldLowHealthAct(config, bot.health)) {
+        await run('Auto totem', async scope => {
+          const current = session.account
+          const locks = new Set((current.lockedInventorySlots || []).map(Number))
+          if (!(current.autoTotem || current.lowHealthTotem && shouldLowHealthAct(current, bot.health)) || locks.has(45) || bot.inventory?.slots?.[45]?.name === 'totem_of_undying') return
+          const totem = bot.inventory?.items?.().find(item => item.name === 'totem_of_undying' && !locks.has(Number(item.slot)))
+          if (totem) { await scope.wait(() => bot.equip(totem, 'off-hand')); status('Auto totem: equipped') }
+        })
+      }
+      if (config.autoArmor) {
+        await run('Auto armor', async scope => {
+          for (const [destination, slot, suffix] of armorSlots) {
+            scope.check()
+            const current = session.account
+            if (manager.sessions.get(account.id) !== session || blocked() || !current.autoArmor) return
+            const item = chooseArmor(bot, current, destination, slot, suffix)
+            if (item) { await scope.wait(() => bot.equip(item, destination)); status('Auto armor: equipped') }
           }
         })
       }
-    } catch (error) { manager.emit('log', account.id, { kind: 'error', message: `Safety action failed: ${error.message}`, at: Date.now() }) }
-    finally { session.safetyBusy = false }
+    } catch (error) { waiting(label || 'Safety', String(error.message || error)) }
+    finally {
+      session.safetyBusy = false
+      session.safetyPending = consumableWanted() || equipmentWanted()
+    }
   }
   session.safetyTimer = setInterval(tick, 2000)
   session.safetyTimer.unref?.()

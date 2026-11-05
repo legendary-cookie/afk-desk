@@ -110,7 +110,7 @@ const el = Object.fromEntries([
   'update-banner', 'update-message', 'update-open', 'update-dismiss', 'check-updates', 'export-logs', 'update-check-enabled', 'streamer-quick-toggle', 'streamer-mode', 'macro-menu', 'settings-dialog', 'close-settings', 'start-with-windows', 'notifications-enabled', 'notify-attach-pov', 'notify-attach-inventory', 'notify-pov-offscreen', 'stagger-startup-connections', 'use-launcher-pack-cache', 'startup-connection-delay', 'save-settings', 'empty-state',
   'dashboard', 'account-title', 'app-version', 'settings-app-version', 'edit-account', 'open-logs', 'open-automations', 'open-pov', 'connection-button', 'status-banner',
   'status-name', 'status-detail', 'server-address', 'detail-username', 'detail-server', 'detail-version', 'detail-antiafk', 'detail-environment', 'detail-water', 'detail-health',
-  'detail-hunger', 'detail-coordinates', 'detail-chest', 'detail-dimension', 'inventory-count', 'inventory-grid', 'auto-deposit-toggle', 'hold-selected', 'equip-destination', 'equip-selected',
+  'detail-hunger', 'detail-coordinates', 'detail-chest', 'detail-dimension', 'detail-safety', 'inventory-count', 'inventory-grid', 'auto-deposit-toggle', 'hold-selected', 'equip-destination', 'equip-selected',
   'lock-selected', 'inventory-action-count', 'deposit-selected', 'drop-count-selected', 'drop-selected', 'toggle-inventory', 'console-log', 'clear-console', 'chat-form', 'chat-message',
   'chat-suggestions', 'macro-pad', 'manage-macros', 'macro-dialog', 'close-macro-dialog', 'macro-editor', 'macro-rows', 'add-macro', 'cancel-macros', 'save-macros',
   'account-dialog', 'account-form', 'dialog-title', 'account-id', 'identity-id', 'profile-name', 'edition', 'label', 'username', 'host',
@@ -581,6 +581,7 @@ function renderConsole() {
 function renderTelemetry() {
   const telemetry = state.telemetry.get(state.selectedId)
   renderGameHud(telemetry?.hud)
+  el['detail-safety'].textContent = maskText(telemetry?.safetyStatus || '—')
   el['detail-water'].textContent = describeWater(telemetry?.environment)
   el['detail-health'].textContent = telemetry ? `${formatNumber(telemetry.health)} / 20` : '—'
   el['detail-hunger'].textContent = telemetry ? `${formatNumber(telemetry.food)} / 20` : '—'

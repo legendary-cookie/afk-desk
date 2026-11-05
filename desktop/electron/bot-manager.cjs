@@ -1,3 +1,4 @@
+const { boundedAction, queueInventoryAction } = require('./inventory-action.cjs')
 const hud = require('./hud.cjs')
 const { isWithinSchedule, deferSafety, installSafety } = require('./safety.cjs')
 const path = require('node:path')
@@ -299,6 +300,7 @@ class BotManager {
     const emitTelemetry = () => {
       if (!this.sessions.has(account.id)) return
       const snapshot = buildTelemetry(bot, session.nearestChest, session.account.environmentalMovement, session.fluidMotion, session.resourcePack)
+      snapshot.safetyStatus = session.safetyStatus || null
       const { at: _at, ...stableSnapshot } = snapshot
       const key = JSON.stringify(stableSnapshot)
       if (key === session.telemetryKey) return
@@ -891,21 +893,8 @@ class BotManager {
     })
   }
 
-  async withInventoryAction(id, action) {
-    const session = this.sessions.get(id)
-    const bot = this.requireOnline(id)
-    if (bot.currentWindow) throw new Error('Close the server menu before managing player inventory.')
-    const execute = async () => {
-      if (this.sessions.get(id) !== session) throw new Error('This account is no longer online.')
-      while (session.depositing) await delay(50)
-      if (this.sessions.get(id) !== session || bot.currentWindow) throw new Error('Inventory is no longer available.')
-      session.inventoryAction = true
-      try { return await action(bot, session) }
-      finally { session.inventoryAction = false; this.emitTelemetry(id) }
-    }
-    const queued = session.inventoryQueue.then(execute, execute)
-    session.inventoryQueue = queued.catch(() => {})
-    return queued
+  async withInventoryAction(id, action, options = {}) {
+    return queueInventoryAction(this, id, action, options.timeoutMs)
   }
 
   minimapSnapshot(id, radius, mode) {
@@ -1168,7 +1157,7 @@ class BotManager {
 
   async refreshChest(id) {
     const session = this.sessions.get(id)
-    if (!session?.bot?.entity || session.depositing || session.inventoryAction || session.bot.currentWindow) return
+    if (!session?.bot?.entity || session.depositing || session.inventoryAction || session.safetyPending || session.safetyBusy || session.bot.currentWindow) return
     const block = findNearestChest(session.bot, session.account.autoDepositRange)
     session.nearestChest = block ? chestLocation(session.bot, block) : null
     this.emitTelemetry(id)
@@ -1181,21 +1170,28 @@ class BotManager {
     let chest
     let deposited = 0
     try {
-      chest = await (session.bot.openContainer || session.bot.openChest).call(session.bot, block)
-      session.activeDepositContainer = chest
-      for (const item of items) {
-        if (!isDepositActive(session, depositRevision)) break
-        const slot = Number(item.slot)
-        if (lockedSlotSet(session.account).has(slot)) continue
-        const current = session.bot.inventory?.slots?.[slot]
-        if (!current) continue
-        deposited += await transferPlayerSlot(session.bot, chest, slot, current.count)
-      }
-      if (deposited > 0) {
-        session.lastDepositAt = Date.now()
-        const { x, y, z } = chestLocation(session.bot, block)
-        this.emit('log', id, { kind: 'sent', message: `Deposited ${deposited} items into ${containerLabel(block)} at ${x}, ${y}, ${z}.`, at: Date.now() })
-      }
+      await boundedAction(async scope => {
+        chest = await scope.wait(() => Promise.resolve((session.bot.openContainer || session.bot.openChest).call(session.bot, block)).then(opened => {
+          // Mineflayer cannot cancel openContainer; close a late response.
+          if (scope.signal.aborted) { try { opened?.close() } catch {}; scope.check() }
+          return opened
+        }))
+        session.activeDepositContainer = chest
+        for (const item of items) {
+          scope.check()
+          if (session.safetyPending || !isDepositActive(session, depositRevision)) break
+          const slot = Number(item.slot)
+          if (lockedSlotSet(session.account).has(slot)) continue
+          const current = session.bot.inventory?.slots?.[slot]
+          if (!current) continue
+          deposited += await scope.wait(() => transferPlayerSlot(session.bot, chest, slot, current.count))
+        }
+        if (deposited > 0) {
+          session.lastDepositAt = Date.now()
+          const { x, y, z } = chestLocation(session.bot, block)
+          this.emit('log', id, { kind: 'sent', message: `Deposited ${deposited} items into ${containerLabel(block)} at ${x}, ${y}, ${z}.`, at: Date.now() })
+        }
+      }, undefined, 'Auto-deposit')
     } catch (error) {
       if (isDepositActive(session, depositRevision)) {
         this.emit('log', id, { kind: 'error', message: `Auto-deposit failed: ${String(error?.message || error).slice(0, 160)}`, at: Date.now() })
@@ -1203,6 +1199,9 @@ class BotManager {
     } finally {
       if (session.activeDepositContainer === chest) session.activeDepositContainer = null
       try { chest?.close() } catch {}
+      if (!chest && session.bot.currentWindow) {
+        try { session.bot.closeWindow(session.bot.currentWindow) } catch {}
+      }
       session.depositing = false
       this.emitTelemetry(id)
       if (session.depositRevision !== depositRevision) void this.refreshChest(id)
@@ -1213,6 +1212,7 @@ class BotManager {
     const session = this.sessions.get(id)
     if (!session) return
     const snapshot = buildTelemetry(session.bot, session.nearestChest, session.account.environmentalMovement, session.fluidMotion)
+    snapshot.safetyStatus = session.safetyStatus || null
     const { at: _at, ...stableSnapshot } = snapshot
     const key = JSON.stringify(stableSnapshot)
     if (key === session.telemetryKey) return

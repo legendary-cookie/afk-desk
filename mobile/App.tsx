@@ -38,7 +38,7 @@ type Item = {slot: number; name?: string; displayName: string; count: number; re
 type ResourceGlyph = {image?: string; sourceX?: number; sourceY?: number; sourceWidth?: number; sourceHeight?: number; imageWidth?: number; imageHeight?: number; renderHeight?: number; ascent?: number; advance?: number};
 type ServerMenu = {open: boolean; title: string; size: number; slots: Item[]; resourceTitle?: {text: string; glyphs: ResourceGlyph[]}};
 type Hud = {scoreboard: null | {title: Segment[]; lines: {text: Segment[]; score: number}[]}; effects: {label: string; countdown: string}[]; bossBars: {id: string; title: Segment[]; health: number; color: string; divisions: number}[]};
-type Telemetry = {hud?: Hud;health: number; food: number; position: null | {x: number; y: number; z: number}; dimension: string; nearestChest?: null | {type: string; x: number; y: number; z: number; distance: number}; inventory: Item[]};
+type Telemetry = {safetyStatus?: string | null; hud?: Hud;health: number; food: number; position: null | {x: number; y: number; z: number}; dimension: string; nearestChest?: null | {type: string; x: number; y: number; z: number; distance: number}; inventory: Item[]};
 type Session = {status: string; detail: string; logs: Log[]; telemetry?: Telemetry; serverWindow?: ServerMenu | null};
 
 const SUPPORTED_GAME_VERSIONS = ['1.21.11', '1.21.9', '1.21.8', '1.21.6', '1.21.5', '1.21.4', '1.21.3', '1.21.1', '1.20.6', '1.20.4', '1.20.2', '1.20.1', '1.20', '1.19.4', '1.19.3', '1.19.2', '1.19', '1.18.2', '1.17.1', '1.16.5', '1.15.2', '1.14.4', '1.13.2', '1.12.2', '1.11.2', '1.10.2', '1.9.4', '1.8.8'];
@@ -380,6 +380,7 @@ function App(): React.JSX.Element {
       </View>
 
       <View style={styles.statsRow}>
+        <Stat label="Safety status" value={mask(session?.telemetry?.safetyStatus || '—')} wide />
         <Stat label="HP" value={`${session?.telemetry?.health ?? '—'} / 20`} />
         <Stat label="Food" value={`${session?.telemetry?.food ?? '—'} / 20`} />
         <Stat label="Coordinates" value={session?.telemetry?.position ? `${session.telemetry.position.x}, ${session.telemetry.position.y}, ${session.telemetry.position.z}` : '—'} wide />
