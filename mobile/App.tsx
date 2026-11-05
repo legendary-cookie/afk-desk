@@ -1,4 +1,4 @@
-const linkedProfiles = require('./nodejs-assets/nodejs-project/linked-profiles.cjs');
+const linkedProfiles = require('./shared/linked-profiles.cjs');
 import React, {useCallback, useEffect, useRef, useState} from 'react';
 import {
   Alert, FlatList, Image, Modal, Pressable, SafeAreaView, ScrollView, Share,

@@ -83,7 +83,7 @@ class BotManager {
       bot, account: { ...account }, antiAfkTimer: null, jumpTimer: null, telemetryTimer: null,
       containerScanTimer: null, messageTimers: new Set(), upcomingMessages: new Map(), ready: false, switching: false,
       joinMessageSent: false, identityKey: '', telemetryKey: '', nearestChest: null,
-      depositing: false, depositRevision: 0, activeDepositContainer: null,
+      inputClaims: new Map(), depositing: false, depositRevision: 0, activeDepositContainer: null,
       inventoryAction: false, inventoryQueue: Promise.resolve(), resourcePack: null, joinedAt: Date.now(), lastDepositAt: 0,
       pendingMessageConfirmation: null, serverChangeRetryTimer: null, messageConfirmationTimer: null,
       serverChangeRetryAttempts: 0, serverChangeRetryStartedAt: 0, serverChangeRetryMessage: '', lastDimension: null
@@ -173,7 +173,8 @@ class BotManager {
       if (!session.ready) this.status(account.id, 'connected', 'Authenticated. Joining world…')
       emitIdentity()
     })
-    bot.on('playerJoined', (player) => { if (player?.username === bot.username) emitIdentity() })
+    bot.on('playerJoined', (player) => { if (this.sessions.get(account.id) !== session) return; if (player?.username === bot.username) emitIdentity(); else this.emit('playerAppears', account.id, { username: player?.username }) })
+    bot.on('death', () => { if (this.sessions.get(account.id) === session) this.emit('death', account.id, {}) })
     bot.on('playerUpdated', (player) => { if (player?.username === bot.username) emitIdentity() })
     bot.on('health', emitTelemetry)
     bot.inventory?.on?.('updateSlot', emitTelemetry)
@@ -232,6 +233,7 @@ class BotManager {
     bot.on('respawn', () => {
       if (this.sessions.get(account.id) !== session) return
       markReady()
+      this.emit('respawn', account.id, {})
       this.confirmServerChange(session)
       if (session.account.serverChangeMessage) this.scheduleMessage(account.id, session.account.serverChangeMessage, session.account.messageDelay, 'serverChange')
     })
@@ -351,10 +353,14 @@ class BotManager {
     const session = this.sessions.get(id)
     const allowed = new Set(['forward', 'back', 'left', 'right', 'jump', 'sprint', 'sneak'])
     if (!allowed.has(control)) throw new Error('Unknown movement control.')
-    bot.setControlState(control, true)
+    const owners = session.inputClaims.get(control) || new Set()
+    const owner = Symbol('manual')
+    owners.add(owner); session.inputClaims.set(control, owners)
+    if (owners.size === 1) bot.setControlState(control, true)
     const timer = setTimeout(() => {
       session.messageTimers.delete(timer)
-      if (this.sessions.get(id) === session) bot.setControlState(control, false)
+      owners.delete(owner)
+      if (!owners.size) { session.inputClaims.delete(control); if (this.sessions.get(id) === session) bot.setControlState(control, false) }
     }, Math.max(100, Math.min(Number(duration) || 350, 3000)))
     session.messageTimers.add(timer)
   }

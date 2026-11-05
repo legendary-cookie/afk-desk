@@ -1,4 +1,5 @@
 'use strict'
+const { createBotEventAdapter } = require('./macro/bot-events.cjs')
 const { MacroEngine } = require('./macro/engine.cjs')
 const { TriggerMatcher, nextScheduleTime } = require('./macro/triggers.cjs')
 const { createFacade } = require('./macro/facade.cjs')
@@ -14,10 +15,11 @@ function createMacroRuntime(manager, emit = () => {}, options = {}) {
     // Storage can finish loading after a bot has already spawned.
     for (const [id, session] of manager.sessions) if (session.ready) event(id, 'spawn')
   }
-  function event(id, type) {
+  const adapt = createBotEventAdapter({ sessionId })
+  function event(id, type, payload) {
     // Resolve all-account targets again when a newly connected account appears.
     if (type === 'spawn') engine.setLibrary(library())
-    engine.onBotEvent({ accountId: id, sessionId: sessionId(id), type })
+    engine.onBotEvent({ accountId: id, sessionId: sessionId(id), type, payload })
   }
   return {
     engine,
@@ -34,6 +36,7 @@ function createMacroRuntime(manager, emit = () => {}, options = {}) {
     },
     stop: id => engine.stop(id),
     event,
+    forward(type, id, payload) { for (const e of adapt(type, id, payload)) { if (e.type === 'spawn') engine.setLibrary(library()); engine.onBotEvent(e) } },
     upcoming(id) { return [...(engine.timed.get(id)?.values() || [])].filter(item => Number.isFinite(item.at)).map(item => ({ kind: 'macro timer', at: item.at })) }
   }
 }

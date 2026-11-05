@@ -55,8 +55,10 @@ function createFacade(manager, { notify = event => manager.emit('macro-notify', 
       entries.delete(entry)
       timers.clearTimeout(entry.timer)
       entry.signal?.removeEventListener('abort', entry.abort)
-      if (session(id) !== entry.session) continue
-      if ([...entries].some(other => other.control === entry.control && other.session === entry.session)) continue
+      const owners = entry.session.inputClaims?.get(entry.control)
+      owners?.delete(entry)
+      if (owners && !owners.size) entry.session.inputClaims.delete(entry.control)
+      if (session(id) !== entry.session || owners?.size) continue
       if (entry.control === 'rightClick') entry.bot.deactivateItem()
       else if (entry.control === 'leftClick') entry.bot.stopDigging?.()
       else entry.bot.setControlState(entry.control, false)
@@ -75,8 +77,10 @@ function createFacade(manager, { notify = event => manager.emit('macro-notify', 
       catch { release(id, ctx.owner, control); return }
       if (entries.has(entry)) entry.timer = timers.setTimeout(repeat, 200)
     }
-    if (control === 'rightClick') bot.activateItem()
-    else if (control !== 'leftClick') bot.setControlState(control, true)
+    s.inputClaims ||= new Map()
+    const owners = s.inputClaims.get(control) || new Set()
+    if (!owners.size) { if (control === 'rightClick') bot.activateItem(); else if (control !== 'leftClick') bot.setControlState(control, true) }
+    owners.add(entry); s.inputClaims.set(control, owners)
     entries.add(entry); claims.set(id, entries)
     ctx.signal?.addEventListener('abort', entry.abort, { once: true })
     if (tick) void repeat()
@@ -282,6 +286,10 @@ function createFacade(manager, { notify = event => manager.emit('macro-notify', 
       const lifecycle = type === 'disconnect' || type === 'reconnect'
       check(id, ctx, !lifecycle)
       try {
+        if (['rightClick', 'autoclick', 'selectHotbar', 'holdItem', 'useInventory'].includes(type)) {
+          const s = session(id)
+          while (s?.safetyInputDone) { await s.safetyInputDone; check(id, ctx) }
+        }
         const result = await handlers[type](id, step, ctx)
         if (!lifecycle) check(id, ctx)
         return result

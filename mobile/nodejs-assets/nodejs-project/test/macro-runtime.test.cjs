@@ -45,3 +45,29 @@ test('the interpreter releases held inputs when a mobile run stops', async () =>
   assert.equal(time.size(), 0)
   await runtime.engine.shutdown()
 })
+
+test('event adapter forwards chat, telemetry, windows and player data with session identity', async () => {
+  const { runtime } = setup()
+  const received = []; runtime.engine.onBotEvent = event => received.push(event)
+  runtime.forward('status', 'a', { status: 'online' })
+  runtime.forward('log', 'a', { kind: 'chat', message: '§aHello' })
+  runtime.forward('telemetry', 'a', { health: 20, inventory: [] })
+  runtime.forward('window', 'a', { open: true, title: 'Shop' })
+  runtime.forward('playerAppears', 'a', { username: 'Alex' })
+  assert.deepEqual(received.map(e => e.type), ['connected', 'spawn', 'chat', 'telemetry', 'windowOpen', 'playerAppears'])
+  assert.equal(received[2].payload.text, 'Hello'); assert.equal(received[4].payload.title, 'Shop')
+  assert.equal(received[5].payload.username, 'Alex'); assert.ok(received.every(e => e.sessionId === received[0].sessionId))
+  await runtime.engine.shutdown()
+})
+
+test('forwarded chat triggers an enabled macro for the matching session', async () => {
+  const { runtime, sent } = setup()
+  runtime.setLibrary([{ id: 'chat-trigger', enabled: true, targets: { mode: 'accounts', accountIds: ['a'] }, trigger: { type: 'chat', pattern: 'hello', match: 'contains' }, defaultDelayMs: 0, steps: [{ type: 'chat', message: 'matched' }] }])
+  runtime.forward('status', 'a', { status: 'online' })
+  runtime.forward('log', 'a', { kind: 'chat', message: 'hello there' })
+  const run = runtime.engine.runs.get('a')
+  assert.ok(run)
+  await run.done
+  assert.deepEqual(sent, ['matched'])
+  await runtime.engine.shutdown()
+})

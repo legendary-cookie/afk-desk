@@ -289,7 +289,7 @@ function normalizeMacro(input) {
     const raw = isObj(input) ? input : {}
     const ctx = { remaining: LIMITS.maxStepsPerMacro }
     const name = str(raw.name, LIMITS.maxNameLength).trim()
-    return {
+    const normalized = {
       id: cleanId(raw.id) || newId(),
       name: name || 'Untitled macro',
       enabled: raw.enabled !== false,
@@ -304,6 +304,17 @@ function normalizeMacro(input) {
       notify: normalizeNotify(raw.notify),
       origin: normalizeOrigin(raw.origin)
     }
+    if (raw.version === 3) {
+      const graph = require('./graph-model.cjs').normalizeGraph(raw)
+      normalized.version = 3
+      normalized.nodes = graph.nodes
+      normalized.edges = graph.edges
+      normalized.vars = graph.vars
+      if (graph.migration !== undefined) normalized.migration = graph.migration
+      delete normalized.trigger
+      delete normalized.steps
+    }
+    return normalized
   } catch {
     return { id: newId(), name: 'Untitled macro', enabled: false, targets: { mode: 'accounts', accountIds: [] }, trigger: { type: DEFAULT_TRIGGER_TYPE }, stopWhen: [], concurrency: 'skip', onError: 'continue', defaultDelayMs: LIMITS.defaultDelayMs, maxRuntimeMs: null, steps: [], notify: {}, origin: {} }
   }
@@ -328,6 +339,7 @@ function normalizeLibrary(input) {
       macros.push(macro)
     }
     const library = { version: SCHEMA_VERSION, macros }
+    if (Array.isArray(raw.customNodes)) library.customNodes = JSON.parse(JSON.stringify(raw.customNodes.filter(item => isObj(item) && typeof item.id === 'string' && typeof item.name === 'string' && Array.isArray(item.nodes) && Array.isArray(item.edges) && isObj(item.inputs) && isObj(item.outputs)).slice(0, 200)))
     const migrated = normalizeMigratedFromV1(raw.migratedFromV1)
     if (migrated) library.migratedFromV1 = migrated
     return library
@@ -499,6 +511,20 @@ function validateMacro(macro, options = {}) {
     } else errors.push({ path: '/targets/mode', message: 'Unknown target mode.' })
 
     const editions = resolveTargetEditions(macro, options)
+
+    if (macro.version === 3) {
+      errors.push(...require('./graph-model.cjs').validateGraph(macro).map(({ path, message }) => ({ path: `/${path.replace(/\./g, '/')}`, message })))
+      if (!errors.some(error => error.path.startsWith('/nodes') || error.path.startsWith('/edges'))) {
+        const { expandGroups, actionParamErrors } = require('./graph-model.cjs')
+        const expanded = expandGroups(macro)
+        for (const node of expanded.nodes) {
+          const wired = new Set(expanded.edges.filter(edge => edge.to.node === node.id).map(edge => edge.to.port))
+          for (const error of actionParamErrors(node.kind, node.params || {}, wired)) errors.push({ path: `/nodes/${node._groupId || node.id}/params/${error.name}`, message: error.message })
+        }
+      }
+      if (Array.isArray(macro.stopWhen)) macro.stopWhen.forEach((condition, index) => validateCondition(condition, `/stopWhen/${index}`, errors))
+      return errors
+    }
 
     // Trigger
     const trigger = macro.trigger
@@ -876,13 +902,14 @@ function importMacros(json, options = {}) {
   let list
   if (Array.isArray(parsed)) list = parsed
   else if (isObj(parsed) && Array.isArray(parsed.macros)) list = parsed.macros
-  else if (isObj(parsed) && isObj(parsed.trigger)) list = [parsed]
+  else if (isObj(parsed) && (isObj(parsed.trigger) || (parsed.version === 3 && Array.isArray(parsed.nodes)))) list = [parsed]
   else return fail('Import does not contain any macros.')
   const accountIds = Array.isArray(options.accountIds) ? options.accountIds.filter((id) => typeof id === 'string') : []
   const known = new Set(accountIds)
   const macros = []
   const errors = []
   for (const raw of list.slice(0, LIMITS.maxMacros)) {
+    if (!isObj(raw) || (raw.version != null && ![2, 3].includes(raw.version))) { errors.push({ index: macros.length, path: '', message: 'Unsupported macro format.' }); continue }
     const macro = normalizeMacro({ ...(isObj(raw) ? raw : {}), id: undefined, origin: undefined, notify: undefined })
     if (macro.targets.mode === 'accounts') macro.targets.accountIds = macro.targets.accountIds.filter((id) => known.has(id))
     const problems = validateMacro(macro, { accountIds, editionOf: options.editionOf })

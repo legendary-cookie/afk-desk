@@ -1,5 +1,5 @@
 'use strict'
-const { normalizeGraph, validateGraph } = require('./nodejs-assets/nodejs-project/macro/graph-model.cjs')
+const { normalizeGraph, validateGraph } = require('./shared/macro/graph-model.cjs')
 const MACRO_STORAGE_KEY = 'afkdesk.mobile.sharedMacros.v1'
 async function loadMacroLibrary(storage) {
   const raw = await storage.getItem(MACRO_STORAGE_KEY)

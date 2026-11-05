@@ -258,3 +258,21 @@ test('queued inventory work checks cancellation before sending and in-flight ope
   finish(); await looking
 })
 
+
+test('macro holds share ownership with safety and manual input and wait for safety consumption', async t => {
+  const { facade, ctx, bot, manager } = fixture(t)
+  const session = manager.sessions.get('a')
+  let finish
+  session.safetyInputDone = new Promise(resolve => { finish = resolve })
+  const hold = facade.rightClick('a', { action: 'hold' }, ctx)
+  await Promise.resolve()
+  assert.equal(session.inputClaims.get('rightClick')?.size || 0, 0)
+  session.safetyInputDone = null; finish(); await hold
+  assert.equal(session.inputClaims.get('rightClick').size, 1)
+  await facade.rightClick('a', { action: 'release' }, ctx)
+  assert.equal(session.inputClaims.has('rightClick'), false)
+  manager.control('a', 'sneak', 100)
+  await facade.control('a', { control: 'sneak', action: 'hold' }, ctx)
+  await facade.control('a', { control: 'sneak', action: 'release' }, ctx)
+  assert.equal(bot.calls.filter(c => c[0] === 'setControlState' && c[1] === 'sneak' && c[2] === false).length, 0)
+})

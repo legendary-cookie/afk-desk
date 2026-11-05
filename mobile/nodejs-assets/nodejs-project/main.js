@@ -9,8 +9,7 @@ let macros
 const manager = new BotManager({
   profilesPath: path.join(bridge.app.datadir(), 'minecraft-profiles'),
   emit: (type, accountId, payload) => {
-    if (type === 'status' && payload.status === 'online') macros?.event(accountId, 'spawn')
-    if (type === 'status' && ['offline', 'reconnecting'].includes(payload.status)) macros?.event(accountId, 'disconnected')
+    macros?.forward(type, accountId, payload)
     bridge.channel.post('engine-event', { type, accountId, payload })
   }
 })
