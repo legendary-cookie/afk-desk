@@ -8,6 +8,7 @@ For the complete desktop history from 0.1.0 onward, including source tags, insta
 
 - Auto Ominous Bottle (and the other safety actions) could stall silently behind another inventory action such as auto-deposit. Every safety wait is now time-limited, safety actions get priority, and a new "Safety status" line in account details shows the last action or why it is waiting.
 - Safety features (auto-drink, eat, golden apples, totem, armor) can now use items in locked slots. Locks still stop deposit, drop and other items being moved in. This was why Ominous Bottles in a locked hotbar slot were never drunk.
+- Overview auto-arrange: modules size and position themselves from size hints when you add or remove them or resize the window; dragging switches to Manual, and an Auto-arrange button re-applies it.
 - The overview fits the window again: compact modules, the inventory at its natural height, and the minimap back inside Movement. Scoreboard, effects, boss bars and next runs are opt-in modules with clear empty states. "Next runs" moved from the sidebar to account details. Saved layouts reset once to the new default.
 
 ## Desktop and Android 0.11.0-beta.4 — 2026-11-06
