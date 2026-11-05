@@ -163,18 +163,23 @@
                 </dl>
               </section>
 
-              <section class="panel"><header class="panel-header"><h2>Game HUD</h2></header><div id="game-hud" class="game-hud"></div></section>
+              <div id="game-hud">
+                <section id="scoreboard-panel" class="panel"><header class="panel-header"><h2>Scoreboard</h2></header><div id="hud-scoreboard" class="game-hud"></div></section>
+                <section id="effects-panel" class="panel"><header class="panel-header"><h2>Effects</h2></header><div id="hud-effects" class="game-hud"></div></section>
+                <section id="boss-bars-panel" class="panel"><header class="panel-header"><h2>Boss bars</h2></header><div id="hud-boss-bars" class="game-hud"></div></section>
+              </div>
+              <section id="next-runs-panel" class="panel"><header class="panel-header"><h2>Next runs</h2></header><ul id="overview-next-runs"><li>Select an account to view scheduled runs.</li></ul></section>
 
+                <section id="minimap-panel" class="panel minimap"><header class="panel-header"><h2>Minimap</h2></header>
+                  <div class="minimap-options"><label>Radius <input id="minimap-radius" type="number" min="16" max="96" value="32" /></label><label>View <select id="minimap-mode"><option value="surface">Surface</option><option value="cave">Cave / at Y</option></select></label></div>
+                  <canvas id="minimap-canvas" width="256" height="256" aria-label="Top-down map of the area around the bot"></canvas>
+                  <p id="minimap-status" aria-live="polite">Connect to view the map.</p>
+              </section>
               <section id="movement-panel" class="panel movement-panel collapsible collapsed" aria-labelledby="movement-title">
                 <header class="panel-header">
                   <div><h2 id="movement-title">Movement</h2><p>Quick taps while online</p></div>
                   <button class="section-toggle" type="button" data-collapse-target="movement-panel" aria-expanded="false" title="Expand movement controls" aria-label="Expand movement controls">⌄</button>
                 </header>
-                <div class="minimap">
-                  <div class="minimap-options"><label>Radius <input id="minimap-radius" type="number" min="16" max="96" value="32" /></label><label>View <select id="minimap-mode"><option value="surface">Surface</option><option value="cave">Cave / at Y</option></select></label></div>
-                  <canvas id="minimap-canvas" width="256" height="256" aria-label="Top-down map of the area around the bot"></canvas>
-                  <p id="minimap-status" aria-live="polite">Connect to view the map.</p>
-                </div>
                 <div class="movement-grid" aria-label="Movement controls">
                   <button data-control="forward" class="move-button forward" disabled aria-label="Move forward">W</button>
                   <button data-control="left" class="move-button" disabled aria-label="Move left">A</button>

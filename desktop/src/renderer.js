@@ -2604,12 +2604,15 @@ function hudLine(parts, className = '') {
   return line
 }
 function renderGameHud(hud) {
-  const root = document.getElementById('game-hud'); if (!root) return
-  root.replaceChildren()
-  if (hud?.scoreboard) { const board = document.createElement('div'); board.className = 'hud-scoreboard'; board.append(hudLine(hud.scoreboard.title, 'hud-title')); for (const item of hud.scoreboard.lines) board.append(hudLine(item.text)); root.append(board) }
-  for (const bar of hud?.bossBars || []) { const row = document.createElement('div'); row.className = 'hud-boss'; row.append(hudLine(bar.title, 'hud-title')); const track = document.createElement('div'); track.className = 'hud-bar'; const fill = document.createElement('div'); fill.style.width = `${bar.health * 100}%`; fill.style.backgroundColor = ({pink:'#ff80b5', blue:'#5555ff', red:'#ff5555', green:'#55cc55', yellow:'#eeee55', purple:'#aa55cc', white:'#eeeeee'})[bar.color]; track.append(fill); if (bar.divisions) track.style.setProperty('--divisions', String(bar.divisions)); track.classList.add('divided'); row.append(track); root.append(row) }
-  for (const effect of hud?.effects || []) { const row = document.createElement('div'); row.textContent = maskText(`${effect.label} ${effect.countdown}`); root.append(row) }
-  if (!root.childNodes.length) root.textContent = 'No active game HUD.'
+  const boardRoot = document.getElementById('hud-scoreboard'), bossRoot = document.getElementById('hud-boss-bars'), effectsRoot = document.getElementById('hud-effects')
+  if (!boardRoot || !bossRoot || !effectsRoot) return
+  boardRoot.replaceChildren(); bossRoot.replaceChildren(); effectsRoot.replaceChildren()
+  if (hud?.scoreboard) { const board = document.createElement('div'); board.className = 'hud-scoreboard'; board.append(hudLine(hud.scoreboard.title, 'hud-title')); for (const item of hud.scoreboard.lines) board.append(hudLine(item.text)); boardRoot.append(board) }
+  for (const bar of hud?.bossBars || []) { const row = document.createElement('div'); row.className = 'hud-boss'; row.append(hudLine(bar.title, 'hud-title')); const track = document.createElement('div'); track.className = 'hud-bar'; const fill = document.createElement('div'); fill.style.width = `${bar.health * 100}%`; fill.style.backgroundColor = ({pink:'#ff80b5', blue:'#5555ff', red:'#ff5555', green:'#55cc55', yellow:'#eeee55', purple:'#aa55cc', white:'#eeeeee'})[bar.color]; track.append(fill); if (bar.divisions) track.style.setProperty('--divisions', String(bar.divisions)); track.classList.add('divided'); row.append(track); bossRoot.append(row) }
+  for (const effect of hud?.effects || []) { const row = document.createElement('div'); row.textContent = maskText(`${effect.label} ${effect.countdown}`); effectsRoot.append(row) }
+  if (!boardRoot.childNodes.length) boardRoot.textContent = 'No active scoreboard.'
+  if (!bossRoot.childNodes.length) bossRoot.textContent = 'No active boss bars.'
+  if (!effectsRoot.childNodes.length) effectsRoot.textContent = 'No active effects.' 
 }
 function drawGameHud(context, canvas, hud) {
   if (!hud) return
@@ -2848,7 +2851,7 @@ function startMinimap() {
   mode.addEventListener('change', () => localStorage.setItem('minimap-mode', mode.value))
   let busy = false
   async function refresh() {
-    if (busy || document.getElementById('movement-panel').classList.contains('collapsed')) return
+    if (busy || !document.getElementById('minimap-canvas').getClientRects().length) return
     const id = state.selectedId
     const canvas = document.getElementById('minimap-canvas')
     const status = document.getElementById('minimap-status')
@@ -2870,6 +2873,27 @@ function startMinimap() {
     } finally { busy = false }
   }
   setInterval(refresh, 2000)
+  const runsList = document.getElementById('overview-next-runs')
+  let runsBusy = false
+  async function refreshOverviewRuns() {
+    if (runsBusy || !runsList.getClientRects().length) return
+    const id = state.selectedId
+    if (!id) { runsList.textContent = 'Select an account to view scheduled runs.'; return }
+    runsBusy = true
+    try {
+      const runs = await api.getUpcomingRuns(id)
+      if (id !== state.selectedId) return
+      runsList.replaceChildren(...(runs.length ? runs.map(entry => {
+        const item = document.createElement('li')
+        const seconds = Math.max(0, Math.ceil((entry.at - Date.now()) / 1000))
+        const relative = seconds < 60 ? `${seconds}s` : seconds < 3600 ? `${Math.ceil(seconds / 60)}m` : `${Math.ceil(seconds / 3600)}h`
+        item.textContent = maskText(`${entry.label} · in ${relative}`)
+        return item
+      }) : [Object.assign(document.createElement('li'), { textContent: 'No scheduled runs' })]))
+    } catch { if (id === state.selectedId) runsList.textContent = 'Unable to load runs' } finally { runsBusy = false }
+  }
+  setInterval(refreshOverviewRuns, 5000)
+  void refreshOverviewRuns()
   document.querySelector('[data-collapse-target="movement-panel"]').addEventListener('click', refresh)
   radius.addEventListener('change', refresh)
   mode.addEventListener('change', refresh)

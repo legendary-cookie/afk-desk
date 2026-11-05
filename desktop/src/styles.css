@@ -966,3 +966,4 @@ dialog.macro-templates-dialog {
 .hud-bar { height:7px; background-color:#222; position:relative; overflow:hidden; }
 .hud-bar div { height:100%; }
 .hud-bar.divided::after { content:''; position:absolute; inset:0; background:repeating-linear-gradient(to right, transparent 0, transparent calc(100% / var(--divisions) - 1px), #111 calc(100% / var(--divisions) - 1px), #111 calc(100% / var(--divisions))); }
+.overview-modules > [hidden] { display: none; }

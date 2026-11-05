@@ -1,6 +1,6 @@
 window.createOverviewEditor = function ({ dashboard, settings, accountId, save, report }) {
   const model = window.afkOverviewLayout
-  const nodes = { console: document.querySelector('#console-panel'), macro: document.querySelector('#macro-section'), details: document.querySelector('#details-panel'), movement: document.querySelector('#movement-panel'), inventory: document.querySelector('.inventory-panel') }
+  const nodes = { console: document.querySelector('#console-panel'), macro: document.querySelector('#macro-section'), details: document.querySelector('#details-panel'), movement: document.querySelector('#movement-panel'), inventory: document.querySelector('.inventory-panel'), scoreboard: document.querySelector('#scoreboard-panel'), effects: document.querySelector('#effects-panel'), bossBars: document.querySelector('#boss-bars-panel'), nextRuns: document.querySelector('#next-runs-panel'), minimap: document.querySelector('#minimap-panel') }
   const placeholders = {}
   for (const [id, node] of Object.entries(nodes)) { const marker = document.createComment(id); node.before(marker); placeholders[id] = marker }
   const toolbar = document.createElement('div'); toolbar.className = 'overview-toolbar'
