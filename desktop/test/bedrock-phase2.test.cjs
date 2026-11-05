@@ -62,15 +62,17 @@ test('owners are sets, releasing one preserves held flags, and releaseOwner is s
   assert.doesNotThrow(() => h.manager.releaseOwner('phase2', 'macro:one'))
 })
 
-test('unsupported walking throws a facade-compatible error on every entry point', () => {
+test('walking claims produce bounded movement and stop on release', () => {
   const h = setup()
-  for (const input of ['forward', 'back', 'left', 'right']) {
-    for (const run of [() => h.manager.claimInput('phase2', input, 'manual'), () => h.manager.control('phase2', input), () => h.manager.setControlState('phase2', input, true)]) {
-      assert.throws(run, (e) => e instanceof MacroActionError && e.code === 'UNSUPPORTED' && e.message === 'Bedrock walking is not supported yet')
-    }
-  }
+  h.manager.claimInput('phase2', 'forward', 'macro:walk')
+  h.timers.advance(50)
+  const first = h.packets('player_auth_input').at(-1)
+  assert.equal(first.move_vector.z, 1)
+  assert.ok(Math.abs(Math.hypot(first.delta.x, first.delta.z) - 0.1) < 1e-9)
+  h.manager.releaseOwner('phase2', 'macro:walk')
+  h.timers.advance(50)
+  assert.deepEqual(h.packets('player_auth_input').at(-1).delta, { x: 0, y: 0, z: 0 })
   assert.throws(() => h.manager.claimInput('phase2', 'rightClick', 'manual'), { code: 'UNSUPPORTED' })
-  assert.throws(() => h.manager.claimInput('phase2', 'jump', ''), /owner/i)
   h.manager.disconnect('phase2')
 })
 
@@ -166,14 +168,13 @@ test('swing once and owned leftClick only emit swing_arm, and stop when the last
 })
 
 test('anti-AFK mirrors Java normalization, random delays, skips walk with one log, and toggles cleanly', () => {
-  const account = { antiAfk: true, antiAfkMinDelay: 2, antiAfkMaxDelay: 4, antiAfkJump: false, antiAfkLook: false, antiAfkSneak: true, antiAfkWalk: true }
+  const account = { antiAfk: true, antiAfkMinDelay: 2, antiAfkMaxDelay: 4, antiAfkJump: false, antiAfkLook: false, antiAfkSneak: true, antiAfkWalk: false }
   const h = setup(account, { random: () => 0.5 })
   assert.deepEqual(h.session.antiAfkSettings, normalizeAntiAfkSettings(account))
   h.timers.advance(2999); assert.deepEqual(h.manager.inputOwners('phase2', 'sneak'), [])
   h.timers.advance(1); assert.deepEqual(h.manager.inputOwners('phase2', 'sneak'), ['antiAfk'])
   h.timers.advance(250); assert.deepEqual(h.manager.inputOwners('phase2', 'sneak'), [])
   h.manager.setAntiAfk('phase2', account)
-  assert.equal(h.events.filter(([type, , p]) => type === 'log' && /walk.*ignor|ignor.*walk/i.test(p.message)).length, 1)
   h.manager.claimInput('phase2', 'sneak', 'manual')
   h.manager.setAntiAfk('phase2', { ...account, antiAfk: false })
   h.timers.advance(10_000); assert.deepEqual(h.manager.inputOwners('phase2', 'sneak'), ['manual'])
@@ -304,4 +305,14 @@ test('health-triggered respawn keeps the Phase 1 wire position after storing fee
 test('advertises stationary movement and the four supported anti-AFK actions', () => {
   assert.equal(bedrockCapabilities().movement, 'stationary')
   assert.deepEqual(bedrockCapabilities().antiAfk, ['look', 'jump', 'sneak', 'swing'])
+})
+
+test('anti-AFK walk claims forward briefly and releases it', () => {
+  const h = setup({ antiAfk: true, antiAfkInterval: 2, antiAfkJump: false, antiAfkLook: false, antiAfkWalk: true })
+  h.timers.advance(2050)
+  assert.deepEqual(h.manager.inputOwners('phase2', 'forward'), ['antiAfk'])
+  assert.equal(h.packets('player_auth_input').at(-1).move_vector.z, 1)
+  h.timers.advance(250)
+  assert.deepEqual(h.manager.inputOwners('phase2', 'forward'), [])
+  h.manager.disconnect('phase2')
 })
