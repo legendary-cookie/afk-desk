@@ -56,6 +56,12 @@ function hasEffect(bot, name) {
   const id = bot.registry?.effectsByName?.[name]?.id
   return (id != null && effects[id] != null) || Object.keys(effects).some(key => key.replace(/[^a-z]/gi, '').toLowerCase() === name.toLowerCase())
 }
+function hasRaid(bot) {
+  return (bot.bossBars || []).some(bar => {
+    const parts = require('./hud.cjs').segments(bar.title).map(part => part.text)
+    return /^Raid/.test(parts.join('')) || parts.some(text => /^event\.minecraft\.raid(?:\.(?:victory|defeat))?$/.test(text))
+  })
+}
 function bottleAmplifier(item) {
   const component = item.components?.find(c => String(c.type ?? c.name).replace('minecraft:', '') === 'ominous_bottle_amplifier')
   let value = component?.data ?? component?.value ?? item.nbt?.value?.OminousBottleAmplifier?.value ?? item.nbt?.OminousBottleAmplifier
@@ -71,10 +77,10 @@ function pickConsumable(account, bot, lastDamage, lastBottle, now = Date.now()) 
     const apple = items.find(item => item.name === preferred) || items.find(item => ['golden_apple', 'enchanted_golden_apple'].includes(item.name))
     if (apple) return apple
   }
-  if (account.autoOminousBottle && !hasEffect(bot, 'BadOmen') && !hasEffect(bot, 'RaidOmen') && (lastBottle == null || now - lastBottle >= (Number(account.autoOminousCooldown ?? 0) * 1000))) {
+  if (account.autoOminousBottle && !hasEffect(bot, 'BadOmen') && !hasEffect(bot, 'RaidOmen') && !hasEffect(bot, 'TrialOmen') && !hasRaid(bot) && (lastBottle == null || now - lastBottle >= (Number(account.autoOminousCooldown ?? 0) * 1000))) {
     const bottles = items.filter(item => item.name === 'ominous_bottle')
-    const preference = Number(account.autoOminousAmplifier ?? 0)
-    return bottles.find(item => bottleAmplifier(item) === preference) || bottles.sort((a, b) => Math.abs(bottleAmplifier(a) - preference) - Math.abs(bottleAmplifier(b) - preference))[0] || null
+    const order = account.autoOminousOrder ?? (account.autoOminousAmplifier == null || Number(account.autoOminousAmplifier) >= 4 ? 'highest' : 'lowest')
+    return bottles.sort((a, b) => (order === 'lowest' ? 1 : -1) * (bottleAmplifier(a) - bottleAmplifier(b)))[0] || null
   }
   return null
 }
@@ -186,7 +192,7 @@ function installSafety(manager, account, session, state) {
           try {
             if (source !== target) { await bot.moveSlotItem(source, target); swapped = true }
             bot.setQuickBarSlot(target - 36)
-            if (!bot.currentWindow && !session.depositing && manager.sessions.get(account.id) === session) { await consumeItem(bot, food); if (food.name === 'ominous_bottle') lastBottle = Date.now(); if (food.name === 'golden_apple' || food.name === 'enchanted_golden_apple') lastDamage = null }
+            if (!bot.currentWindow && !session.depositing && manager.sessions.get(account.id) === session && (food.name !== 'ominous_bottle' || (!hasRaid(bot) && !['BadOmen', 'RaidOmen', 'TrialOmen'].some(effect => hasEffect(bot, effect))))) { await consumeItem(bot, food); if (food.name === 'ominous_bottle') lastBottle = Date.now(); if (food.name === 'golden_apple' || food.name === 'enchanted_golden_apple') lastDamage = null }
           } finally {
             try {
               while (swapped && manager.sessions.get(account.id) === session && bot.currentWindow) await new Promise(resolve => setTimeout(resolve, 50))

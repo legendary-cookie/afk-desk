@@ -1056,7 +1056,7 @@ function openAccountDialog(account, importing = false) {
   el['safety-armor'].checked = account?.autoArmor === true
   el['safety-armor-threshold'].value = account?.autoArmorThreshold ?? 5
   el['safety-ominous'].checked = account?.autoOminousBottle === true
-  el['safety-ominous-level'].value = account?.autoOminousAmplifier ?? 0
+  el['safety-ominous-level'].value = account?.autoOminousOrder ?? (account?.autoOminousAmplifier == null || Number(account.autoOminousAmplifier) >= 4 ? 'highest' : 'lowest')
   el['safety-ominous-cooldown'].value = account?.autoOminousCooldown ?? 0
   el['safety-apple'].checked = account?.autoGoldenApple === true
   el['safety-apple-health'].value = account?.autoGoldenAppleHealth ?? 10
@@ -1168,7 +1168,7 @@ async function saveAccount(event) {
     autoArmor: el['safety-armor'].checked,
     autoArmorThreshold: Number(el['safety-armor-threshold'].value),
     autoOminousBottle: el['safety-ominous'].checked,
-    autoOminousAmplifier: Number(el['safety-ominous-level'].value),
+    autoOminousOrder: el['safety-ominous-level'].value,
     autoOminousCooldown: Number(el['safety-ominous-cooldown'].value),
     autoGoldenApple: el['safety-apple'].checked,
     autoGoldenAppleHealth: Number(el['safety-apple-health'].value),

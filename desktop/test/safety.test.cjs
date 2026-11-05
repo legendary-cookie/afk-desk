@@ -99,9 +99,9 @@ for (const file of ['../electron/safety.cjs', '../../mobile/nodejs-assets/nodejs
   test(`${file}: consumables honor effects, damage, preference, locks and cooldown`, () => {
     const items = [{name: 'ominous_bottle', slot: 9, components: [{type: 'ominous_bottle_amplifier', data: 2}]}, {name: 'golden_apple', slot: 10}, {name: 'enchanted_golden_apple', slot: 11}]
     const bot = {health: 20, entity: {effects: {}}, registry: {effectsByName: {BadOmen: {id: 30}, RaidOmen: {id: 34}, Absorption: {id: 21}, Regeneration: {id: 9}}}, inventory: {items: () => items}}
-    const config = {autoOminousBottle: true, autoOminousAmplifier: 2, autoOminousCooldown: 30}
+    const config = {autoOminousBottle: true, autoOminousOrder: 'lowest', autoOminousCooldown: 30}
     assert.equal(pickConsumable(config, bot, null, null, 50000), items[0])
-    assert.equal(pickConsumable({...config, autoOminousAmplifier: 4}, bot, null, null, 50000), items[0])
+    assert.equal(pickConsumable({...config, autoOminousOrder: 'highest'}, bot, null, null, 50000), items[0])
     assert.equal(pickConsumable(config, bot, null, 40000, 50000), null)
     bot.entity.effects[34] = {}; assert.equal(pickConsumable(config, bot, null, null, 50000), null)
     delete bot.entity.effects[34]; bot.entity.effects[30] = {}; assert.equal(pickConsumable(config, bot, null, null, 50000), null)
@@ -141,5 +141,24 @@ for (const file of ['../electron/safety.cjs', '../../mobile/nodejs-assets/nodejs
     bot.health = 19; bot.emit('health'); await new Promise(resolve => setImmediate(resolve))
     assert.equal(bot.eaten, true); assert.equal(bot.quickBarSlot, 1)
     clearInterval(session.safetyTimer)
+  })
+}
+
+for (const file of ['../electron/safety.cjs', '../../mobile/nodejs-assets/nodejs-project/safety.cjs']) {
+  test(`${file}: raid, omen effects and bottle ordering`, () => {
+    const {pickConsumable} = require(file)
+    const bottle = (slot, level) => ({name: 'ominous_bottle', slot, components: [{type: 'minecraft:ominous_bottle_amplifier', data: level}]})
+    const items = [bottle(9, 2), bottle(10, 4), bottle(11, 0)]
+    const bot = {health: 20, entity: {effects: {}}, registry: {effectsByName: {BadOmen: {id: 1}, RaidOmen: {id: 2}, TrialOmen: {id: 3}}}, inventory: {items: () => items}, bossBars: []}
+    const config = {autoOminousBottle: true}
+    assert.equal(pickConsumable(config, bot), items[1])
+    assert.equal(pickConsumable({...config, autoOminousOrder: 'lowest'}, bot), items[2])
+    assert.equal(pickConsumable({...config, lockedInventorySlots: [10]}, bot), items[0])
+    assert.equal(pickConsumable({...config, autoOminousOrder: 'lowest', lockedInventorySlots: [11]}, bot), items[0])
+    for (const id of [1, 2, 3]) { bot.entity.effects[id] = {}; assert.equal(pickConsumable(config, bot), null); delete bot.entity.effects[id] }
+    for (const title of [{translate: 'event.minecraft.raid'}, {translate: 'event.minecraft.raid.victory'}, JSON.stringify({translate: 'event.minecraft.raid.defeat'}), 'Raid - Raiders Remaining: 2']) {
+      bot.bossBars = [{title}]; assert.equal(pickConsumable(config, bot), null)
+    }
+    bot.bossBars = [{title: 'Dragon'}]; assert.equal(pickConsumable(config, bot), items[1])
   })
 }
