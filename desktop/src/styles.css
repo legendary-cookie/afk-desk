@@ -945,3 +945,10 @@ dialog.macro-templates-dialog {
 .settings-tools { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
 .share-import-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 4px; }
 .share-import-row small { flex: 1 1 220px; opacity: .75; }
+
+.game-hud { display:grid; gap:6px; padding:10px; font:12px monospace; }
+.hud-scoreboard { background:#000a; padding:8px; text-align:right; }
+.hud-title { text-align:center; font-weight:bold; }
+.hud-bar { height:7px; background-color:#222; position:relative; overflow:hidden; }
+.hud-bar div { height:100%; }
+.hud-bar.divided::after { content:''; position:absolute; inset:0; background:repeating-linear-gradient(to right, transparent 0, transparent calc(100% / var(--divisions) - 1px), #111 calc(100% / var(--divisions) - 1px), #111 calc(100% / var(--divisions))); }

@@ -562,6 +562,8 @@ test('builds a bounded player health, position, and inventory snapshot', () => {
   const snapshot = buildTelemetry(bot)
   assert.equal(typeof snapshot.at, 'number')
   delete snapshot.at
+  assert.deepEqual(snapshot.hud, { bossBars: [], effects: [], scoreboard: null })
+  delete snapshot.hud
   assert.deepEqual(snapshot, {
     health: 17.5,
     food: 18,

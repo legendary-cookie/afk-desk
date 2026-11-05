@@ -1,3 +1,4 @@
+const hud = require('./hud.cjs')
 const { isWithinSchedule, deferSafety, installSafety } = require('./safety.cjs')
 const path = require('node:path')
 const { profilePath } = require('./profile-path.cjs')
@@ -159,6 +160,8 @@ class BotManager {
       if (this.sessions.get(account.id) !== session) return
       this.emitTelemetry(account.id)
     }
+
+    hud.installHud(bot, emitTelemetry)
 
     bot.on('login', () => {
       if (this.sessions.get(account.id) !== session) return
@@ -828,6 +831,7 @@ function buildTelemetry(bot, nearestChest = null, resourcePack = null) {
     ...safeItemAppearance(resourcePack, item)
   }))
   return {
+    hud: hud.snapshot(bot),
     health: Math.max(0, Math.min(finite(bot?.health), 20)),
     food: Math.max(0, Math.min(finite(bot?.food), 20)),
     position: position ? {

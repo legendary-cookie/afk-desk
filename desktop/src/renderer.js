@@ -566,6 +566,7 @@ function renderConsole() {
 
 function renderTelemetry() {
   const telemetry = state.telemetry.get(state.selectedId)
+  renderGameHud(telemetry?.hud)
   el['detail-water'].textContent = describeWater(telemetry?.environment)
   el['detail-health'].textContent = telemetry ? `${formatNumber(telemetry.health)} / 20` : '—'
   el['detail-hunger'].textContent = telemetry ? `${formatNumber(telemetry.food)} / 20` : '—'
@@ -2438,7 +2439,7 @@ function renderPovGrid() {
   if (!accounts.length) { const empty = document.createElement('p'); empty.className = 'dialog-copy'; empty.textContent = 'No profiles match this filter.'; el['pov-grid'].append(empty) }
 }
 
-function drawPov(snapshot, canvas, account) { if (el['pov-view-mode'].value === 'map') drawMapPov(snapshot, canvas); else drawPerspectivePov(snapshot, canvas, account) }
+function drawPov(snapshot, canvas, account) { if (el['pov-view-mode'].value === 'map') { drawMapPov(snapshot, canvas); if (document.getElementById('pov-game-hud').checked) drawGameHud(canvas.getContext('2d'), canvas, state.telemetry.get(account.id)?.hud) } else drawPerspectivePov(snapshot, canvas, account) }
 function drawPovPlaceholder(canvas, status) { const context = canvas.getContext('2d'); context.fillStyle = '#070b10'; context.fillRect(0, 0, canvas.width, canvas.height); context.fillStyle = '#8f9baa'; context.font = '16px sans-serif'; context.textAlign = 'center'; context.fillText(['online', 'connected'].includes(status.status) ? 'Loading world…' : status.detail || 'Offline', canvas.width / 2, canvas.height / 2) }
 
 function drawMapPov(snapshot, canvas) {
@@ -2561,6 +2562,7 @@ function drawPerspectivePov(snapshot, canvas, account) {
   drawPovEntities(context, snapshot, canvas)
   drawCrosshair(context, canvas)
   if (state.settings.povShowHud !== false) drawPovHud(context, canvas, account)
+  if (document.getElementById('pov-game-hud').checked) drawGameHud(context, canvas, state.telemetry.get(account.id)?.hud)
   canvas.dataset.position = JSON.stringify(snapshot.position); canvas.dataset.radius = String(snapshot.radius || 6)
 }
 
@@ -2588,6 +2590,33 @@ function drawPovEntities(context, snapshot, canvas) {
   }
   context.restore()
 }
+
+function hudText(parts) { return (parts || []).map(part => part.text).join('') }
+function hudLine(parts, className = '') {
+  const line = document.createElement('div'); line.className = className
+  // Mask the complete string so names spanning formatting segments cannot leak.
+  if (state.settings.streamerMode) { line.textContent = maskText(hudText(parts)); return line }
+  for (const part of parts || []) { const span = document.createElement('span'); span.textContent = part.text; span.style.color = part.color; line.append(span) }
+  return line
+}
+function renderGameHud(hud) {
+  const root = document.getElementById('game-hud'); if (!root) return
+  root.replaceChildren()
+  if (hud?.scoreboard) { const board = document.createElement('div'); board.className = 'hud-scoreboard'; board.append(hudLine(hud.scoreboard.title, 'hud-title')); for (const item of hud.scoreboard.lines) board.append(hudLine(item.text)); root.append(board) }
+  for (const bar of hud?.bossBars || []) { const row = document.createElement('div'); row.className = 'hud-boss'; row.append(hudLine(bar.title, 'hud-title')); const track = document.createElement('div'); track.className = 'hud-bar'; const fill = document.createElement('div'); fill.style.width = `${bar.health * 100}%`; fill.style.backgroundColor = ({pink:'#ff80b5', blue:'#5555ff', red:'#ff5555', green:'#55cc55', yellow:'#eeee55', purple:'#aa55cc', white:'#eeeeee'})[bar.color]; track.append(fill); if (bar.divisions) track.style.setProperty('--divisions', String(bar.divisions)); track.classList.add('divided'); row.append(track); root.append(row) }
+  for (const effect of hud?.effects || []) { const row = document.createElement('div'); row.textContent = maskText(`${effect.label} ${effect.countdown}`); root.append(row) }
+  if (!root.childNodes.length) root.textContent = 'No active game HUD.'
+}
+function drawGameHud(context, canvas, hud) {
+  if (!hud) return
+  context.save(); const size = Math.max(10, canvas.width / 65); context.font = `${size}px monospace`; context.textBaseline = 'top'
+  function drawParts(parts, x, y, align) { const text = maskText(hudText(parts)); if (state.settings.streamerMode) { context.fillStyle = '#fff'; context.textAlign = align; context.fillText(text,x,y); return } const width = (parts || []).reduce((n,p) => n + context.measureText(p.text).width, 0); let left = align === 'right' ? x-width : align === 'center' ? x-width/2 : x; context.textAlign = 'left'; for (const p of parts || []) { context.fillStyle = p.color; context.fillText(p.text,left,y); left += context.measureText(p.text).width } }
+  let y = 8; for (const bar of hud.bossBars || []) { const w = canvas.width * .4, x = (canvas.width-w)/2; drawParts(bar.title,canvas.width/2,y,'center'); y += size+2; context.fillStyle='#222'; context.fillRect(x,y,w,5); context.fillStyle=({pink:'#ff80b5',blue:'#5555ff',red:'#ff5555',green:'#55cc55',yellow:'#eeee55',purple:'#aa55cc',white:'#eeeeee'})[bar.color]; context.fillRect(x,y,w*bar.health,5); context.fillStyle='#222'; for (let i=1;i<bar.divisions;i++) context.fillRect(x+w*i/bar.divisions,y,1,5); y += 9 }
+  if (hud.scoreboard) { const lines = [hud.scoreboard.title, ...hud.scoreboard.lines.map(l => l.text)]; const width = Math.min(canvas.width*.45, Math.max(...lines.map(l => context.measureText(maskText(hudText(l))).width), 0)+12); let top = Math.max(y+4,canvas.height*.3); context.fillStyle='#000a'; context.fillRect(canvas.width-width-5,top-4,width,lines.length*(size+3)+8); for (const line of lines) { drawParts(line,canvas.width-10,top,'right'); top += size+3 } }
+  context.textAlign='left'; context.fillStyle='#fff'; let effectY = y+4; for (const e of hud.effects || []) { context.fillText(maskText(`${e.label} ${e.countdown}`),8,effectY); effectY += size+3 }
+  context.restore()
+}
+
 function drawPovHud(context, canvas, account) {
   const telemetry = state.telemetry.get(account.id) || {}, snapshot = povSnapshots.get(account.id) || {}
   const health = Math.max(0, Math.min(20, Number(telemetry.health ?? snapshot.health) || 0)), food = Math.max(0, Math.min(20, Number(telemetry.food ?? snapshot.food) || 0))
