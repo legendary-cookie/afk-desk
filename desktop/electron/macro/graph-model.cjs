@@ -15,6 +15,27 @@ function normalizeGraph(input) {
   }
   return graph
 }
+// Validate supplied action values; missing values can be supplied by wires or defaults.
+function actionParamErrors(kind, params, skip = new Set()) {
+  const { STEP_TYPES } = require('./contract.cjs')
+  const schema = STEP_TYPES[kind]?.params
+  if (!schema) return []
+  const errors = []
+  for (const [name, spec] of Object.entries(schema)) {
+    if (skip.has(name) || !Object.hasOwn(params, name) || params[name] === undefined) continue
+    const value = params[name]
+    if (value === null && spec.default === null) continue
+    let valid = true
+    if (spec.type === 'number') valid = typeof value === 'number' && Number.isFinite(value) && (spec.min == null || value >= spec.min) && (spec.max == null || value <= spec.max)
+    else if (spec.type === 'string' || spec.type === 'boolean') valid = typeof value === spec.type
+    else if (spec.type === 'array') valid = Array.isArray(value)
+    else if (spec.type === 'condition') valid = typeof value === 'boolean' || (value !== null && typeof value === 'object' && !Array.isArray(value))
+    else if (spec.type === 'object') valid = value !== null && typeof value === 'object' && !Array.isArray(value)
+    if (valid && spec.enum) valid = spec.enum.includes(value)
+    if (!valid) errors.push({ name, message: `Invalid ${name} for ${kind}.` })
+  }
+  return errors
+}
 function validateGraph(graph, options = {}) {
   const errors = [], nodes = new Map(), edges = Array.isArray(graph && graph.edges) ? graph.edges : []
   const error = (code, path, message) => errors.push({ code, path, message })
@@ -144,4 +165,4 @@ function toV2(graph) {
   delete source.nodes; delete source.edges; delete source.vars; if (source.migration?.hadVersion) source.version = source.migration.version; else delete source.version; delete source.migration
   return source
 }
-module.exports = { normalizeGraph, validateGraph, expandGroups, validateCustom, migrateV2, toV2 }
+module.exports = { actionParamErrors, normalizeGraph, validateGraph, expandGroups, validateCustom, migrateV2, toV2 }

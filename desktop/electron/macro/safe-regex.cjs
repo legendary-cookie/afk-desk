@@ -5,7 +5,7 @@ function safeRegex(pattern) {
   if (typeof pattern !== 'string' || pattern.length > 200 || /\\[1-9]|\(\?/.test(pattern)) return false
   let inClass = false, escaped = false, separator = false, repeated = false
   const groups = []
-  let lastGroup = null
+  let lastGroup = null, repeatedAtom = null
   for (let i = 0; i < pattern.length; i++) {
     const c = pattern[i]
     if (escaped) { escaped = false; lastGroup = null; continue }
@@ -21,11 +21,16 @@ function safeRegex(pattern) {
       if (lastGroup && (lastGroup.repetition || lastGroup.alternative)) return false
       if (repeated && !separator) return false
       for (const group of groups) group.repetition = true
+      const prefix = pattern.slice(0, i)
+      const atom = prefix.match(/(\[[^\]]+\]|\\.|[^\\()[\]])$/)
+      repeatedAtom = lastGroup ? null : atom?.[1] || null
       repeated = true; separator = false; lastGroup = null
       if (c === '{') i += /^\{\d+(?:,\d*)?\}/.exec(pattern.slice(i))[0].length - 1
       continue
     }
-    if (repeated && /[_\-/: ]/.test(c)) separator = true
+    if (repeated && /[_\-/: ]/.test(c) && repeatedAtom) {
+      try { if (!new RegExp(`^(?:${repeatedAtom})$`).test(c)) separator = true } catch {}
+    }
     lastGroup = null
   }
   try { new RegExp(pattern); return true } catch { return false }

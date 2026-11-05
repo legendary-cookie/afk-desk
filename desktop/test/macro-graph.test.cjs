@@ -31,7 +31,7 @@ async function run(macro) {
   let time = 0
   const calls = [], facade = {}
   for (const method of FACADE_METHODS) facade[method] = async (account, args) => { calls.push([method, args]); return '' }
-  facade.state = () => ({ online: true, health: 20, food: 20, inventory: [], entities: [] })
+  facade.state = () => ({ online: true, health: 20, food: 7, inventory: [], entities: [] })
   facade.sessionId = () => 'session'
   facade.releaseOwner = () => {}
   const scheduler = { after(ms, fn) { let cancelled = false; if (ms >= 300000) return () => { cancelled = true }; queueMicrotask(() => { if (!cancelled) { time += ms; fn() } }); return () => { cancelled = true } }, cancelKey() {}, dispose() {} }
@@ -63,11 +63,11 @@ test('nested branches and loops preserve v2 calls and structure', async () => {
 
 test('value wires are evaluated from current account state', async () => {
   const graph = migrateV2({ trigger: { type: 'manual' }, defaultDelayMs: 0, steps: [{ type: 'selectHotbar', slot: 0 }] })
-  graph.nodes.push({ id: 'health', kind: 'health', params: {}, position: { x: 0, y: 0 } })
+  graph.nodes.push({ id: 'health', kind: 'food', params: {}, position: { x: 0, y: 0 } })
   const target = graph.nodes.find(n => n.kind === 'selectHotbar')
   graph.edges.push({ id: 'value', from: { node: 'health', port: 'value' }, to: { node: target.id, port: 'slot' } })
   assert.deepEqual(validateGraph(graph), [])
-  assert.deepEqual((await run(graph)).calls, [['selectHotbar', { slot: 20 }]])
+  assert.deepEqual((await run(graph)).calls, [['selectHotbar', { slot: 7 }]])
 })
 
 // Exercise the interpreter independently of the scheduler so value wiring and
@@ -90,6 +90,43 @@ async function interpret(nodes, edges, overrides = {}) {
 }
 const n = (id, kind, params = {}) => ({ id, kind, params })
 const e = (id, from, port, to, input = 'in') => ({ id, from: { node: from, port }, to: { node: to, port: input } })
+
+test('shared data dependencies are evaluated once per control step', async () => {
+  const nodes = [n('random', 'random')], edges = []
+  let prev = 'random'
+  for (let i = 0; i < 24; i++) {
+    const id = `math${i}`; nodes.push(n(id, 'math'))
+    edges.push(e(`a${i}`, prev, 'value', id, 'a'), e(`b${i}`, prev, 'value', id, 'b')); prev = id
+  }
+  nodes.push(n('set', 'setVar', { variable: 'result' }))
+  edges.push(e('control', 'start', 'out', 'set'), e('result', prev, 'value', 'set', 'value'))
+  const result = await interpret(nodes, edges)
+  assert.equal(result.variables.result, 0.5 * 2 ** 24)
+})
+
+test('long data evaluation yields to cancellation', async () => {
+  const { runGraph } = require('../electron/macro/graph-interpreter.cjs')
+  const controller = new AbortController(), nodes = [n('start', 'trigger.manual'), n('seed', 'health')], edges = []
+  let previous = 'seed'
+  for (let i = 0; i < 130; i++) {
+    const id = `v${i}`; nodes.push(n(id, 'math', { b: 1 }))
+    edges.push(e(`wire${i}`, previous, 'value', id, 'a')); previous = id
+  }
+  nodes.push(n('action', 'selectHotbar', { slot: 0 }))
+  edges.push(e('control', 'start', 'out', 'action'), e('last', previous, 'value', 'action', 'slot'))
+  const ctx = { macro: { nodes, edges }, accountId: 'a', record: { trigger: 'manual' }, signal: controller.signal }
+  const engine = { _state: () => ({ health: 1 }), _throwIfAborted: () => { if (controller.signal.aborted) throw Error('cancelled') }, _stepFacade: async () => assert.fail('cancelled action executed') }
+  setImmediate(() => controller.abort())
+  await assert.rejects(runGraph(engine, ctx), /cancelled/)
+})
+
+test('graph action parameters reject unsafe literals and wired values', async () => {
+  const { validateMacro } = require('../electron/macro/model.cjs')
+  const macro = { version: 3, name: 'click', targets: { mode: 'all' }, nodes: [n('start', 'trigger.manual'), n('click', 'autoclick', { button: 'left', cps: 100000 })], edges: [e('control', 'start', 'out', 'click')] }
+  assert.ok(validateMacro(macro).some(error => error.path.endsWith('/cps')))
+  const nodes = [n('value', 'math', { a: 50000, b: 50000 }), n('click', 'autoclick', { button: 'left', cps: 5 })]
+  await assert.rejects(interpret(nodes, [e('control', 'start', 'out', 'click'), e('wire', 'value', 'value', 'click', 'cps')]), /Invalid cps/)
+})
 
 test('switch, parallel and merge route branches once', async () => {
   const nodes = [n('s', 'switch', { value: 'b', cases: ['a', 'b'] }), n('p', 'parallel'), n('a', 'selectHotbar', { slot: 1 }), n('b', 'selectHotbar', { slot: 2 }), n('m', 'merge'), n('end', 'selectHotbar', { slot: 3 })]

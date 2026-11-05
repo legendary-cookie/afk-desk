@@ -514,6 +514,14 @@ function validateMacro(macro, options = {}) {
 
     if (macro.version === 3) {
       errors.push(...require('./graph-model.cjs').validateGraph(macro).map(({ path, message }) => ({ path: `/${path.replace(/\./g, '/')}`, message })))
+      if (!errors.some(error => error.path.startsWith('/nodes') || error.path.startsWith('/edges'))) {
+        const { expandGroups, actionParamErrors } = require('./graph-model.cjs')
+        const expanded = expandGroups(macro)
+        for (const node of expanded.nodes) {
+          const wired = new Set(expanded.edges.filter(edge => edge.to.node === node.id).map(edge => edge.to.port))
+          for (const error of actionParamErrors(node.kind, node.params || {}, wired)) errors.push({ path: `/nodes/${node._groupId || node.id}/params/${error.name}`, message: error.message })
+        }
+      }
       if (Array.isArray(macro.stopWhen)) macro.stopWhen.forEach((condition, index) => validateCondition(condition, `/stopWhen/${index}`, errors))
       return errors
     }

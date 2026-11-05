@@ -80,6 +80,7 @@ test('sandboxed preload imports only electron and canvas capture avoids page pix
 test('ignore regex rejects pathological patterns and long patterns', () => {
   const { safeRegex } = require('../electron/macro/safe-regex.cjs')
   for (const pattern of ['^(a|a|a|a|a)+$', '(a+)+$', '(a+)(b+)', 'a'.repeat(201)]) assert.equal(safeRegex(pattern), false)
+  for (const pattern of ['.*_.*_.*X', '.*_.*_.*_.*_.*X', '\\w+_\\w+_\\w+X', '(.)*_(.)*_(.)*X']) assert.equal(safeRegex(pattern), false)
   assert.equal(safeRegex('^Friend.*$'), true)
   for (const pattern of ['^(foo|bar)_\\d+$', '[a-z]+_[0-9]+']) assert.equal(safeRegex(pattern), true, pattern)
   for (const pattern of ['(a|a)*', '(\\w+\\s?)+', 'a+a+']) assert.equal(safeRegex(pattern), false, pattern)

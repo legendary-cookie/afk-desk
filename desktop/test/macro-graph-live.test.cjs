@@ -15,10 +15,10 @@ const graph = { version: 3, nodes: [
 
 test('interpreter emits node, value and pinned failure on the existing event stream', async () => {
   const events = [], ctx = { macro: graph, macroId: 'm', accountId: 'a', runId: 'r', record: { trigger: 'manual' }, signal: new AbortController().signal }
-  const engine = { _emit: e => events.push(e), _throwIfAborted() {}, _state: () => ({ health: 12 }), _stepFacade: async () => { throw Error('bad <player>') } }
+  const engine = { _emit: e => events.push(e), _throwIfAborted() {}, _state: () => ({ health: 8 }), _stepFacade: async () => { throw Error('bad <player>') } }
   await assert.rejects(runGraph(engine, ctx), /bad/)
   assert.deepEqual(events.map(e => [e.status, e.nodeId || e.edgeId]), [['graphNode', 'start'], ['graphValue', 'control'], ['graphNode', 'action'], ['graphValue', 'value'], ['graphError', 'action']])
-  assert.equal(events[3].value, '12')
+  assert.equal(events[3].value, '8')
   assert.equal(events[4].error.message, 'bad <player>')
   assert.ok(events.every(e => e.runId === 'r' && e.accountId === 'a' && e.macroId === 'm'))
 })

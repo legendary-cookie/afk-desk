@@ -3,6 +3,7 @@ const { validateGraph, expandGroups } = require('./graph-model.cjs')
 const { NODE_KINDS } = require('./graph-contract.cjs')
 const { LIMITS, MacroActionError } = require('./contract.cjs')
 const { safeRegex } = require('./safe-regex.cjs')
+const { actionParamErrors } = require('./graph-model.cjs')
 
 // Runs inside MacroEngine's run context, reusing its budgets, facade and ownership.
 async function runGraph(engine, ctx) {
@@ -11,20 +12,24 @@ async function runGraph(engine, ctx) {
   const nodes = new Map(graph.nodes.map((node, index) => [node.id, { node, index }]))
   const outgoing = (id, port) => graph.edges.filter(e => e.from.node === id && e.from.port === port).map(e => { emit({ status: 'graphValue', edgeId: e.id, value: 'flow' }); return e.to.node })
   const incoming = (id, port) => graph.edges.find(e => e.to.node === id && e.to.port === port)
-  const counts = new Map(), activeValues = new Set(), loopItems = new Map(), reportedErrors = new WeakSet()
+  const counts = new Map(), loopItems = new Map(), reportedErrors = new WeakSet()
   const emit = data => engine._emit?.({ runId: ctx.runId, macroId: ctx.macroId, accountId: ctx.accountId, ...data, ...(data.nodeId ? { nodeId: nodes.get(data.nodeId)?.node._groupId || data.nodeId } : {}) })
   function displayValue(value) {
     try { return String(typeof value === 'string' ? value : JSON.stringify(value) ?? String(value)).slice(0, 500) } catch { return '[Unserializable value]' }
   }
   const budget = Number.isFinite(graph.nodeStepBudget) ? Math.max(1, Math.floor(graph.nodeStepBudget)) : 10000
-  function value(id, port) {
+  async function value(id, port, evaluation) {
+    const { cache, activeValues } = evaluation
     const key = `${id}:${port}`
+    if (cache.has(key)) return cache.get(key)
+    if (++evaluation.count > 10000) throw new MacroActionError('INVALID', 'Data evaluation budget exceeded.')
+    if (evaluation.count % 64 === 0) { await new Promise(resolve => setImmediate(resolve)); engine._throwIfAborted(ctx) }
     if (activeValues.has(key)) throw new MacroActionError('INVALID', 'Value cycle detected.')
     const entry = nodes.get(id), node = entry.node
     activeValues.add(key)
     try {
-      const p = params(node), state = engine._state(ctx.accountId)
-      switch (node.kind) {
+      const p = await params(node, evaluation), state = engine._state(ctx.accountId)
+      const result = (() => { switch (node.kind) {
         case 'inventoryCount': return (state.inventory || []).filter(i => String(i.name || '').includes(p.name || '')).reduce((n, i) => n + (Number(i.count) || 0), 0)
         case 'entityCount': return (state.entities || []).length
         case 'nearestEntity': return (state.entities || []).filter(e => !p.entityType || p.entityType === 'any' || e.type === p.entityType).slice().sort((a, b) => a.distance - b.distance)[0]
@@ -44,7 +49,9 @@ async function runGraph(engine, ctx) {
         case 'math': switch (p.operation) { case 'subtract': return p.a - p.b; case 'multiply': return p.a * p.b; case 'divide': return p.a / p.b; default: return Number(p.a) + Number(p.b) }
         case 'compare': switch (p.operator) { case '!=': return p.a !== p.b; case '<': return p.a < p.b; case '<=': return p.a <= p.b; case '>': return p.a > p.b; case '>=': return p.a >= p.b; default: return p.a === p.b }
         default: throw new MacroActionError('UNSUPPORTED', `Unsupported value node ${node.kind}.`)
-      }
+      } })()
+      cache.set(key, result)
+      return result
     } catch (error) {
       if (error instanceof Error && !reportedErrors.has(error)) {
         reportedErrors.add(error)
@@ -53,13 +60,13 @@ async function runGraph(engine, ctx) {
       throw error
     } finally { activeValues.delete(key) }
   }
-  function params(node) {
+  async function params(node, evaluation = { cache: new Map(), activeValues: new Set(), count: 0 }) {
     const result = { ...node.params }
     for (const [name, spec] of Object.entries(NODE_KINDS[node.kind].inputs)) {
       if (spec.type === 'control') continue
       const edge = incoming(node.id, name)
       if (edge) {
-        result[name] = value(edge.from.node, edge.from.port)
+        result[name] = await value(edge.from.node, edge.from.port, evaluation)
         emit({ status: 'graphValue', edgeId: edge.id, value: displayValue(result[name]) })
       }
     }
@@ -84,7 +91,9 @@ async function runGraph(engine, ctx) {
     if (visits > budget) throw new MacroActionError('INVALID', `Node ${id} exceeded its step budget.`)
     if (node.disabled) { for (const next of outgoing(id, 'out')) await walk(next, options); return }
     emit({ status: 'graphNode', nodeId: id })
-    const p = params(node), type = node.kind
+    const p = await params(node), type = node.kind
+    const paramErrors = actionParamErrors(node.kind, p)
+    if (paramErrors.length) throw new MacroActionError('INVALID', paramErrors[0].message)
     if (type.startsWith('trigger.')) { for (const next of outgoing(id, 'out')) await walk(next, options); return }
     if (type === 'if') {
       await engine._gate(ctx, path, type)
@@ -150,7 +159,7 @@ async function runGraph(engine, ctx) {
       for (let i = 0; i < limit; i++) {
         engine._throwIfAborted(ctx)
         if (type === 'while') {
-          const current = params(node).condition
+          const current = (await params(node)).condition
           if (!(typeof current === 'boolean' ? current : engine._evaluate(ctx, current, 0))) break
         } else loopItems.set(id, items[i])
         const start = engine.now()
@@ -164,7 +173,7 @@ async function runGraph(engine, ctx) {
     if (type === 'waitUntil') {
       await engine._gate(ctx, path, type)
       while (true) {
-        const condition = params(node).condition
+        const condition = (await params(node)).condition
         if (typeof condition === 'boolean' ? condition : engine._evaluate(ctx, condition, 0)) break
         await engine._sleep(ctx, Math.max(LIMITS.minLoopYieldMs, Number(p.intervalMs) || 100))
       }
