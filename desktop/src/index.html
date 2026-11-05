@@ -328,7 +328,7 @@
           <label class="toggle-row full">
             <input id="auto-deposit-setting" type="checkbox" />
             <span class="toggle" aria-hidden="true"></span>
-            <span><strong>Auto-deposit inventory</strong><small>Off by default. Moves unlocked inventory stacks only into a visible chest, trapped chest, or barrel and records its coordinates.</small></span>
+            <span><strong>Auto-deposit inventory</strong><small>Off by default. Moves unlocked inventory stacks only into a visible chest, trapped chest, or barrel and records its coordinates. Locked items are never deposited or dropped. Safety features can still use them.</small></span>
           </label>
           <div class="field full" id="bedrock-deposit-target"><span>Bedrock deposit target coordinates</span><div class="settings-visual-grid"><input id="bedrock-deposit-x" type="number" step="1" placeholder="X" aria-label="Target X" /><input id="bedrock-deposit-y" type="number" step="1" placeholder="Y" aria-label="Target Y" /><input id="bedrock-deposit-z" type="number" step="1" placeholder="Z" aria-label="Target Z" /></div><button id="bedrock-deposit-facing" type="button" class="button secondary">Use my current position facing block</button><small>Point at a chest or barrel about two blocks away, then verify the coordinates. Bedrock cannot inspect blocks.</small></div>
           <label class="field full"><span>Auto-deposit search range (blocks)</span><input id="auto-deposit-range" type="number" min="1" max="16" step="1" value="5" /><small>Only visible containers within this distance are eligible. Default: 5 blocks.</small></label>

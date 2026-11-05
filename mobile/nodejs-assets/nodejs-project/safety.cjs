@@ -33,7 +33,7 @@ function chooseArmor(bot, account, destination, slot, suffix) {
     const levels = enchants.levels || enchants
     if (Array.isArray(levels) ? levels.some(e => /(?:binding_curse|curse_of_binding)$/.test(String(e.name ?? e.id))) : Object.keys(levels || {}).some(key => /(?:binding_curse|curse_of_binding)$/.test(key))) return null
   } catch { return null }
-  const candidates = (bot.inventory?.items?.() || []).filter(item => item.slot >= 9 && item.slot <= 44 && !locks.has(Number(item.slot))).map(item => ({ item, stats: armorStats(item, suffix, bot.registry) })).filter(entry => entry.stats)
+  const candidates = (bot.inventory?.items?.() || []).filter(item => item.slot >= 9 && item.slot <= 44).map(item => ({ item, stats: armorStats(item, suffix, bot.registry) })).filter(entry => entry.stats)
   if (currentStats) candidates.push({ item: current, stats: currentStats })
   candidates.sort((a, b) => {
     const healthy = x => x.durability >= threshold ? 1 : 0
@@ -45,8 +45,7 @@ function shouldEat(account, bot, ignoreWindow = false) {
   return account.autoEat === true && Number.isFinite(bot.food) && bot.food <= (account.autoEatThreshold ?? 14) && (ignoreWindow || !bot.currentWindow)
 }
 function pickFood(items, foods, locked = [], priority = 'hotbar', allowGoldenApples = false) {
-  const locks = new Set(locked.map(Number))
-  return (items || []).filter(item => !locks.has(Number(item.slot)) && foods?.[item.name] && (allowGoldenApples || !['golden_apple', 'enchanted_golden_apple'].includes(item.name))).sort((a, b) => {
+  return (items || []).filter(item => item.slot >= 9 && item.slot <= 44 && foods?.[item.name] && (allowGoldenApples || !['golden_apple', 'enchanted_golden_apple'].includes(item.name))).sort((a, b) => {
     const hot = (item) => item.slot >= 36 && item.slot <= 44 ? 1 : 0
     const value = (item) => Number(foods[item.name].foodPoints || 0) + Number(foods[item.name].saturation || 0)
     return priority === 'nutrition' ? value(b) - value(a) || hot(b) - hot(a) : hot(b) - hot(a) || value(b) - value(a)
@@ -71,8 +70,7 @@ function bottleAmplifier(item) {
 }
 function pickConsumable(account, bot, lastDamage, lastBottle, now = Date.now(), ignoreWindow = false) {
   if ((!ignoreWindow && bot.currentWindow) || !(bot.health > 0)) return null
-  const locks = new Set((account.lockedInventorySlots || []).map(Number))
-  const items = (bot.inventory?.items?.() || []).filter(item => item.slot >= 9 && item.slot <= 44 && !locks.has(Number(item.slot)))
+  const items = (bot.inventory?.items?.() || []).filter(item => item.slot >= 9 && item.slot <= 44)
   if (account.autoGoldenApple && (bot.health <= (Number(account.autoGoldenAppleHealth ?? 10)) || (lastDamage != null && now - lastDamage < 10000 && (!hasEffect(bot, 'Absorption') || !hasEffect(bot, 'Regeneration'))))) {
     const preferred = account.autoGoldenApplePreference === 'enchanted' ? 'enchanted_golden_apple' : 'golden_apple'
     const apple = items.find(item => item.name === preferred) || items.find(item => ['golden_apple', 'enchanted_golden_apple'].includes(item.name))
@@ -151,7 +149,7 @@ function installSafety(manager, account, session, state, { actionTimeoutMs = INV
   const equipmentWanted = () => {
     const current = session.account
     const locks = new Set((current.lockedInventorySlots || []).map(Number))
-    const totem = (current.autoTotem || current.lowHealthTotem && shouldLowHealthAct(current, bot.health)) && !locks.has(45) && bot.inventory?.slots?.[45]?.name !== 'totem_of_undying' && bot.inventory?.items?.().some(item => item.name === 'totem_of_undying' && !locks.has(Number(item.slot)))
+    const totem = (current.autoTotem || current.lowHealthTotem && shouldLowHealthAct(current, bot.health)) && !locks.has(45) && bot.inventory?.slots?.[45]?.name !== 'totem_of_undying' && bot.inventory?.items?.().some(item => item.name === 'totem_of_undying' && item.slot >= 9 && item.slot <= 44)
     return Boolean(totem || current.autoArmor && armorSlots.some(([destination, slot, suffix]) => chooseArmor(bot, current, destination, slot, suffix)))
   }
   const consumableWanted = () => {
@@ -240,13 +238,19 @@ function installSafety(manager, account, session, state, { actionTimeoutMs = INV
           const food = pickConsumable(current, bot, lastDamage, lastBottle) || (shouldEat(current, bot) && pickFood(bot.inventory?.items?.(), bot.registry?.foodsByName, [...locks], current.autoEatPriority, current.autoEatAllowGoldenApples))
           if (!food) return
           const source = Number(food.slot)
-          const target = source >= 36 && source <= 44 ? source : Array.from({ length: 9 }, (_, i) => i + 36).find(slot => !locks.has(slot))
+          const hotbar = Array.from({ length: 9 }, (_, i) => i + 36).filter(slot => !locks.has(slot))
+          const target = source >= 36 && source <= 44 ? source : (locks.has(source) ? hotbar.find(slot => !bot.inventory?.slots?.[slot]) : undefined) ?? hotbar[0]
           if (target === undefined) { waiting(actionLabel, 'all hotbar slots locked'); return }
           const previous = bot.quickBarSlot
+          const lockedSource = locks.has(source) && source !== target
+          const staging = lockedSource && bot.inventory?.slots?.[target] ? Array.from({ length: 36 }, (_, i) => i + 9).find(slot => slot !== source && slot !== target && !locks.has(slot) && !bot.inventory?.slots?.[slot]) : undefined
+          if (lockedSource && bot.inventory?.slots?.[target] && staging === undefined) { waiting(actionLabel, 'no empty unlocked slot'); return }
+          let staged = false
           let swapped = false
           let release
           session.safetyInputDone = new Promise(resolve => { release = resolve })
           try {
+            if (staging !== undefined) { await scope.wait(() => bot.moveSlotItem(target, staging)); staged = true }
             if (source !== target) { await scope.wait(() => bot.moveSlotItem(source, target)); swapped = true }
             scope.check()
             if (blocked()) { waiting(actionLabel, blocked()); return }
@@ -262,8 +266,10 @@ function installSafety(manager, account, session, state, { actionTimeoutMs = INV
               if (swapped && !scope.signal.aborted) await scope.wait(() => boundedAction(async cleanup => {
                 while (manager.sessions.get(account.id) === session && bot.currentWindow) await cleanup.wait(() => new Promise(resolve => setTimeout(resolve, 50)))
                 if (manager.sessions.get(account.id) !== session) return
-                if (bot.inventory?.slots?.[target]) await cleanup.wait(() => bot.moveSlotItem(target, source))
-                else if (bot.inventory?.slots?.[source]) await cleanup.wait(() => bot.moveSlotItem(source, target))
+                const remaining = bot.inventory?.slots?.[target]
+                if (remaining && (!lockedSource || remaining.name === food.name)) await cleanup.wait(() => bot.moveSlotItem(target, source))
+                else if (!lockedSource && bot.inventory?.slots?.[source]) await cleanup.wait(() => bot.moveSlotItem(source, target))
+                if (staged && !bot.inventory?.slots?.[target]) await cleanup.wait(() => bot.moveSlotItem(staging, target))
               }, cleanupTimeoutMs, 'Inventory restoration', scope.signal))
             } finally {
               try {
@@ -274,17 +280,23 @@ function installSafety(manager, account, session, state, { actionTimeoutMs = INV
           }
         })
       } else if (config.autoOminousBottle) {
-        const locks = new Set((config.lockedInventorySlots || []).map(Number))
-        const bottle = bot.inventory?.items?.().some(item => item.name === 'ominous_bottle' && item.slot >= 9 && item.slot <= 44 && !locks.has(Number(item.slot)))
-        waiting('Ominous Bottle', !(bot.health > 0) ? 'player not alive' : !bottle ? 'no unlocked bottles' : hasRaid(bot) ? 'raid active' : ['BadOmen', 'RaidOmen', 'TrialOmen'].some(effect => hasEffect(bot, effect)) ? 'omen effect active' : 'cooldown')
+        const bottle = bot.inventory?.items?.().some(item => item.name === 'ominous_bottle' && item.slot >= 9 && item.slot <= 44)
+        waiting('Ominous Bottle', !(bot.health > 0) ? 'player not alive' : !bottle ? 'no bottles' : hasRaid(bot) ? 'raid active' : ['BadOmen', 'RaidOmen', 'TrialOmen'].some(effect => hasEffect(bot, effect)) ? 'omen effect active' : 'cooldown')
       }
       if (config.autoTotem || config.lowHealthTotem && shouldLowHealthAct(config, bot.health)) {
         await run('Auto totem', async scope => {
           const current = session.account
           const locks = new Set((current.lockedInventorySlots || []).map(Number))
           if (!(current.autoTotem || current.lowHealthTotem && shouldLowHealthAct(current, bot.health)) || locks.has(45) || bot.inventory?.slots?.[45]?.name === 'totem_of_undying') return
-          const totem = bot.inventory?.items?.().find(item => item.name === 'totem_of_undying' && !locks.has(Number(item.slot)))
-          if (totem) { await scope.wait(() => bot.equip(totem, 'off-hand')); status('Auto totem: equipped') }
+          const totem = bot.inventory?.items?.().find(item => item.name === 'totem_of_undying' && item.slot >= 9 && item.slot <= 44)
+          if (totem) {
+            if (locks.has(Number(totem.slot)) && bot.inventory?.slots?.[45]) {
+              const empty = Array.from({ length: 36 }, (_, i) => i + 9).find(slot => !locks.has(slot) && !bot.inventory?.slots?.[slot])
+              if (empty === undefined) { waiting('Auto totem', 'no empty unlocked slot'); return }
+              await scope.wait(() => bot.moveSlotItem(45, empty))
+            }
+            await scope.wait(() => bot.equip(totem, 'off-hand')); status('Auto totem: equipped')
+          }
         })
       }
       if (config.autoArmor) {
@@ -294,7 +306,15 @@ function installSafety(manager, account, session, state, { actionTimeoutMs = INV
             const current = session.account
             if (manager.sessions.get(account.id) !== session || blocked() || !current.autoArmor) return
             const item = chooseArmor(bot, current, destination, slot, suffix)
-            if (item) { await scope.wait(() => bot.equip(item, destination)); status('Auto armor: equipped') }
+            if (item) {
+              const locks = new Set((current.lockedInventorySlots || []).map(Number))
+              if (locks.has(Number(item.slot)) && bot.inventory?.slots?.[slot]) {
+                const empty = Array.from({ length: 36 }, (_, i) => i + 9).find(candidate => !locks.has(candidate) && !bot.inventory?.slots?.[candidate])
+                if (empty === undefined) { waiting('Auto armor', 'no empty unlocked slot'); continue }
+                await scope.wait(() => bot.moveSlotItem(slot, empty))
+              }
+              await scope.wait(() => bot.equip(item, destination)); status('Auto armor: equipped')
+            }
           }
         })
       }

@@ -9,8 +9,8 @@ for (const file of ['../electron/safety.cjs', '../../mobile/nodejs-assets/nodejs
     assert.equal(shouldEat({}, { food: 1 }), false)
     const items = [{ name: 'steak', slot: 9 }, { name: 'bread', slot: 36 }, { name: 'steak', slot: 37 }]
     const foods = { steak: { foodPoints: 8, saturation: 12 }, bread: { foodPoints: 5, saturation: 6 } }
-    assert.equal(pickFood(items, foods, [37]).name, 'bread')
-    assert.equal(pickFood(items, foods, [36, 37]).slot, 9)
+    assert.equal(pickFood(items, foods, [37]).name, 'steak')
+    assert.equal(pickFood(items, foods, [36, 37]).slot, 37)
     assert.equal(shouldLowHealthAct({ lowHealthTotem: true }, 6), true)
     assert.equal(shouldLowHealthAct({ lowHealthDisconnect: true }, 7), false)
     assert.equal(shouldLowHealthAct({}, 1), false)
@@ -105,13 +105,13 @@ for (const file of ['../electron/safety.cjs', '../../mobile/nodejs-assets/nodejs
     assert.equal(pickConsumable(config, bot, null, 40000, 50000), null)
     bot.entity.effects[34] = {}; assert.equal(pickConsumable(config, bot, null, null, 50000), null)
     delete bot.entity.effects[34]; bot.entity.effects[30] = {}; assert.equal(pickConsumable(config, bot, null, null, 50000), null)
-    delete bot.entity.effects[30]; assert.equal(pickConsumable({...config, lockedInventorySlots: [9]}, bot, null, null, 50000), null)
+    delete bot.entity.effects[30]; assert.equal(pickConsumable({...config, lockedInventorySlots: [9]}, bot, null, null, 50000), items[0])
     const apple = {autoGoldenApple: true, autoGoldenAppleHealth: 10, autoGoldenApplePreference: 'enchanted'}
     assert.equal(pickConsumable(apple, bot, null, null, 50000), null)
     assert.equal(pickConsumable(apple, bot, 45000, null, 50000), items[2])
     bot.entity.effects[21] = {}; bot.entity.effects[9] = {}
     assert.equal(pickConsumable(apple, bot, 45000, null, 50000), null)
-    bot.health = 10; assert.equal(pickConsumable({...apple, lockedInventorySlots: [11]}, bot, null, null, 50000), items[1])
+    bot.health = 10; assert.equal(pickConsumable({...apple, lockedInventorySlots: [11]}, bot, null, null, 50000), items[2])
     bot.currentWindow = {}; assert.equal(pickConsumable(apple, bot, null, null, 50000), null)
   })
 }
@@ -153,12 +153,55 @@ for (const file of ['../electron/safety.cjs', '../../mobile/nodejs-assets/nodejs
     const config = {autoOminousBottle: true}
     assert.equal(pickConsumable(config, bot), items[1])
     assert.equal(pickConsumable({...config, autoOminousOrder: 'lowest'}, bot), items[2])
-    assert.equal(pickConsumable({...config, lockedInventorySlots: [10]}, bot), items[0])
-    assert.equal(pickConsumable({...config, autoOminousOrder: 'lowest', lockedInventorySlots: [11]}, bot), items[0])
+    assert.equal(pickConsumable({...config, lockedInventorySlots: [10]}, bot), items[1])
+    assert.equal(pickConsumable({...config, autoOminousOrder: 'lowest', lockedInventorySlots: [11]}, bot), items[2])
     for (const id of [1, 2, 3]) { bot.entity.effects[id] = {}; assert.equal(pickConsumable(config, bot), null); delete bot.entity.effects[id] }
     for (const title of [{translate: 'event.minecraft.raid'}, {translate: 'event.minecraft.raid.victory'}, JSON.stringify({translate: 'event.minecraft.raid.defeat'}), 'Raid - Raiders Remaining: 2']) {
       bot.bossBars = [{title}]; assert.equal(pickConsumable(config, bot), null)
     }
     bot.bossBars = [{title: 'Dragon'}]; assert.equal(pickConsumable(config, bot), items[1])
+  })
+}
+
+for (const file of ['../electron/safety.cjs', '../../mobile/nodejs-assets/nodejs-project/safety.cjs']) {
+  const { installSafety } = require(file), { EventEmitter } = require('node:events')
+  for (const bottle of [true, false]) test(`${file}: uses locked ${bottle ? 'hotbar bottle' : 'inventory food'} safely`, async t => {
+    const bot = new EventEmitter(), slots = []
+    const source = bottle ? 37 : 9
+    slots[source] = { name: bottle ? 'ominous_bottle' : 'bread', slot: source, type: 7, count: 2 }
+    if (!bottle) { for (let slot = 37; slot <= 44; slot++) slots[slot] = { name: 'tool', slot } }
+    const moves = []
+    Object.assign(bot, { health: 20, food: 1, quickBarSlot: 2, entity: { effects: {} }, registry: { foodsByName: { bread: {} } }, inventory: { slots, items: () => slots.filter(Boolean) },
+      setQuickBarSlot(n) { this.quickBarSlot = n },
+      async moveSlotItem(a, b) { moves.push([a, b]); if (b === source) assert.equal(slots[a]?.name, 'bread'); [slots[a], slots[b]] = [slots[b], slots[a]]; if (slots[a]) slots[a].slot = a; if (slots[b]) slots[b].slot = b },
+      async consume() { assert.equal(this.quickBarSlot, 1); slots[37].count-- },
+      activateItem() { assert.equal(this.quickBarSlot, 1); this.emit('heldItemChanged', { type: 7, count: 1 }) }, deactivateItem() {} })
+    const account = { id: 'a', autoEat: !bottle, autoOminousBottle: bottle, lockedInventorySlots: bottle ? [37] : [9, 36] }
+    const session = { bot, account, ready: true }, manager = { sessions: new Map([['a', session]]), emit() {}, async withInventoryAction(id, fn) { await fn() } }
+    installSafety(manager, account, session, {}); t.after(() => clearInterval(session.safetyTimer))
+    bot.emit('health'); await new Promise(resolve => setImmediate(resolve))
+    assert.equal(bot.quickBarSlot, 2)
+    assert.equal(slots[source].name, bottle ? 'ominous_bottle' : 'bread')
+    if (!bottle) { assert.equal(slots[37].name, 'tool'); assert.ok(moves.length >= 3); assert.ok(moves.every(([a,b]) => a !== 36 && b !== 36)) }
+    else assert.deepEqual(moves, [])
+  })
+}
+
+for (const file of ['../electron/safety.cjs', '../../mobile/nodejs-assets/nodejs-project/safety.cjs']) {
+  for (const armor of [false, true]) test(`${file}: equips locked ${armor ? 'armor' : 'totem'} without displacing equipment into its slot`, async t => {
+    const { installSafety } = require(file), { EventEmitter } = require('node:events')
+    const bot = new EventEmitter(), slots = [], destination = armor ? 5 : 45
+    slots[9] = { slot: 9, name: armor ? 'diamond_helmet' : 'totem_of_undying' }
+    slots[destination] = { slot: destination, name: armor ? 'iron_helmet' : 'shield' }
+    Object.assign(bot, { health: 20, inventory: { slots, items: () => slots.filter(Boolean) },
+      async moveSlotItem(a, b) { assert.notEqual(b, 9); [slots[a], slots[b]] = [slots[b], slots[a]]; if (slots[b]) slots[b].slot = b },
+      async equip(item) { assert.equal(slots[destination], undefined); slots[destination] = item; slots[9] = undefined } })
+    const account = { id: 'a', autoArmor: armor, autoTotem: !armor, lockedInventorySlots: [9] }, session = { bot, account, ready: true }
+    const manager = { sessions: new Map([['a', session]]), emit() {}, async withInventoryAction(id, fn) { await fn() } }
+    installSafety(manager, account, session, {}); t.after(() => clearInterval(session.safetyTimer))
+    bot.emit('health'); await new Promise(resolve => setImmediate(resolve))
+    assert.equal(slots[destination].name, armor ? 'diamond_helmet' : 'totem_of_undying')
+    assert.equal(slots[9], undefined)
+    assert.equal(slots[10].name, armor ? 'iron_helmet' : 'shield')
   })
 }

@@ -9,7 +9,7 @@ test('armor chooses healthy material, protection and durability, respecting lock
   piece(5, 'diamond_helmet', 96, 4); piece(9, 'iron_helmet'); piece(10, 'diamond_helmet', 20, 1); piece(11, 'diamond_helmet', 10, 2)
   const bot = {inventory: {slots, items: () => slots.filter(Boolean)}}
   assert.equal(chooseArmor(bot, {}, 'head', 5, 'helmet').slot, 11)
-  assert.equal(chooseArmor(bot, {lockedInventorySlots: [11]}, 'head', 5, 'helmet').slot, 10)
+  assert.equal(chooseArmor(bot, {lockedInventorySlots: [11]}, 'head', 5, 'helmet').slot, 11)
   assert.equal(chooseArmor(bot, {lockedInventorySlots: [5]}, 'head', 5, 'helmet'), null)
   assert.equal(chooseArmor(bot, {autoArmorThreshold: 0}, 'head', 5, 'helmet'), null)
   slots[5] = {name: 'elytra'}
