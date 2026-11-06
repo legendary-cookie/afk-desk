@@ -1021,7 +1021,11 @@ class BotManager {
     if (action === 'use-crosshair') {
       if (session.worldUsing) throw new Error('A world interaction is already running.')
       const block = crosshairBlock(bot, false)
-      if (!block) { bot.activateItem(); return { used: true } }
+      if (!block) {
+        if (bot.registry?.blocksByName?.[bot.heldItem?.name]) throw new Error("Can't place: nothing in reach")
+        bot.activateItem()
+        return { used: true }
+      }
       const face = blockFaceVector(block.face)
       session.worldUsing = true
       try {
@@ -1521,7 +1525,7 @@ class BotManager {
     session.account.environmentalMovement = enabled !== false
     if (session.physicsRestoreTimer) this.clearAntiAfkTimer(session.physicsRestoreTimer)
     session.physicsRestoreTimer = null
-    session.bot.physicsEnabled = enabled !== false
+    session.bot.physicsEnabled = enabled !== false || this.hasMovementClaims(session)
     resetFluidMotion(session.fluidMotion, enabled === false ? 'disabled' : 'checking')
     this.emitTelemetry(id)
   }

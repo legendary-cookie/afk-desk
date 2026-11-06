@@ -33,6 +33,8 @@ let povLastAnimationAt = 0
 let povLookAnimationFrame = null
 let povLookDelta = { accountId: null, yaw: 0, pitch: 0 }
 let povDrag = null
+let povSuppressClick = false
+let povStatusTimer = null
 
 const ENCHANTMENT_DETAILS = {
   aqua_affinity: [1, 'Speeds up underwater mining.'],
@@ -133,7 +135,7 @@ const el = Object.fromEntries([
   'macro-canvas', 'macro-simple-toggle', 'macro-trigger-heading', 'macro-graph-live', 'macro-step-picker', 'macro-step-list', 'macro-steps-error', 'macro-runs-view', 'macro-runs-caption', 'macro-refresh-runs', 'macro-runs-list', 'notifications-panel', 'add-notification-channel', 'notification-channel-list',
   'notification-channel-dialog', 'notification-channel-form', 'notification-channel-dialog-title', 'close-notification-channel', 'notify-channel-id', 'notify-channel-type', 'notify-channel-name', 'notify-channel-enabled', 'notify-discord-fields', 'notify-webhook-url',
   'notify-telegram-fields', 'notify-bot-token', 'notify-chat-id', 'notify-events-grid', 'notify-account-mode', 'notify-accounts-checklist', 'notify-include-timestamp', 'notify-channel-error', 'delete-notification-channel', 'test-notification-channel',
-  'cancel-notification-channel', 'save-notification-channel', 'pov-dialog', 'close-pov', 'pov-grid', 'pov-search', 'pov-columns', 'pov-refresh', 'pov-fps', 'pov-view-mode',
+  'cancel-notification-channel', 'save-notification-channel', 'pov-dialog', 'close-pov', 'pov-action-status', 'pov-grid', 'pov-search', 'pov-columns', 'pov-refresh', 'pov-fps', 'pov-view-mode',
   'pov-pause', 'pov-back-grid', 'pov-radius', 'pov-x', 'pov-y', 'pov-z', 'pov-detail', 'item-tooltip', 'toast-region', 'macro-templates-btn', 'macro-recipes-btn',
   'macro-templates-dialog', 'close-macro-templates', 'macro-templates-grid'
 ].map((id) => [id, document.getElementById(id)]))
@@ -1423,7 +1425,8 @@ function bindManualMovement() {
     const control = KEY_CONTROLS[event.code]
     if (!control || event.repeat || shouldIgnoreMovementKey(event.target, event.code)) return
     event.preventDefault()
-    pressManualInput(`key:${event.code}`, control, document.querySelector(`[data-control="${control}"]`))
+    const accountId = el['pov-dialog'].open ? (event.target?.dataset?.accountId || povFocusId) : state.selectedId
+    pressManualInput(`key:${event.code}`, control, document.querySelector(`[data-control="${control}"]`), accountId)
   })
   document.addEventListener('keyup', (event) => {
     if (!KEY_CONTROLS[event.code]) return
@@ -1442,20 +1445,23 @@ function shouldIgnoreMovementKey(target, code) {
   if (!state.selectedId) return true
   const openDialog = document.querySelector('dialog[open]')
   if (openDialog && openDialog !== el['pov-dialog']) return true
-  if (openDialog === el['pov-dialog'] && (!povFocusId || povPaused)) return true
+  if (openDialog === el['pov-dialog'] && (povPaused || (!povFocusId && !target?.closest?.('#pov-grid canvas')))) return true
   if (target?.closest?.('input, textarea, select, [contenteditable="true"]')) return true
   return code === 'Space' && Boolean(target?.closest?.('button, a'))
 }
 
-function pressManualInput(source, control, button) {
-  if (activeManualInputs.has(source) || !state.selectedId || getStatus(state.selectedId).status !== 'online') return
-  const input = { accountId: state.selectedId, control, button }
+function pressManualInput(source, control, button, accountId = state.selectedId) {
+  if (activeManualInputs.has(source) || !accountId || getStatus(accountId).status !== 'online') return
+  const input = { accountId, control, button }
   activeManualInputs.set(source, input)
   button?.classList.add('pressed')
   if ([...activeManualInputs.values()].filter((item) => item.accountId === input.accountId && item.control === control).length > 1) return
-  api.setControlState(input.accountId, control, true).catch((error) => {
+  api.setControlState(input.accountId, control, true).then(() => {
+    if (control === 'sneak' && activeManualInputs.has(source)) showPovStatus('Sneaking', input.accountId)
+  }).catch((error) => {
     activeManualInputs.delete(source)
     button?.classList.remove('pressed')
+    showPovStatus(cleanError(error), input.accountId)
     toast(cleanError(error), 'error')
   })
 }
@@ -2641,7 +2647,8 @@ function drawMapPov(snapshot, canvas) {
   canvas.dataset.radius = String(radius)
 }
 
-function selectPovTarget(event) {
+function selectPovTarget(event, capture = true) {
+  if (event.type === 'click' && povSuppressClick) { povSuppressClick = false; return }
   const canvas = event.currentTarget
   if (povPaused || document.pointerLockElement === canvas) return
   const accountId = canvas.dataset.accountId
@@ -2649,13 +2656,25 @@ function selectPovTarget(event) {
   if (accountId) { state.selectedId = accountId; povFocusId = accountId }
   const position = JSON.parse(canvas.dataset.position || 'null')
   if (el['pov-view-mode'].value !== 'map') {
-    if (focusChanged) { releaseAllManualInputs(); releasePovActions(); render(); renderPovGrid(); startPovPolling() }
+    if (focusChanged) {
+      releaseAllManualInputs(); releasePovActions(); render()
+      // Keep the input target connected throughout mousedown/mouseup/click.
+      // The browser must dispatch click to the same surface that received down.
+      el['pov-back-grid'].hidden = false
+      el['pov-grid'].classList.add('focused')
+      for (const card of el['pov-grid'].children) card.hidden = card.querySelector('canvas') !== canvas
+      canvas.width = 960; canvas.height = 540
+      startPovPolling()
+    }
     const focusedCanvas = [...el['pov-grid'].querySelectorAll('canvas')].find((entry) => entry.dataset.accountId === accountId)
     focusedCanvas?.focus()
+    // Request once, from click's user gesture, after focus has settled. Mousedown
+    // only starts the fallback gesture; it must remain free to become a drag.
+    if (!capture) return
     try {
-      focusedCanvas?.requestPointerLock?.()?.catch?.(() => { el['pov-detail'].textContent = 'Mouse capture unavailable. Hold left mouse and drag to look; WASD moves.' })
+      focusedCanvas?.requestPointerLock?.()?.catch?.(() => { el['pov-detail'].textContent = 'Mouse capture unavailable. Click to dig, right click to use/place, or drag to look; WASD moves.' })
     } catch {
-      el['pov-detail'].textContent = 'Mouse capture unavailable. Hold left mouse and drag to look; WASD moves.'
+      el['pov-detail'].textContent = 'Mouse capture unavailable. Click to dig, right click to use/place, or drag to look; WASD moves.'
     }
     return
   }
@@ -2674,6 +2693,10 @@ function handlePovMouseMove(event) {
   const canvas = locked || povDrag?.canvas
   const accountId = canvas?.closest?.('#pov-grid') ? canvas.dataset.accountId : null
   if (!accountId || accountId !== povFocusId || povPaused || !el['pov-dialog'].open || el['pov-view-mode'].value !== 'perspective') return
+  if (!locked && !povDrag.dragged) {
+    if (Math.hypot(event.clientX - povDrag.startX, event.clientY - povDrag.startY) <= 4) return
+    povDrag.dragged = true
+  }
   povLookDelta.accountId = accountId
   const delta = locked ? povMath.mouseLookDelta(event.movementX, event.movementY) : povMath.mouseLookDelta(event.clientX - povDrag.x, event.clientY - povDrag.y)
   if (!locked) { povDrag.x = event.clientX; povDrag.y = event.clientY }
@@ -2708,7 +2731,7 @@ function handlePovPointerLockChange() {
   if (!active) { releaseAllManualInputs(povFocusId); releasePovActions() }
   el['pov-detail'].textContent = active
     ? 'Gameplay control active · WASD move · Space jumps · Mouse looks · Esc releases the mouse.'
-    : 'Click a perspective feed to capture the mouse, or hold left mouse and drag to look.'
+    : 'Click to dig and capture the mouse, right click to use/place, or drag to look.'
 }
 
 function drawPerspectivePov(snapshot, canvas, account) {
@@ -2820,24 +2843,57 @@ function drawPovHud(context, canvas, account) {
   context.lineWidth = 1
 }
 
+function showPovStatus(message, accountId = povFocusId) {
+  if (!el['pov-dialog'].open || (povFocusId && accountId !== povFocusId)) return
+  clearTimeout(povStatusTimer)
+  el['pov-action-status'].textContent = maskText(message)
+  povStatusTimer = setTimeout(() => { el['pov-action-status'].textContent = '' }, 2500)
+}
+
+function runPovMouseAction(accountId, button, held = false) {
+  const key = `${accountId}|${button}`
+  if (held && povHeldActions.has(key)) return
+  if (held) povHeldActions.add(key)
+  const action = button === 0 ? 'dig-crosshair' : 'use-crosshair'
+  showPovStatus(button === 0 ? 'Breaking…' : 'Using…', accountId)
+  api.worldAction(accountId, action, {}).then(result => {
+    showPovStatus(result?.cancelled ? 'Dig cancelled' : result?.placed ? 'Placed' : button === 0 ? 'Broken' : 'Used', accountId)
+  }).catch(error => {
+    const message = cleanError(error)
+    showPovStatus(/^Can't /.test(message) ? message : `${button === 0 ? "Can't break" : "Can't use/place"}: ${message}`, accountId)
+  })
+}
+
 function handlePovMouseDown(event) {
   const canvas = event.currentTarget
-  if (!povPaused && event.button === 0 && !document.pointerLockElement && el['pov-view-mode'].value === 'perspective') {
-    event.preventDefault()
-    selectPovTarget(event)
+  if (povPaused || !el['pov-dialog'].open || el['pov-view-mode'].value !== 'perspective' || ![0, 2].includes(event.button)) return
+  event.preventDefault()
+  if (!document.pointerLockElement) {
+    povSuppressClick = false
+    selectPovTarget(event, false)
     const focusedCanvas = [...el['pov-grid'].querySelectorAll('canvas')].find(entry => entry.dataset.accountId === canvas.dataset.accountId)
-    povDrag = { canvas: focusedCanvas || canvas, x: event.clientX, y: event.clientY }
+    if (event.button === 0) {
+      povDrag = { canvas: focusedCanvas || canvas, startX: event.clientX, startY: event.clientY, x: event.clientX, y: event.clientY, dragged: false }
+    } else runPovMouseAction(canvas.dataset.accountId, 2, true)
     return
   }
-  if (povPaused || document.pointerLockElement !== canvas || canvas.dataset.accountId !== povFocusId || ![0, 2].includes(event.button)) return
-  event.preventDefault()
-  const action = event.button === 0 ? 'dig-crosshair' : 'use-crosshair'
-  const key = `${povFocusId}|${event.button}`
-  if (povHeldActions.has(key)) return
-  povHeldActions.add(key)
-  api.worldAction(povFocusId, action, {}).catch(error => toast(cleanError(error), 'error'))
+  if (document.pointerLockElement !== canvas || canvas.dataset.accountId !== povFocusId) return
+  runPovMouseAction(povFocusId, event.button, true)
 }
-function releasePovMouse(event) { if (event.button === 0) povDrag = null; releasePovActions(event.button) }
+function releasePovMouse(event) {
+  // A fallback click digs to completion. Sending stop-dig on this same mouseup
+  // would cancel it before Mineflayer's survival digging timer can finish.
+  const drag = povDrag
+  if (event.button === 0 && drag) {
+    povDrag = null
+    povSuppressClick = drag.dragged
+    if (!drag.dragged && Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) <= 4 &&
+        event.target === drag.canvas && !povPaused && el['pov-dialog'].open) {
+      runPovMouseAction(drag.canvas.dataset.accountId, 0)
+    }
+  }
+  releasePovActions(event.button)
+}
 function releasePovActions(button = null, accountId = null) {
   if (button === null && (!accountId || povDrag?.canvas.dataset.accountId === accountId)) povDrag = null
   if (button === null && (!accountId || povLookDelta.accountId === accountId)) {

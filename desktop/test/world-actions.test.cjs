@@ -185,3 +185,48 @@ test('nearest attack cannot target an entity through an occluding block', async 
   bot.attack = () => assert.fail('occluded entity must not be attacked')
   await assert.rejects(manager.worldAction('world', 'attack-nearest'), /not visible/)
 })
+
+test('crosshair block placement fails visibly with nothing in reach, while held items can still be used', async t => {
+  const { manager, bot } = fixture(t)
+  bot.world = { raycast: () => null }
+  bot.registry = { blocksByName: { dirt: { id: 3 } } }
+  bot.heldItem = { name: 'dirt' }
+  let uses = 0
+  bot.activateItem = () => { uses++ }
+  await assert.rejects(manager.worldAction('world', 'use-crosshair'), /Can't place: nothing in reach/)
+  await assert.rejects(manager.worldAction('world', 'dig-crosshair'), /in reach/)
+  assert.equal(uses, 0)
+  bot.heldItem = { name: 'bread' }
+  assert.equal((await manager.worldAction('world', 'use-crosshair')).used, true)
+  assert.equal(uses, 1)
+})
+
+test('real crosshair ray hits the closest shape using live eye height, yaw and pitch and rejects beyond reach', async t => {
+  const { manager, bot } = fixture(t)
+  const WorldSync = require('prismarine-world/src/worldsync')
+  const world = new WorldSync({})
+  const blocks = []
+  world.getBlock = point => blocks.find(block => block.position.equals(point)) || null
+  bot.world = world
+  bot.entity.position = new Vec3(.5, 64, .5)
+  bot.entity.eyeHeight = 1.27
+  const add = position => blocks.push({ name: 'stone', position, shapes: [[0, 0, 0, 1, 1, 1]] })
+  add(new Vec3(2, 65, 0)); add(new Vec3(4, 65, 0))
+  bot.entity.yaw = -Math.PI / 2
+  bot.entity.pitch = 0
+  let dug
+  bot.dig = async (block, mode) => { dug = block; assert.equal(mode, 'ignore') }
+  await manager.worldAction('world', 'dig-crosshair')
+  assert.equal(dug, blocks[0], 'the nearer block occludes the farther block')
+  assert.ok(Math.abs(dug.intersect.y - 65.27) < 1e-9, 'ray starts at the live crouching eye')
+  assert.equal(dug.face, 4)
+  blocks.length = 0
+  add(new Vec3(0, 64, -1))
+  bot.entity.yaw = 0; bot.entity.pitch = -Math.PI / 4
+  await manager.worldAction('world', 'dig-crosshair')
+  assert.equal(dug, blocks[0], 'negative pitch aims down')
+  blocks.length = 0
+  add(new Vec3(0, 65, -6))
+  bot.entity.pitch = 0
+  await assert.rejects(manager.worldAction('world', 'dig-crosshair'), /in reach/)
+})

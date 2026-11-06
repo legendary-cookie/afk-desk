@@ -79,14 +79,19 @@ function installModernPlayerInputCompatibility(bot) {
     if (!bot.supportFeature?.('newPlayerInputPacket')) return
     bot._client?.write?.('player_input', { inputs: currentPlayerInput(bot) })
   }
-  const setControlState = typeof bot.setControlState === 'function' ? bot.setControlState.bind(bot) : null
-  if (setControlState) {
+  // createBot returns before physics is injected. Queue this after the native
+  // plugins so the wrapper also exists on real connections, not just fake bots.
+  const install = () => {
+    const setControlState = bot.setControlState?.bind(bot)
+    if (!setControlState) return
     bot.setControlState = (control, state) => {
       const result = setControlState(control, state)
       sendCurrentInput()
       return result
     }
   }
+  if (typeof bot.loadPlugin === 'function') bot.loadPlugin(install)
+  else install()
   bot.on?.('spawn', sendCurrentInput)
   bot.__afkDeskPlayerInputCompatibility = true
 }

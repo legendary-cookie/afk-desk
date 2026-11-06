@@ -208,6 +208,7 @@ dialog.pov-dialog { width:min(1440px, calc(100vw - 20px)); }
 .pov-grid.focused { grid-template-rows:minmax(0,1fr); }
 .pov-grid.focused .pov-card { display:flex; flex-direction:column; min-height:0; }
 .pov-grid.focused .pov-card canvas { flex:1; min-height:0; height:0; object-fit:contain; aspect-ratio:auto; }
+.pov-action-status { flex-shrink:0; min-height:1.2em; margin:0; padding:0 14px; color:var(--accent); font-size:12px; }
 .pov-control-help { flex-shrink:0; margin:0; padding:6px 14px 10px; font-size:11px; line-height:1.5; color:var(--muted); }
 .pov-control-help kbd { border:1px solid var(--border-strong); border-radius:3px; padding:1px 3px; color:var(--text); }
 .pov-card { min-width:0; overflow:hidden; border:1px solid var(--border-strong); border-radius:9px; background:var(--surface); box-shadow:0 8px 22px var(--overlay); }
