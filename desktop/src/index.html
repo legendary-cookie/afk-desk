@@ -8,22 +8,24 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <dialog id="bulk-appearance-dialog">
-      <h2>Bulk skins and capes</h2>
-      <p>Select accounts. Java Microsoft accounts must already be signed in.</p>
-      <div id="bulk-appearance-accounts"></div>
-      <label class="field"><span>Skin URL (HTTPS)</span><input id="bulk-skin-url" type="url" /></label>
-      <label class="field"><span>Or PNG skin file</span><input id="bulk-skin-file" type="file" accept="image/png" /></label>
-      <label class="field"><span>Skin model</span><select id="bulk-skin-variant"><option value="classic">Classic</option><option value="slim">Slim</option></select></label>
-      <label class="field"><span>Cape ID (optional)</span><input id="bulk-cape" placeholder="Owned cape UUID" /></label>
-      <pre id="bulk-appearance-results" aria-live="polite"></pre>
-      <footer class="dialog-footer"><button class="button secondary" id="bulk-appearance-close" type="button">Close</button><button class="button primary" id="bulk-appearance-apply" type="button">Apply</button></footer>
+    <dialog id="bulk-appearance-dialog" aria-labelledby="bulk-appearance-title">
+      <header class="dialog-header"><h2 id="bulk-appearance-title">Bulk skins and capes</h2></header>
+      <div class="dialog-body">
+        <p class="dialog-copy">Select accounts. Java Microsoft accounts must already be signed in.</p>
+        <div id="bulk-appearance-accounts"></div>
+        <label class="field"><span>Skin URL (HTTPS)</span><input id="bulk-skin-url" type="url" /></label>
+        <label class="field"><span>Or PNG skin file</span><input id="bulk-skin-file" type="file" accept="image/png" /></label>
+        <label class="field"><span>Skin model</span><select id="bulk-skin-variant"><option value="classic">Classic</option><option value="slim">Slim</option></select></label>
+        <label class="field"><span>Cape ID (optional)</span><input id="bulk-cape" placeholder="Owned cape UUID" /></label>
+        <pre id="bulk-appearance-results" aria-live="polite"></pre>
+      </div>
+      <footer class="dialog-footer"><button class="button secondary" id="bulk-appearance-close" type="button">Close</button><button class="button primary" id="bulk-appearance-apply" type="button">Apply skins and capes</button></footer>
     </dialog>
-    <dialog id="share-link-dialog">
+    <dialog id="share-link-dialog" aria-labelledby="share-link-title">
       <form method="dialog">
-        <h2>Import share link</h2>
-        <label class="field"><span>Paste a share link to preview</span><textarea id="share-link-input" rows="5" spellcheck="false"></textarea></label>
-        <footer class="dialog-footer"><button class="button secondary" value="cancel">Cancel</button><button class="button primary" value="preview">Preview</button></footer>
+        <header class="dialog-header"><h2 id="share-link-title">Import share link</h2></header>
+        <div class="dialog-body"><label class="field"><span>Paste a share link to preview</span><textarea id="share-link-input" rows="5" spellcheck="false"></textarea></label></div>
+        <footer class="dialog-footer"><button class="button secondary" value="cancel">Cancel</button><button class="button primary" value="preview">Preview link</button></footer>
       </form>
     </dialog>
     <div class="app-shell">
@@ -50,7 +52,7 @@
           <span class="action-icon" aria-hidden="true">⚙</span> <span class="action-text">Settings</span>
         </button>
         <p class="privacy-note">Credentials stay in Microsoft’s sign-in flow. AFK Desk never stores your password.</p>
-        <div class="sidebar-version">AFK Desk <span id="app-version">v…</span> <span class="beta-badge">BETA</span></div>
+        <div class="sidebar-version">AFK Desk <span id="app-version">v…</span> <span class="beta-badge">Beta</span></div>
       </aside>
 
       <main id="main-content" class="main-content">
@@ -59,20 +61,26 @@
           <div class="empty-illustration" aria-hidden="true">
             <span></span><span></span><span></span>
           </div>
-          <h1 id="empty-title">Your quiet corner of Minecraft</h1>
-          <p>Add an account, pick a server, and stay connected without running the full game.</p>
-          <button class="button primary" data-action="add" type="button">Add your first account</button>
+          <h1 id="empty-title">No accounts yet.</h1>
+          <p>Add an account to stay connected to a server.</p>
+          <button class="button primary" data-action="add" type="button">Add account</button>
         </section>
 
         <section id="dashboard" class="dashboard" hidden>
           <header class="topbar">
-            <div>
-              <div class="eyebrow">Selected account</div>
-              <h1 id="account-title">Account</h1>
+            <div class="account-heading">
+              <div class="account-heading-line">
+                <h1 id="account-title">Account</h1>
+                <div id="status-banner" class="status-banner" role="status" aria-live="polite">
+                  <span class="status-dot" aria-hidden="true"></span>
+                  <strong id="status-name">Offline</strong>
+                  <span id="status-detail" class="sr-only">Ready to connect</span>
+                </div>
+              </div>
+              <p class="account-meta"><span id="header-server">Server</span><span aria-hidden="true">·</span><span id="header-version">Auto-detect</span></p>
             </div>
             <div class="topbar-actions">
-              <button id="streamer-quick-toggle" class="button secondary" type="button" aria-pressed="false">Streamer mode</button>
-              <button id="open-command-center" class="button secondary command-center-trigger" type="button"><kbd>Ctrl K</kbd> Search / actions</button>
+              <button id="open-command-center" class="button secondary command-center-trigger" type="button" title="Search accounts and actions (Ctrl+K)" aria-label="Search accounts and actions"><kbd>Ctrl K</kbd><span class="sr-only">Search accounts and actions</span></button>
               <button id="display-menu-trigger" class="button secondary menu-trigger display-menu-trigger" type="button" popovertarget="display-menu">Display <span id="quick-scale-value">100%</span></button>
               <div id="display-menu" class="action-popover display-popover" popover>
                 <label for="quick-scale"><strong>Interface scale</strong><span>Fit more or make everything larger.</span></label>
@@ -82,26 +90,25 @@
                 </div>
                 <label for="quick-workspace-design"><strong>Workspace design</strong><span>Changes layout without changing features.</span></label>
                 <select id="quick-workspace-design" class="display-select">
-                  <option value="operations">Operations Console</option><option value="community">Community Chat</option><option value="command">Command Center</option><option value="hybrid">Recommended Hybrid</option><option value="studio">Studio</option><option value="telemetry">Telemetry</option>
+                  <option value="operations">Operations console</option><option value="community">Community chat</option><option value="command">Command center</option><option value="hybrid">Recommended hybrid</option><option value="studio">Studio</option><option value="telemetry">Telemetry</option>
                 </select>
                 <label for="quick-color-theme"><strong>Color theme</strong><span>Independent from workspace layout.</span></label>
                 <select id="quick-color-theme" class="display-select">
-                  <option value="obsidian">Obsidian Lime</option><option value="midnight">Midnight Blue</option><option value="graphite">Graphite Mono</option><option value="ember">Ember</option><option value="arctic">Arctic Light</option><option value="high-contrast">High Contrast</option>
+                  <option value="obsidian">Dark graphite</option><option value="midnight">Midnight</option><option value="graphite">Graphite</option><option value="ember">Ember</option><option value="arctic">Light</option><option value="high-contrast">High contrast</option>
                 </select>
                 <button id="reset-scale" class="menu-action" type="button">Reset to 100%</button>
               </div>
               <button id="edit-account" class="button secondary" type="button">Edit</button>
               <button id="open-logs" class="button secondary" type="button">Logs</button>
-              <button id="open-automations" class="button secondary" type="button">Automations</button>
               <button id="open-pov" class="button secondary" type="button">POV</button>
+              <button id="account-menu-trigger" class="icon-menu-trigger" type="button" popovertarget="account-menu" aria-label="More account actions" title="More account actions">⋯</button>
+              <div id="account-menu" class="action-popover account-actions-popover" popover>
+                <button id="streamer-quick-toggle" class="button secondary" type="button" aria-pressed="false" popovertarget="account-menu" popovertargetaction="hide">Streamer mode</button>
+                <button id="open-automations" class="button secondary" type="button" popovertarget="account-menu" popovertargetaction="hide">Automations</button>
+              </div>
               <button id="connection-button" class="button primary" type="button">Connect</button>
             </div>
           </header>
-
-          <div id="status-banner" class="status-banner" role="status" aria-live="polite">
-            <span class="status-dot" aria-hidden="true"></span>
-            <div><strong id="status-name">Offline</strong><span id="status-detail">Ready to connect</span></div>
-          </div>
 
           <nav class="workspace-tabs" aria-label="Account workspace">
             <button class="workspace-tab active" data-workspace-view="overview" type="button">Overview</button>
@@ -237,8 +244,8 @@
         </header>
         <input id="account-id" type="hidden" />
         <input id="identity-id" type="hidden" />
-        <section class="form-section"><h3>Link group</h3><label class="field"><span>Group</span><select id="link-group-select"></select></label><label class="field"><span>New group name</span><input id="link-group-name" maxlength="60" /></label><div id="link-group-categories"></div></section>
         <div class="form-grid">
+          <section class="form-section full"><h3>Link group</h3><label class="field"><span>Group</span><select id="link-group-select"></select></label><label class="field"><span>New group name</span><input id="link-group-name" maxlength="60" /></label><div id="link-group-categories"></div></section>
           <p class="field full share-import-row"><button id="import-profile-share" class="button secondary" type="button">Paste a share link</button> <small>Got a profile link from a friend (starts with <code>afkdesk://share/</code>)? Paste it to fill this form. Use “Share profile” on a saved profile to make one.</small></p>
           <label class="field"><span>Profile name</span><input id="profile-name" maxlength="60" required placeholder="Towny AFK" /><small>One identity can have several server profiles.</small></label>
           <label class="field"><span>Edition</span><select id="edition"><option value="java">Java Edition</option><option value="bedrock">Bedrock Edition (experimental)</option></select><small>Bedrock beta: authentication, connection, chat, logs and basic telemetry.</small></label>
@@ -445,8 +452,8 @@
             <label class="check-row"><input id="pov-show-hud" type="checkbox" checked /> Show health, hunger and hotbar</label>
           </div>
           <div class="settings-visual-grid">
-            <label class="field"><span>Workspace design</span><select id="workspace-design"><option value="operations">Operations Console</option><option value="community">Community Chat</option><option value="command">Command Center</option><option value="hybrid">Recommended Hybrid</option><option value="studio">Studio</option><option value="telemetry">Telemetry</option></select><small>Rearranges density and emphasis. Every function stays available.</small></label>
-            <label class="field"><span>Color theme</span><select id="color-theme"><option value="obsidian">Obsidian Lime</option><option value="midnight">Midnight Blue</option><option value="graphite">Graphite Mono</option><option value="ember">Ember</option><option value="arctic">Arctic Light</option><option value="high-contrast">High Contrast</option></select><small>CSS-token palettes add no runtime dependency.</small></label>
+            <label class="field"><span>Workspace design</span><select id="workspace-design"><option value="operations">Operations console</option><option value="community">Community chat</option><option value="command">Command center</option><option value="hybrid">Recommended hybrid</option><option value="studio">Studio</option><option value="telemetry">Telemetry</option></select><small>Rearranges density and emphasis. Every function stays available.</small></label>
+            <label class="field"><span>Color theme</span><select id="color-theme"><option value="obsidian">Dark graphite</option><option value="midnight">Midnight</option><option value="graphite">Graphite</option><option value="ember">Ember</option><option value="arctic">Light</option><option value="high-contrast">High contrast</option></select><small>Choose a light or dark appearance.</small></label>
           </div>
           <section id="notifications-panel" class="notifications-panel" aria-labelledby="notifications-panel-title">
             <div class="notifications-panel-header">
@@ -488,7 +495,7 @@
           </label>
           <label class="field">
             <span>Channel name</span>
-            <input id="notify-channel-name" type="text" maxlength="80" placeholder="Main Alert Channel" required />
+            <input id="notify-channel-name" type="text" maxlength="80" placeholder="Main alert channel" required />
           </label>
           <label class="toggle-row full">
             <input id="notify-channel-enabled" type="checkbox" checked />
@@ -636,7 +643,7 @@
 
             <div id="macro-json-panel" class="macro-json-panel" hidden>
               <label class="field">
-                <span id="macro-json-label">Import / Export Macro JSON</span>
+                <span id="macro-json-label">Import / export macro JSON</span>
                 <textarea id="macro-json-io" rows="5" spellcheck="false" placeholder="Paste macro JSON array or object here…"></textarea>
               </label>
               <p id="macro-json-error" class="form-error" role="alert" hidden></p>
@@ -681,7 +688,7 @@
                 <div class="macro-card-header">
                   <div>
                     <span class="eyebrow">When</span>
-                    <h3 id="macro-trigger-heading">WHEN · Trigger &amp; identity</h3>
+                    <h3 id="macro-trigger-heading">Trigger &amp; identity</h3>
                   </div>
                   <label id="macro-editor-enabled-wrap" class="compact-toggle">
                     <input id="macro-editor-enabled" type="checkbox" checked />
@@ -725,7 +732,7 @@
               <section id="macro-targets-card" class="macro-card" aria-labelledby="macro-targets-heading">
                 <div class="macro-card-header">
                   <div>
-                    <span class="eyebrow">Where &amp; How</span>
+                    <span class="eyebrow">Where &amp; how</span>
                     <h3 id="macro-targets-heading">Targets, options &amp; stop conditions</h3>
                   </div>
                 </div>
@@ -825,7 +832,7 @@
           <label>Refresh <select id="pov-refresh"><option value="250">0.25s</option><option value="500">0.5s</option><option value="1000">1s</option><option value="1500">1.5s</option><option value="3000">3s</option><option value="5000">5s</option></select></label>
           <label>Display <select id="pov-fps"><option value="30">30 FPS</option><option value="60">60 FPS</option></select></label>
           <label>View <select id="pov-view-mode"><option value="perspective">Perspective</option><option value="map">Map</option></select></label>
-          <label><input id="pov-game-hud" type="checkbox" checked /> Game HUD</label>
+          <label><input id="pov-game-hud" type="checkbox" checked /> Game overlay</label>
           <button id="pov-pause" class="button secondary" type="button" aria-pressed="false">Pause</button>
         </div>
         <div id="pov-grid" class="pov-grid" aria-live="polite"></div>
