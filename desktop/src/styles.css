@@ -31,7 +31,7 @@
   --font-ui: "Segoe UI Variable Text", "Segoe UI", -apple-system, system-ui, sans-serif;
   --font-display: "Segoe UI Variable Display", "Segoe UI", -apple-system, system-ui, sans-serif;
   --font-mono: "Cascadia Mono", "Consolas", ui-monospace, monospace;
-  /* Minecraft item content retains its in-game materials and colours. */
+  /* Item art and count ink retain their in-game colours. */
   --item-edge-dark: #373737;
   --item-edge-light: #FFFFFF;
   --item-slot: #8B8B8B;
@@ -118,7 +118,7 @@ kbd { padding:2px 5px; border:1px solid var(--border-strong); border-radius:4px;
 :root[data-workspace="command"] .main-content { padding:26px 32px; }
 :root[data-workspace="command"] .workspace-grid { grid-template-columns:minmax(480px,1fr) 8px minmax(240px,270px); }
 :root[data-workspace="command"] .console-log { padding:22px 24px; }
-:root[data-workspace="command"] .topbar-actions .button:not(#display-menu-trigger):not(#connection-button) { min-height:34px; padding-inline:10px; font-size:11px; }
+:root[data-workspace="command"] .topbar-actions .button:not(#display-menu-trigger):not(#connection-button) { min-height:32px; padding-inline:10px; font-size:11px; }
 :root[data-workspace="command"] .status-banner { background:transparent; border-inline:0; border-radius:0; }
 :root[data-workspace="command"] .inventory-panel { border-radius:6px; }
 
@@ -983,7 +983,7 @@ dialog.macro-templates-dialog {
 .dashboard[data-view="overview"] > .workspace-grid, .dashboard[data-view="overview"] > .inventory-resizer, .dashboard:not([data-view]) > .workspace-grid, .dashboard:not([data-view]) > .inventory-resizer { display: none; }
 .dashboard[data-view="overview"] > .topbar, .dashboard:not([data-view]) > .topbar { flex: 0 0 auto; flex-wrap: wrap; gap: 8px; }
 .dashboard[data-view="overview"] .topbar-actions { flex-wrap: wrap; gap: 6px; }
-.dashboard[data-view="overview"] .topbar-actions .button { min-height: 34px; padding-inline: 10px; font-size: 11px; }
+.dashboard[data-view="overview"] .topbar-actions .button { min-height: 32px; padding-inline: 10px; font-size: 11px; }
 .dashboard[data-view="overview"] > .status-banner, .dashboard[data-view="overview"] > .workspace-tabs { flex-shrink: 0; }
 .overview-toolbar { flex: 0 0 auto; margin: 0 0 8px; }
 .overview-layout-notice { margin-left: 10px; color: var(--muted); font-size: 11px; }
@@ -1048,6 +1048,7 @@ dialog.macro-templates-dialog {
 .overview-measuring > .overview-module > .collapsed,
 .overview-measuring > .overview-empty > .panel,
 .overview-measuring > .overview-module[data-module="inventory"] > .panel,
+.overview-measuring > .overview-module[data-module="details"] > .panel,
 .overview-measuring > .overview-module[data-module="scoreboard"] > .panel,
 .overview-measuring > .overview-module[data-module="effects"] > .panel,
 .overview-measuring > .overview-module[data-module="bossBars"] > .panel,
@@ -1055,6 +1056,7 @@ dialog.macro-templates-dialog {
 .overview-measuring > .overview-module > .macro-section { flex: 0 0 auto; height: max-content; max-height: none; }
 .overview-measuring .inventory-panel { grid-template-rows: auto auto; }
 .overview-measuring .inventory-grid { overflow: visible; }
+.overview-measuring .details-list { flex: 0 0 auto; overflow: visible; }
 .overview-measuring .macro-pad { flex: 0 0 auto; max-height: none; }
 .overview-auto .macro-pad { max-height: none; }
 
@@ -1153,7 +1155,7 @@ button:disabled { cursor: not-allowed; }
 .count { background: transparent; font-size: 11px; color: var(--muted); }
 .account-list { min-width: 0; gap: 4px; scrollbar-width: thin; }
 .account-row { flex: 0 0 auto; min-width: 0; grid-template-columns: minmax(0, 1fr) 16px; }
-.account-item { position: relative; grid-template-columns: 24px minmax(0, 1fr) 16px; min-height: 48px; padding: 6px 8px; gap: 8px; }
+.account-item { position: relative; grid-template-columns: 24px minmax(0, 1fr) 24px; min-height: 48px; padding: 6px 8px; gap: 8px; }
 .account-item:hover { background: var(--raised); }
 .account-item[aria-current="true"] { background: var(--raised); border-color: transparent; }
 .account-item[aria-current="true"]::before { content: ''; position: absolute; inset: 6px auto 6px 0; width: 2px; background: var(--accent); border-radius: 2px; }
@@ -1167,11 +1169,13 @@ button:disabled { cursor: not-allowed; }
 .account-item .mini-status { position: absolute; top: 28px; left: 25px; width: 8px; height: 8px; border: 2px solid var(--surface); box-sizing: content-box; box-shadow: none; }
 .mini-status.online, .status-banner.online .status-dot { background: var(--ok); box-shadow: none; }
 .mini-status.error, .status-banner.error .status-dot { background: var(--danger); }
-.account-vitals { display: grid; gap: 3px; width: 16px; }
-.account-vital { display: block; height: 2px; background: var(--line); overflow: hidden; }
-.account-vital > span { display: block; height: 100%; background: var(--ok); }
-.account-vital.food > span { background: var(--warn); }
-.account-order-controls { gap: 0; }
+.account-vitals { display: grid; gap: 3px; width: 24px; }
+.account-vitals[hidden] { display: none; }
+.account-vital { display: block; width: 24px; height: 2px; border-radius: 999px; background: var(--line); overflow: hidden; }
+.account-vital > span { display: block; height: 100%; border-radius: inherit; background: var(--ok); }
+.account-vital.warn > span { background: var(--warn); }
+.account-vital.danger > span { background: var(--danger); }
+.account-order-controls { gap: 0; opacity: 0; }
 .account-order-button { width: 16px; height: 20px; font-size: 11px; }
 .account-group { flex: 0 0 auto; min-width: 0; }
 .account-group > summary { min-height: 32px; padding: 6px 8px; color: var(--muted); font-size: 12px; cursor: pointer; overflow-wrap: anywhere; }
@@ -1192,13 +1196,15 @@ button:disabled { cursor: not-allowed; }
 :root[data-workspace] .account-heading .status-banner { min-height: 24px; margin: 0; padding: 2px 8px; gap: 6px; border: 1px solid var(--line); border-radius: 999px; background: transparent; }
 .status-banner strong { font-size: 12px; font-weight: 500; }
 .topbar-actions { min-width: 0; flex-wrap: wrap; justify-content: flex-end; }
-:root[data-workspace] .topbar-actions .button { min-height: 32px; padding-inline: 8px; font-size: 12px; font-weight: 500; }
+:root[data-workspace] .topbar-actions .button { min-height: 32px; height: 32px; padding-inline: 8px; font-size: 12px; font-weight: 500; }
 .topbar-actions .button.secondary { border-color: transparent; background: transparent; }
 .topbar-actions .button.secondary:hover { background: var(--raised); }
 .topbar-actions #connection-button { background: var(--accent); border-color: transparent; color: var(--on-accent); }
 .topbar-actions #connection-button:hover { background: var(--accent-strong); }
 #streamer-quick-toggle[aria-pressed="true"] { color: var(--accent); background: var(--raised); }
-.command-center-trigger { min-width: 0; }
+.topbar-actions #open-command-center { display: inline-flex; justify-content: space-between; gap: 16px; min-width: 0; max-width: 100%; padding: 0 8px 0 12px; border: 1px solid var(--line); background: var(--raised); color: var(--muted); }
+.command-center-trigger > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.command-center-trigger kbd { flex: 0 0 auto; padding: 1px 5px; border-color: var(--line); border-radius: 4px; background: var(--surface); }
 kbd { font: 11px/1.45 var(--font-ui); }
 .display-menu-trigger { min-width: 0; }
 .display-menu-trigger span { font-size: 11px; }
@@ -1211,7 +1217,9 @@ kbd { font: 11px/1.45 var(--font-ui); }
 :root[data-workspace] .panel-header, .overview-module .panel-header { min-height: 44px; padding: 8px 12px; }
 :root[data-workspace] .panel-header h2, .overview-module .panel-header h2, .macro-header h3 { font-size: 15px; font-weight: 600; }
 .panel-header p, .macro-header span { margin-top: 4px; font-size: 11px; }
-.section-toggle { border-color: transparent; }
+.section-toggle, .panel-header .icon-menu-trigger, .macro-header .icon-menu-trigger { display: inline-grid; place-items: center; flex: 0 0 28px; width: 28px; height: 28px; min-height: 28px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font: 18px/1 var(--font-ui); }
+.panel-header-actions { gap: 4px; }
+.topbar-actions > .icon-menu-trigger { flex: 0 0 32px; width: 32px; height: 32px; }
 .section-toggle:hover, .icon-button:hover, .icon-menu-trigger:hover { background: var(--raised); }
 .eyebrow { margin-bottom: 4px; font-size: 12px; font-weight: 500; color: var(--muted); }
 .dialog-header .eyebrow { display: none; }
@@ -1228,9 +1236,12 @@ kbd { font: 11px/1.45 var(--font-ui); }
 .macro-header { padding: 8px 12px 4px; }
 .macro-pad { padding: 4px 12px 12px; }
 .macro-button { font-size: 12px; font-weight: 500; }
-.details-list dd { font-size: 12px; font-weight: 400; font-variant-numeric: tabular-nums; }
-:root[data-workspace] .details-list dd { font-family: var(--font-ui); }
-.details-list dt, .overview-module .details-list dt { font-size: 11px; }
+/* Label-over-value pairs stay dense at every workspace and container width. */
+:root[data-workspace] .details-list { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; padding: 12px; align-content: start; }
+:root[data-workspace] .details-list div { display: block; min-width: 0; padding: 0; border: 0; }
+:root[data-workspace] .details-list dt { color: var(--muted); font-size: 12px; line-height: 1.45; }
+:root[data-workspace] .details-list dd { margin: 2px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 400 13px/1.45 var(--font-ui); font-variant-numeric: tabular-nums; }
+.overview-auto .details-list { flex: 0 0 auto; overflow: visible; }
 .button, .send-button { font-weight: 500; }
 .compact-toggle, .compact-select, .compact-btn, .inventory-toolbar .button, .movement-actions .button { font-size: 12px; }
 .compact-number { min-height: 28px; font-size: 12px; }
@@ -1239,16 +1250,22 @@ kbd { font: 11px/1.45 var(--font-ui); }
 .inventory-toolbar .button { min-height: 28px; padding-inline: 8px; }
 .inventory-header { flex-wrap: wrap; }
 .inventory-grid { background: var(--surface); }
-.minecraft-inventory { gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--text); box-shadow: none; }
-.minecraft-section-label { color: var(--muted); font: 11px/1.45 var(--font-ui); text-shadow: none; }
-.minecraft-slot { border-color: var(--item-edge-dark) var(--item-edge-light) var(--item-edge-light) var(--item-edge-dark); color: var(--item-ink); }
-.minecraft-slot:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; z-index: 6; }
+.minecraft-inventory { gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--text); box-shadow: none; }
+.minecraft-section-label { color: var(--muted); font: 12px/1.45 var(--font-ui); text-shadow: none; }
+.minecraft-inventory .minecraft-slot { padding: 4px; border: 0; background: var(--raised); box-shadow: inset 0 0 0 1px var(--line); color: var(--item-ink); }
+.minecraft-inventory .minecraft-slot:hover { background: color-mix(in srgb, var(--raised) 85%, var(--muted)); outline: none; }
+.minecraft-inventory .minecraft-slot.selected, .minecraft-inventory .minecraft-slot.held { outline: 2px solid var(--accent); outline-offset: -2px; }
+.minecraft-inventory .minecraft-slot.locked { box-shadow: inset 0 0 0 1px var(--warn); }
+.minecraft-inventory .minecraft-slot.moving { outline: 2px solid var(--warn); outline-offset: -2px; }
+.minecraft-item-count { color: var(--item-ink); text-shadow: 0 1px 2px var(--item-shadow); font-variant-numeric: tabular-nums; }
+.minecraft-slot:focus-visible, .minecraft-inventory .minecraft-slot:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; z-index: 6; }
 .minecraft-slot.selected { outline-color: var(--accent); }
 .minecraft-tooltip { border: 1px solid var(--line); border-radius: 6px; background: var(--raised); color: var(--text); font: 12px/1.45 var(--font-ui); text-shadow: none; box-shadow: var(--shadow); }
 .minecraft-tooltip strong { color: var(--text); }
 .minecraft-tooltip .enchant-level, .minecraft-tooltip .lore-heading, .minecraft-tooltip .technical { color: var(--muted); font-size: 11px; }
 .minecraft-tooltip .enchant-detail, .minecraft-tooltip .lore { color: var(--muted); }
 .game-hud { font: 12px/1.45 var(--font-ui); }
+.game-hud.module-empty, #overview-next-runs.module-empty { margin: 0; padding: 12px; color: var(--muted); font: 12px/1.45 var(--font-ui); }
 .hud-scoreboard { background: transparent; }
 .hud-title { font-weight: 600; }
 .minimap-options { align-items: center; flex-wrap: wrap; color: var(--muted); }
@@ -1503,13 +1520,6 @@ input::file-selector-button { min-height: 24px; margin-right: 8px; border: 1px s
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
-/* Native meters expose values to assistive technology and remain two pixels high. */
-meter.account-vital { appearance: none; display: block; width: 16px; height: 2px; border: 0; border-radius: 0; background: var(--line); }
-meter.account-vital::-webkit-meter-bar { height: 2px; border: 0; border-radius: 0; background: var(--line); }
-meter.account-vital::-webkit-meter-optimum-value { background: var(--ok); }
-meter.account-vital.food::-webkit-meter-optimum-value { background: var(--warn); }
-meter.account-vital::-moz-meter-bar { background: var(--ok); }
-meter.account-vital.food::-moz-meter-bar { background: var(--warn); }
 /* The simple macro editor supplies legacy strings; only its fixed labels change case. */
 #macro-trigger-heading { display: block; text-transform: lowercase; }
 #macro-trigger-heading::first-letter, .macro-loop-end::first-letter { text-transform: capitalize; }
@@ -1518,7 +1528,7 @@ strong, b { font-weight: 600; }
 .chat-suggestions { background: var(--raised); box-shadow: var(--shadow); }
 /* Preserve in-game item ink even when the application uses the light theme. */
 .minecraft-item-count, .minecraft-held { color: var(--item-ink); }
-.minecraft-slot.held { box-shadow: inset 0 0 0 2px var(--item-ink); }
+.minecraft-slot.held { box-shadow: inset 0 0 0 2px var(--accent); }
 
 .count, #inventory-count, #quick-scale-value, .macro-meta-pill, .macro-status-chip { font-variant-numeric: tabular-nums; }
 

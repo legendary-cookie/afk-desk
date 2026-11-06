@@ -52,7 +52,7 @@
         let min = hint.minHeight, preferred = hint.preferredHeight, max = hint.maxHeight, grow = hint.grow
         if (measured.collapsed) {
           min = preferred = max = measured.headerHeight > 0 ? measured.headerHeight : 44; grow = 0
-        } else if (measured.empty || hint.compact) {
+        } else if (measured.empty || hint.compact || (id === 'details' && natural)) {
           min = preferred = max = natural || (measured.empty ? 80 : preferred); grow = 0
         } else if (id === 'inventory' && natural) {
           min = Math.min(min, natural); preferred = natural; max = Math.max(max, natural)

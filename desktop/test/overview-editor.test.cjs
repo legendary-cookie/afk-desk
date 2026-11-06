@@ -464,3 +464,30 @@ test('overview reparenting requests restoring the newest log position', () => {
   f.editor.refresh()
   assert.equal(f.reparented.length, 3)
 })
+
+test('auto-arrange measures details content at its assigned width and refits without replacing panels', () => {
+  const f = fixture(model.presets.Default, 'auto', nodes => measuredPanel(nodes['#details-panel'], 46, 418))
+  const panel = f.selectors['#details-panel'], wrapper = panel.parentNode
+  assert.ok(displayedHeight(f, 'details') >= 418)
+  const last = () => f.arrangements.at(-1)[1].measurements.details
+  assert.equal(last().naturalHeight, 419)
+  panel.getBoundingClientRect = () => {
+    assert.equal(f.grid.classList.contains('overview-measuring'), true)
+    assert.equal(panel.parentNode.style.gridColumn, '1 / span 12', 'narrow layout is applied before measuring')
+    return { height: 460 }
+  }
+  f.grid.width = 700
+  f.editor.fit(true)
+  assert.equal(last().naturalHeight, 461)
+  assert.ok(displayedHeight(f, 'details') >= 460)
+  assert.equal(panel.parentNode, wrapper, 'retain DOM and focused controls')
+  panel.getBoundingClientRect = () => ({ height: 46 })
+  panel.classList.toggle('collapsed', true)
+  f.mutate(); f.flush()
+  assert.ok(displayedHeight(f, 'details') < 50)
+  panel.classList.toggle('collapsed', false)
+  panel.getBoundingClientRect = () => ({ height: 418 })
+  f.mutate(); f.flush()
+  assert.ok(displayedHeight(f, 'details') >= 418)
+  assert.equal(f.saved.length, 0, 'content fits do not change saved layout')
+})

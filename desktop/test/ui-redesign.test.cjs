@@ -14,6 +14,7 @@ class Element {
     this.dataset = {}
     this.attributes = {}
     this.events = {}
+    this.style = {}
     this.className = ''
     this._text = ''
   }
@@ -47,7 +48,7 @@ function harness() {
   return { context, state, el, statuses, timers }
 }
 
-test('account rail shows bounded online health and food and updates just the affected meters', () => {
+test('account rail shows bounded online health and food and updates just the affected bars', () => {
   const h = harness()
   h.state.accounts = [{ id: 'one', label: 'One', host: 'local' }, { id: 'two', label: 'Two', host: 'local' }]
   h.statuses.set('one', 'online')
@@ -58,17 +59,33 @@ test('account rail shows bounded online health and food and updates just the aff
   assert.match(first.className, /online/)
   const vitals = first.querySelector('.account-vitals')
   assert.equal(vitals.hidden, false)
-  assert.deepEqual(vitals.children.map(meter => meter.value), [12, 19])
-  assert.equal(vitals.children[0].attributes['aria-label'], 'Health: 12 of 20')
+  const values = () => vitals.children.map(meter => Number(meter.attributes['aria-valuenow']))
+  assert.deepEqual(values(), [12, 19])
+  assert.equal(vitals.title, 'Health 12/20 · Food 19/20')
+  assert.equal(vitals.children[0].attributes['aria-label'], 'Health')
+  assert.equal(vitals.children[1].attributes['aria-label'], 'Food')
+  assert.equal(vitals.children[0].attributes.role, 'meter')
+  assert.equal(vitals.children[0].attributes['aria-valuemin'], '0')
+  assert.equal(vitals.children[0].attributes['aria-valuemax'], '20')
+  assert.deepEqual(vitals.children.map(meter => meter.children[0].style.width), ['60%', '95%'])
+  assert.deepEqual(vitals.children.map(meter => meter.className), ['account-vital warn', 'account-vital ok'])
   assert.equal(rows[1].querySelector('.account-vitals').hidden, true)
   assert.match(rows[1].querySelector('.account-item').className, /offline/)
   h.state.telemetry.set('one', { health: -2, food: 500 })
   h.context.updateAccountVitals('one')
-  assert.deepEqual(vitals.children.map(meter => meter.value), [0, 20])
+  assert.deepEqual(values(), [0, 20])
+  assert.equal(vitals.title, 'Health 0/20 · Food 20/20')
+  assert.deepEqual(vitals.children.map(meter => meter.children[0].style.width), ['0%', '100%'])
+  assert.deepEqual(vitals.children.map(meter => meter.className), ['account-vital danger', 'account-vital ok'])
   assert.equal(h.el['account-list'].querySelectorAll('.account-row')[0], rows[0], 'telemetry must retain account buttons and focus')
   h.state.telemetry.set('one', { health: NaN, food: Infinity })
   h.context.updateAccountVitals('one')
-  assert.deepEqual(vitals.children.map(meter => meter.value), [0, 0])
+  assert.deepEqual(values(), [0, 0])
+  for (const [value, color] of [[6, 'danger'], [7, 'warn'], [14, 'warn'], [15, 'ok']]) {
+    h.state.telemetry.set('one', { health: value, food: value })
+    h.context.updateAccountVitals('one')
+    assert.ok(vitals.children.every(meter => meter.className === `account-vital ${color}`))
+  }
   h.context.updateAccountVitals('unknown')
   assert.match(source, /state\.telemetry\.set\(id, payload\)\s+updateAccountVitals\(id\)/)
 })
@@ -144,4 +161,84 @@ test('header presence uses short sentence-case labels and preserves connection a
     assert.equal(h.el['status-banner'].title, `${mask.label(h.state.accounts[0])} <status>`)
     assert.equal(h.el['status-detail'].textContent, `${mask.label(h.state.accounts[0])} <status>`)
   }
+})
+
+test('truncated details keep literal tooltips and refresh them when streamer mode changes', () => {
+  const h = harness()
+  h.state.accounts = [{ id: 'one', username: 'private@example.com', label: 'PrivateName' }]
+  h.el['detail-username'] = new Element('dd')
+  h.el['detail-chest'] = new Element('dd')
+  vm.runInContext(source.slice(source.indexOf('function setDetailValue('), source.indexOf('function renderTelemetry(')), h.context)
+  for (const streaming of [false, true, false]) {
+    h.state.settings.streamerMode = streaming
+    h.context.setDetailValue('detail-username', 'private@example.com')
+    h.context.setDetailValue('detail-chest', '<PrivateName> chest at 368, -48, 10214 (1.5 blocks)')
+    for (const [id, raw] of [['detail-username', 'private@example.com'], ['detail-chest', '<PrivateName> chest at 368, -48, 10214 (1.5 blocks)']]) {
+      const expected = mask.maskText(raw, h.state.accounts, streaming)
+      assert.equal(h.el[id].textContent, expected)
+      assert.equal(h.el[id].title, expected)
+    }
+  }
+  assert.match(source, /setDetailValue\('detail-username', state\.settings\.streamerMode \? displayAccount\(account\) : account\.username\)/)
+  assert.match(source, /setDetailValue\('detail-chest', telemetry\?\.nearestChest/)
+})
+
+const css = fs.readFileSync(path.join(__dirname, '../src/styles.css'), 'utf8')
+const html = fs.readFileSync(path.join(__dirname, '../src/index.html'), 'utf8')
+const rules = selector => [...css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+  .filter(match => match[1].trim().split(',').map(value => value.trim()).includes(selector)).map(match => match[2]).join('\n')
+
+test('details retain two dense columns and ellipsis even at narrow container sizes', () => {
+  assert.match(rules(':root[data-workspace] .details-list'), /grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/)
+  assert.match(rules(':root[data-workspace] .details-list div'), /display: block/)
+  assert.match(rules(':root[data-workspace] .details-list dt'), /color: var\(--muted\); font-size: 12px/)
+  assert.match(rules(':root[data-workspace] .details-list dd'), /text-overflow: ellipsis; white-space: nowrap; font: 400 13px/)
+  assert.match(rules(':root[data-workspace] .details-list dd'), /font-variant-numeric: tabular-nums/)
+  assert.match(rules('.overview-auto .details-list'), /flex: 0 0 auto; overflow: visible/)
+  assert.match(rules('.overview-measuring .details-list'), /flex: 0 0 auto; overflow: visible/)
+})
+
+test('inventory chrome follows the theme while counts remain white and the held slot uses lapis', () => {
+  assert.match(rules('.minecraft-inventory'), /border: 1px solid var\(--line\); border-radius: 10px; background: var\(--surface\)/)
+  assert.match(rules('.minecraft-inventory .minecraft-slot'), /border: 0; background: var\(--raised\); box-shadow: inset 0 0 0 1px var\(--line\)/)
+  assert.match(rules('.minecraft-inventory .minecraft-slot.held'), /outline: 2px solid var\(--accent\)/)
+  assert.match(rules('.minecraft-inventory .minecraft-slot.selected'), /outline: 2px solid var\(--accent\)/)
+  assert.match(rules('.minecraft-inventory .minecraft-slot:focus-visible'), /outline: 2px solid var\(--accent\); outline-offset: 2px/)
+  assert.match(rules('.minecraft-item-count'), /color: var\(--item-ink\); text-shadow: 0 1px 2px var\(--item-shadow\)/)
+  assert.match(css, /--item-ink: #FFFFFF/)
+  assert.match(rules('.minecraft-section-label'), /color: var\(--muted\); font: 12px/)
+  for (const label of ['Gear', 'Inventory', 'Hotbar']) assert.ok(source.includes(`createInventorySection('${label}'`))
+})
+
+test('rail bars are rounded and reorder arrows appear on hover and keyboard focus', () => {
+  assert.match(rules('.account-vitals'), /width: 24px/)
+  assert.match(rules('.account-vitals[hidden]'), /display: none/)
+  assert.match(rules('.account-vital'), /width: 24px; height: 2px; border-radius: 999px/)
+  assert.match(rules('.account-vital.warn > span'), /var\(--warn\)/)
+  assert.match(rules('.account-vital.danger > span'), /var\(--danger\)/)
+  assert.match(rules('.account-order-controls'), /opacity: 0/)
+  for (const selector of ['.account-row:hover .account-order-controls', '.account-row:focus-within .account-order-controls']) assert.match(rules(selector), /opacity: 1/)
+})
+
+test('panel icons, header search and compact empty states share consistent chrome', () => {
+  for (const selector of ['.section-toggle', '.panel-header .icon-menu-trigger', '.macro-header .icon-menu-trigger']) {
+    assert.match(rules(selector), /width: 28px; height: 28px; min-height: 28px; padding: 0; border: 0/)
+  }
+  assert.match(html, /id="open-command-center"[^>]*><span>Search or run a command<\/span><kbd>Ctrl K<\/kbd>/)
+  assert.match(rules('.topbar-actions #open-command-center'), /border: 1px solid var\(--line\); background: var\(--raised\)/)
+  assert.match(rules(':root[data-workspace] .topbar-actions .button'), /min-height: 32px; height: 32px/)
+  assert.match(rules('.topbar-actions > .icon-menu-trigger'), /width: 32px; height: 32px/)
+  for (const selector of ['.game-hud.module-empty', '#overview-next-runs.module-empty']) assert.match(rules(selector), /padding: 12px; color: var\(--muted\); font: 12px\/1.45/)
+})
+
+test('light tokens and both collapsed rails keep content inside the available width', () => {
+  for (const [token, value] of [['surface', '#FFFFFF'], ['raised', '#F0F1F4'], ['line', '#E3E5EA']]) assert.ok(rules(':root[data-theme="arctic"]').includes(`--${token}: ${value}`))
+  assert.match(css, /@media \(max-width: 1099px\)/)
+  for (const rail of ['.app-shell', '.app-shell.sidebar-collapsed']) {
+    assert.match(rules(`:root ${rail} .sidebar`), /width: 56px;[^}]*overflow: hidden/)
+    assert.match(rules(`:root ${rail} .account-list`), /min-height: 0;[^}]*overflow-x: hidden; overflow-y: auto/)
+    assert.match(rules(`:root ${rail} .account-row`), /width: 40px; min-width: 0/)
+    for (const part of ['account-copy', 'account-order-controls', 'account-vitals']) assert.match(rules(`:root ${rail} .${part}`), /display: none !important/)
+  }
+  assert.match(rules('.command-center-trigger > span'), /overflow: hidden; text-overflow: ellipsis/)
 })

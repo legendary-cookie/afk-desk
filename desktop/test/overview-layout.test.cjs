@@ -327,3 +327,15 @@ test('editing preserves normal module rows, heights and the console grow share',
   assert.ok(growth(true) > 0)
   assert.equal(growth(true), growth(false))
 })
+
+test('details keep their full measured content height in short, tall and narrow auto layouts', () => {
+  for (const width of [600, 1200]) for (const height of [320, 720, 1600]) for (const naturalHeight of [280, 418, 510]) {
+    const options = { width, height, measurements: { details: { naturalHeight } } }
+    const result = layout.autoArrange(layout.presets.Default, options)
+    assert.ok(Math.abs(moduleHeight(result, 'details') - naturalHeight) < 2, `${width}×${height}: details fit ${naturalHeight}px of content`)
+    assert.deepEqual(layout.autoArrange(result.layout, options), result, 'content sizing stays stable across fits')
+    assert.deepEqual(layout.normalize(result.layout), result.layout, 'reserving content never creates collisions')
+    const collapsed = layout.autoArrange(result.layout, { ...options, measurements: { details: { naturalHeight, collapsed: true, headerHeight: 46 } } })
+    assert.ok(Math.abs(moduleHeight(collapsed, 'details') - 46) < 2, 'collapsed details take only their header')
+  }
+})

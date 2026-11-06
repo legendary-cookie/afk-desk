@@ -66,7 +66,7 @@ window.createOverviewEditor = function ({ dashboard, settings, accountId, save, 
         const collapsed = node.classList.contains('collapsed') || (item.id === 'inventory' && dashboard.classList.contains('inventory-collapsed'))
         const header = node.querySelector(item.id === 'macro' ? '.macro-header' : '.panel-header')
         measurements[item.id] = { collapsed, empty, headerHeight: header ? height(header) + 2 : 0,
-          naturalHeight: header && (empty || model.registry[item.id].compact || item.id === 'inventory') ? height(node) : 0 }
+          naturalHeight: header && (empty || model.registry[item.id].compact || ['inventory', 'details'].includes(item.id)) ? height(node) : 0 }
         const previous = lastMeasurements[item.id], next = measurements[item.id]
         if (!previous || previous.collapsed !== collapsed || previous.empty !== empty ||
             Math.abs(previous.naturalHeight - next.naturalHeight) > 8 || Math.abs(previous.headerHeight - next.headerHeight) > 8) changed = true

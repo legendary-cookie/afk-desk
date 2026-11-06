@@ -387,16 +387,16 @@ function render() {
   const status = getStatus(account.id)
   el['account-title'].textContent = displayAccount(account)
   el['server-address'].textContent = `${account.host}:${account.port}`
-  el['detail-username'].textContent = state.settings.streamerMode ? displayAccount(account) : account.username
-  el['detail-server'].textContent = `${account.host}:${account.port}`
+  setDetailValue('detail-username', state.settings.streamerMode ? displayAccount(account) : account.username)
+  setDetailValue('detail-server', `${account.host}:${account.port}`)
   el['header-server'].textContent = maskText(`${account.host}:${account.port}`)
   const resolvedVersion = state.resolvedVersions.get(account.id) || account.lastSuccessfulVersion
-  el['detail-version'].textContent = account.edition === 'bedrock' ? `Bedrock ${resolvedVersion || 'auto'}` : account.version || (resolvedVersion ? `${resolvedVersion} (auto)` : 'Auto-detect')
+  setDetailValue('detail-version', account.edition === 'bedrock' ? `Bedrock ${resolvedVersion || 'auto'}` : account.version || (resolvedVersion ? `${resolvedVersion} (auto)` : 'Auto-detect'))
   el['header-version'].textContent = el['detail-version'].textContent
   const minDelay = account.antiAfkMinDelay ?? account.antiAfkInterval ?? 45
   const maxDelay = account.antiAfkMaxDelay ?? account.antiAfkInterval ?? minDelay
-  el['detail-antiafk'].textContent = account.antiAfk ? `${minDelay}–${maxDelay} seconds` : 'Disabled'
-  el['detail-environment'].textContent = account.environmentalMovement !== false ? 'Allowed' : 'Position held'
+  setDetailValue('detail-antiafk', account.antiAfk ? `${minDelay}–${maxDelay} seconds` : 'Disabled')
+  setDetailValue('detail-environment', account.environmentalMovement !== false ? 'Allowed' : 'Position held')
   el['auto-deposit-toggle'].checked = account.autoDepositToChest === true
   renderStatus(status)
   renderConsole()
@@ -435,7 +435,7 @@ function renderAccountList() {
     const vitals = document.createElement('span')
     vitals.className = 'account-vitals'
     vitals.hidden = status !== 'online'
-    vitals.append(...createAccountVitals(state.telemetry.get(account.id)))
+    renderAccountVitals(vitals, state.telemetry.get(account.id))
     button.append(avatar, copy, indicator, vitals)
     button.addEventListener('click', () => {
       releaseAllManualInputs()
@@ -501,23 +501,31 @@ function renderAccountList() {
   el['account-list'].replaceChildren(...sections)
 }
 
-function createAccountVitals(telemetry) {
-  return ['health', 'food'].map(key => {
-    const meter = document.createElement('meter')
-    meter.className = `account-vital ${key}`
-    meter.min = 0
-    meter.max = 20
+function renderAccountVitals(vitals, telemetry) {
+  const values = ['health', 'food'].map(key => {
     const value = Number(telemetry?.[key])
-    meter.value = Number.isFinite(value) ? Math.max(0, Math.min(20, value)) : 0
-    meter.setAttribute('aria-label', `${key === 'health' ? 'Health' : 'Food'}: ${meter.value} of 20`)
-    return meter
+    return Number.isFinite(value) ? Math.max(0, Math.min(20, value)) : 0
   })
+  vitals.title = `Health ${values[0]}/20 · Food ${values[1]}/20`
+  vitals.replaceChildren(...values.map((value, index) => {
+    const meter = document.createElement('span')
+    meter.className = `account-vital ${value <= 6 ? 'danger' : value <= 14 ? 'warn' : 'ok'}`
+    meter.setAttribute('role', 'meter')
+    meter.setAttribute('aria-label', index === 0 ? 'Health' : 'Food')
+    meter.setAttribute('aria-valuemin', '0')
+    meter.setAttribute('aria-valuemax', '20')
+    meter.setAttribute('aria-valuenow', String(value))
+    const fill = document.createElement('span')
+    fill.style.width = `${value * 5}%`
+    meter.append(fill)
+    return meter
+  }))
 }
 
 function updateAccountVitals(id) {
   const row = [...el['account-list'].querySelectorAll('.account-row')].find(row => row.dataset.accountId === id)
   const vitals = row?.querySelector('.account-vitals')
-  if (vitals) vitals.replaceChildren(...createAccountVitals(state.telemetry.get(id)))
+  if (vitals) renderAccountVitals(vitals, state.telemetry.get(id))
 }
 
 function createOrderButton(account, direction, disabled) {
@@ -617,17 +625,23 @@ function renderConsole() {
   renderView(document.getElementById('pov-log'), povFollow)
 }
 
+function setDetailValue(id, value) {
+  const text = maskText(value)
+  el[id].textContent = text
+  el[id].title = text
+}
+
 function renderTelemetry() {
   const telemetry = state.telemetry.get(state.selectedId)
   renderGameHud(telemetry?.hud)
-  el['detail-safety'].textContent = maskText(telemetry?.safetyStatus || '—')
-  el['detail-water'].textContent = describeWater(telemetry?.environment)
-  el['detail-health'].textContent = telemetry ? `${formatNumber(telemetry.health)} / 20` : '—'
-  el['detail-hunger'].textContent = telemetry ? `${formatNumber(telemetry.food)} / 20` : '—'
-  el['detail-coordinates'].textContent = telemetry?.position ? `${telemetry.position.x}, ${telemetry.position.y}, ${telemetry.position.z}` : '—'
+  setDetailValue('detail-safety', telemetry?.safetyStatus || '—')
+  setDetailValue('detail-water', describeWater(telemetry?.environment))
+  setDetailValue('detail-health', telemetry ? `${formatNumber(telemetry.health)} / 20` : '—')
+  setDetailValue('detail-hunger', telemetry ? `${formatNumber(telemetry.food)} / 20` : '—')
+  setDetailValue('detail-coordinates', telemetry?.position ? `${telemetry.position.x}, ${telemetry.position.y}, ${telemetry.position.z}` : '—')
   const depositRange = selectedAccount()?.autoDepositRange || 5
-  el['detail-chest'].textContent = telemetry?.nearestChest ? `${formatContainerType(telemetry.nearestChest.type)} at ${telemetry.nearestChest.x}, ${telemetry.nearestChest.y}, ${telemetry.nearestChest.z} (${formatNumber(telemetry.nearestChest.distance)} blocks)` : telemetry ? `No visible container within ${depositRange} blocks` : '—'
-  el['detail-dimension'].textContent = telemetry ? String(telemetry.dimension || 'unknown').replace(/^minecraft:/, '') : '—'
+  setDetailValue('detail-chest', telemetry?.nearestChest ? `${formatContainerType(telemetry.nearestChest.type)} at ${telemetry.nearestChest.x}, ${telemetry.nearestChest.y}, ${telemetry.nearestChest.z} (${formatNumber(telemetry.nearestChest.distance)} blocks)` : telemetry ? `No visible container within ${depositRange} blocks` : '—')
+  setDetailValue('detail-dimension', telemetry ? String(telemetry.dimension || 'unknown').replace(/^minecraft:/, '') : '—')
   const items = telemetry?.inventory || []
   if (!items.some((item) => item.slot === state.selectedInventorySlot)) state.selectedInventorySlot = null
   if (!items.some((item) => item.slot === state.movingInventorySlot)) state.movingInventorySlot = null
@@ -1595,7 +1609,7 @@ function handleBotEvent({ type, id, payload }) {
     const account = state.accounts.find((item) => item.id === id)
     if (account) account.lastSuccessfulVersion = payload.version
     if (id === state.selectedId) {
-      el['detail-version'].textContent = account?.version || `${payload.version} (auto)`
+      setDetailValue('detail-version', account?.version || `${payload.version} (auto)`)
       el['header-version'].textContent = el['detail-version'].textContent
     }
   }
@@ -1611,7 +1625,7 @@ function handleBotEvent({ type, id, payload }) {
       renderAccountList()
       if (id === state.selectedId) {
         el['account-title'].textContent = displayAccount(account)
-        el['detail-username'].textContent = state.settings.streamerMode ? displayAccount(account) : account.username
+        setDetailValue('detail-username', state.settings.streamerMode ? displayAccount(account) : account.username)
       }
     }
   }
