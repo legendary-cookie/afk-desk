@@ -1,4 +1,4 @@
-window.createOverviewEditor = function ({ dashboard, settings, accountId, save, report }) {
+window.createOverviewEditor = function ({ dashboard, settings, accountId, save, report, onReparent = () => {} }) {
   const model = window.afkOverviewLayout
   const nodes = { console: document.querySelector('#console-panel'), macro: document.querySelector('#macro-section'), details: document.querySelector('#details-panel'), movement: document.querySelector('#movement-panel'), inventory: document.querySelector('.inventory-panel'), scoreboard: document.querySelector('#scoreboard-panel'), effects: document.querySelector('#effects-panel'), bossBars: document.querySelector('#boss-bars-panel'), nextRuns: document.querySelector('#next-runs-panel'), minimap: document.querySelector('#minimap-panel') }
   const inventoryResizer = document.querySelector('#inventory-resizer')
@@ -157,12 +157,13 @@ window.createOverviewEditor = function ({ dashboard, settings, accountId, save, 
     add.disabled = !picker.options.length
     if (mode === 'auto') arrangePanels(viewport(), true)
     observeContent()
+    onReparent()
   }
   function refresh(force = false) {
     const id = accountId(), overview = dashboard.dataset.view === 'overview' || !dashboard.dataset.view
     if (!overview) {
       observer?.disconnect()
-      if (active) { for (const [key, node] of Object.entries(nodes)) { node.hidden = false; placeholders[key].after(node) } resizerHome.after(inventoryResizer); grid.replaceChildren(); dashboard.classList.remove('overview-editing'); active = false }
+      if (active) { for (const [key, node] of Object.entries(nodes)) { node.hidden = false; placeholders[key].after(node) } resizerHome.after(inventoryResizer); grid.replaceChildren(); dashboard.classList.remove('overview-editing'); active = false; onReparent() }
       toolbar.hidden = true; grid.hidden = true; return
     }
     toolbar.hidden = false; grid.hidden = false

@@ -1088,3 +1088,10 @@ dialog.macro-templates-dialog {
 .macro-custom-editor { position: absolute; inset: 0; z-index: 10; background: var(--surface); overflow: auto; border: 1px solid var(--border); }
 .macro-custom-entry { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
 .macro-custom-entry input { min-width: 0; width: 100%; }
+
+.log-container { position: relative; min-height: 0; display: flex; flex-direction: column; }
+.log-container > .console-log { flex: 1; }
+.persistent-log-container { flex: 1; }
+.pov-log-container { flex: 0 1 130px; min-height: 60px; background: #090c10; }
+.jump-latest { position: absolute; bottom: 8px; right: 18px; z-index: 1; padding: 4px 9px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-raised); color: var(--text); cursor: pointer; }
+.jump-latest[hidden] { display: none; }

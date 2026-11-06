@@ -56,7 +56,7 @@ function fixture(global = model.presets.Default, globalMode = 'auto', prepare = 
   const settings = { overviewLayout: { version: model.version, global, overrides: {}, globalMode, overrideModes: {} } }, saved = []
   const arrangements = []
   const window = new Element(); window.afkOverviewLayout = { ...model, autoArrange(...args) { arrangements.push(args); return model.autoArrange(...args) } }
-  const frames = [], observations = []
+  const frames = [], observations = [], reparented = []
   let contentChanged
   window.requestAnimationFrame = fn => frames.push(fn)
   class MutationObserver {
@@ -67,14 +67,14 @@ function fixture(global = model.presets.Default, globalMode = 'auto', prepare = 
   prepare(selectors, dashboard)
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/overview-editor.js'), 'utf8'), { window, document, MutationObserver })
   let account = 'one'
-  const editor = window.createOverviewEditor({ dashboard, settings: () => settings, accountId: () => account, save: async data => saved.push(data), report: error => { throw error } })
+  const editor = window.createOverviewEditor({ dashboard, settings: () => settings, accountId: () => account, save: async data => saved.push(data), report: error => { throw error }, onReparent: () => reparented.push(true) })
   editor.refresh()
   const grid = dashboard.querySelector('.overview-modules'), toolbar = dashboard.querySelector('.overview-toolbar')
   const button = text => {
     const find = node => node.children.find(child => child.textContent === text) || node.children.map(find).find(Boolean)
     return find(toolbar)
   }
-  return { frames, observations, arrangements, mutate: () => contentChanged(), flush: () => { while (frames.length) frames.shift()() }, dashboard, original, selectors, settings, saved, editor, grid, window, toolbar, button, controls: toolbar.querySelector('.overview-controls'), account: id => { account = id; editor.refresh() } }
+  return { frames, observations, arrangements, reparented, mutate: () => contentChanged(), flush: () => { while (frames.length) frames.shift()() }, dashboard, original, selectors, settings, saved, editor, grid, window, toolbar, button, controls: toolbar.querySelector('.overview-controls'), account: id => { account = id; editor.refresh() } }
 }
 
 test('auto layout uses the existing panels and restores their homes outside overview', () => {
@@ -452,4 +452,15 @@ test('renderer coalesces resize callbacks and an arrange-caused resize does not 
   assert.equal(f.arrangements.length, calls, 'grid resize caused by arrange is ignored')
   assert.deepEqual(moduleGeometry(f), arranged)
   assert.equal(panelFits, 3)
+})
+
+test('overview reparenting requests restoring the newest log position', () => {
+  const f = fixture()
+  assert.equal(f.reparented.length, 1)
+  f.dashboard.dataset.view = 'chat'
+  f.editor.refresh()
+  assert.equal(f.reparented.length, 2)
+  f.dashboard.dataset.view = 'overview'
+  f.editor.refresh()
+  assert.equal(f.reparented.length, 3)
 })

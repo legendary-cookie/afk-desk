@@ -145,7 +145,10 @@ async function init() {
   const [accounts, settings, appVersion, versions] = await Promise.all([api.listAccounts(), api.getSettings(), api.getAppVersion(), api.getSupportedVersions()])
   state.accounts = accounts
   state.settings = settings
-  overviewEditor = window.createOverviewEditor({ dashboard: el.dashboard, settings: () => state.settings, accountId: () => state.selectedId, save: async layout => { await api.saveSettings({ ...state.settings, overviewLayout: layout }) }, report: error => toast(`Layout was not saved: ${cleanError(error)}`, 'error') })
+  consoleFollow = window.afkLogFollow.attach(el['console-log'], document.getElementById('console-latest'))
+  povFollow = window.afkLogFollow.attach(document.getElementById('pov-log'), document.getElementById('pov-latest'))
+  persistentFollow = window.afkLogFollow.attach(el['persistent-log-view'], document.getElementById('persistent-latest'))
+  overviewEditor = window.createOverviewEditor({ onReparent: () => consoleFollow.reset(), dashboard: el.dashboard, settings: () => state.settings, accountId: () => state.selectedId, save: async layout => { await api.saveSettings({ ...state.settings, overviewLayout: layout }) }, report: error => toast(`Layout was not saved: ${cleanError(error)}`, 'error') })
   void api.checkUpdates().then(showUpdate).catch(() => {})
   state.supportedVersions = versions
   populateVersionOptions(versions)
@@ -369,6 +372,7 @@ function refreshStreamerDisplay() {
 }
 
 let overviewEditor
+let consoleFollow, povFollow, persistentFollow, renderedLogAccount
 let renderOverviewRuns
 function render() {
   overviewEditor?.refresh()
@@ -535,26 +539,34 @@ function renderStatus({ status, detail }) {
 }
 
 function renderConsole() {
+  const accountChanged = renderedLogAccount !== state.selectedId
+  renderedLogAccount = state.selectedId
   const logs = state.logs.get(state.selectedId) || []
-  if (!logs.length) {
-    const placeholder = document.createElement('div')
-    placeholder.className = 'console-placeholder'
-    placeholder.textContent = 'Server messages will appear here after you connect.'
-    el['console-log'].replaceChildren(placeholder)
-    return
+  function renderView(view, follow) {
+    follow.render(() => {
+      if (!logs.length) {
+        const placeholder = document.createElement('div')
+        placeholder.className = 'console-placeholder'
+        placeholder.textContent = 'Server messages will appear here after you connect.'
+        view.replaceChildren(placeholder)
+        return
+      }
+      view.replaceChildren(...logs.map(entry => {
+        const line = document.createElement('div')
+        line.className = `log-line ${entry.kind}`
+        const time = document.createElement('time')
+        time.dateTime = new Date(entry.at).toISOString()
+        time.textContent = new Date(entry.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        const message = document.createElement('span')
+        appendLogMessage(message, entry)
+        line.append(time, message)
+        return line
+      }))
+    })
+    if (accountChanged) follow.reset()
   }
-  el['console-log'].replaceChildren(...logs.map((entry) => {
-    const line = document.createElement('div')
-    line.className = `log-line ${entry.kind}`
-    const time = document.createElement('time')
-    time.dateTime = new Date(entry.at).toISOString()
-    time.textContent = new Date(entry.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    const message = document.createElement('span')
-    appendLogMessage(message, entry)
-    line.append(time, message)
-    return line
-  }))
-  el['console-log'].scrollTop = el['console-log'].scrollHeight
+  renderView(el['console-log'], consoleFollow)
+  renderView(document.getElementById('pov-log'), povFollow)
 }
 
 function renderTelemetry() {
@@ -2220,6 +2232,7 @@ function setWorkspaceView(view = 'overview') {
   state.workspaceView = resolved
   el.dashboard.dataset.view = resolved
   overviewEditor?.refresh()
+  consoleFollow?.reset()
   document.querySelectorAll('[data-workspace-view]').forEach((button) => button.classList.toggle('active', button.dataset.workspaceView === resolved))
   if (resolved === 'chat') requestAnimationFrame(() => el['chat-message'].focus())
   if (resolved === 'inventory') state.inventoryCollapsed = false
@@ -2280,18 +2293,17 @@ function handleCommandSearchKey(event) {
 async function openPersistentLogs() {
   if (!selectedAccount()) return
   el['logs-dialog'].showModal()
+  persistentFollow.reset()
   await refreshPersistentLogs()
 }
 
 async function refreshPersistentLogs() {
   const account = selectedAccount()
   if (!account) return
-  el['persistent-log-view'].textContent = 'Loading…'
   try {
     const filter = el['log-filter'].value
     const events = await api.listLogs(account.id, { limit: 2000, kinds: filter ? [filter] : [] })
-    el['persistent-log-view'].textContent = events.length ? events.map(formatPersistentEvent).join('\n') : 'No matching persistent events.'
-    el['persistent-log-view'].scrollTop = el['persistent-log-view'].scrollHeight
+    persistentFollow.render(() => { el['persistent-log-view'].textContent = events.length ? events.map(formatPersistentEvent).join('\n') : 'No matching persistent events.' })
   } catch (error) { el['persistent-log-view'].textContent = cleanError(error) }
 }
 
@@ -2458,7 +2470,7 @@ function openPov() {
   if (!state.accounts.length) return
   povPaused = false; povFocusId = null; povSnapshots.clear(); povDisplaySnapshots.clear()
   el['pov-columns'].value = state.settings.povColumns || 3; el['pov-refresh'].value = String(state.settings.povRefreshMs || 1500); el['pov-fps'].value = String(state.settings.povFrameRate || 30); el['pov-view-mode'].value = state.settings.povViewMode || 'perspective'; el['pov-radius'].value = state.settings.povRadius || 6
-  el['pov-dialog'].showModal(); renderPovGrid(); void refreshPov(); startPovPolling(); startPovAnimation()
+  el['pov-dialog'].showModal(); povFollow.reset(); renderPovGrid(); void refreshPov(); startPovPolling(); startPovAnimation()
 }
 function startPovPolling() { stopPovPolling(); if (!povPaused && !document.hidden) povTimer = setInterval(refreshPov, povFocusId ? 75 : 350) }
 function closePov() { closePovInput(); if (el['pov-dialog'].open) el['pov-dialog'].close() }

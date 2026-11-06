@@ -125,9 +125,10 @@
                   <button class="section-toggle" type="button" data-collapse-target="console-panel" aria-expanded="true" title="Collapse console" aria-label="Collapse console">⌃</button>
                 </div>
               </header>
-              <div id="console-log" class="console-log" role="log" aria-live="polite" aria-label="Server messages">
+              <div class="log-container"><div id="console-log" class="console-log" role="log" aria-live="polite" aria-label="Server messages">
                 <div class="console-placeholder">Server messages will appear here after you connect.</div>
               </div>
+              <button id="console-latest" class="jump-latest" type="button" hidden>Jump to latest</button></div>
               <form id="chat-form" class="chat-form">
                 <label class="sr-only" for="chat-message">Message or command</label>
                 <div class="chat-input-wrap">
@@ -588,7 +589,7 @@
       <div class="beta-dialog-content">
         <header class="dialog-header"><div><div class="eyebrow">Persistent history</div><h2 id="logs-title">Account logs</h2></div><button id="close-logs" class="icon-button" type="button" aria-label="Close logs">×</button></header>
         <div class="beta-toolbar"><select id="log-filter"><option value="">All events</option><option value="error">Errors</option><option value="chat">Chat</option><option value="sent">Sent actions</option><option value="status">Status</option><option value="macro">Automations</option></select><button id="refresh-logs" class="button secondary" type="button">Refresh</button><button id="clear-persistent-logs" class="button danger" type="button">Clear history</button></div>
-        <pre id="persistent-log-view" class="persistent-log-view">Loading…</pre>
+        <div class="log-container persistent-log-container"><pre id="persistent-log-view" class="persistent-log-view">Loading…</pre><button id="persistent-latest" class="jump-latest" type="button" hidden>Jump to latest</button></div>
       </div>
     </dialog>
 
@@ -829,6 +830,7 @@
           <button id="pov-pause" class="button secondary" type="button" aria-pressed="false">Pause</button>
         </div>
         <div id="pov-grid" class="pov-grid" aria-live="polite"></div>
+        <div class="log-container pov-log-container"><div id="pov-log" class="console-log" role="log" aria-label="POV chat messages"></div><button id="pov-latest" class="jump-latest" type="button" hidden>Jump to latest</button></div>
         <form id="pov-chat-form" class="chat-form"><input id="pov-chat-message" maxlength="256" autocomplete="off" placeholder="Message focused account" aria-label="POV chat message" /><button class="button secondary" type="submit">Send</button></form>
         <div class="beta-toolbar world-toolbar"><label>Radius <input id="pov-radius" type="number" min="2" max="12" value="6" /></label><label>X <input id="pov-x" type="number" step="1" /></label><label>Y <input id="pov-y" type="number" step="1" /></label><label>Z <input id="pov-z" type="number" step="1" /></label><button data-world-action="look-at" class="button secondary" type="button">Look</button><button data-world-action="walk-to" class="button secondary" type="button">Walk</button><button data-world-action="activate-block" class="button secondary" type="button">Use block</button><button data-world-action="dig-block" class="button danger" type="button">Dig</button><button data-world-action="attack-nearest" class="button danger" type="button">Attack nearest</button><button data-world-action="use-held" class="button secondary" type="button">Use held</button></div>
         <p id="pov-detail" class="dialog-copy">Click a perspective feed to focus it and capture the mouse.</p>
@@ -858,6 +860,7 @@
     <script src="macro-editor.js"></script>
     <script src="notifications-panel.js"></script>
     <script src="chat-history.js"></script>
+    <script src="log-follow.js"></script>
     <script src="onboarding.js"></script>
     <script src="overview-layout.js"></script>
     <script src="overview-editor.js"></script>
