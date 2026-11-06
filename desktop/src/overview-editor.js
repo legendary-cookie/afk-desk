@@ -54,6 +54,8 @@ window.createOverviewEditor = function ({ dashboard, settings, accountId, save, 
     }
     const measurements = {}
     let changed = Object.keys(lastMeasurements).length !== layout.length
+    // Measuring lets modules grow to full height, which resets inner scroll positions; save and restore them.
+    const scrolled = [...(grid.querySelectorAll?.('*') || [])].filter(el => Number(el.scrollHeight) > Number(el.clientHeight) + 1).map(el => [el, el.scrollTop, el.scrollHeight - el.clientHeight - el.scrollTop <= 2])
     grid.classList.toggle('overview-measuring', true)
     try {
       const rect = grid.getBoundingClientRect()
@@ -70,7 +72,7 @@ window.createOverviewEditor = function ({ dashboard, settings, accountId, save, 
             Math.abs(previous.naturalHeight - next.naturalHeight) > 8 || Math.abs(previous.headerHeight - next.headerHeight) > 8) changed = true
         else if (!resized && !force) measurements[item.id] = previous
       }
-    } finally { grid.classList.remove('overview-measuring') }
+    } finally { grid.classList.remove('overview-measuring'); for (const [el, top, bottom] of scrolled) el.scrollTop = bottom ? el.scrollHeight : top }
     if (!force && !resized && !changed) return
     lastSize = key; lastMeasurements = measurements
     const result = model.autoArrange(layout, { ...size, measurements })
