@@ -15,7 +15,7 @@ test('updates preserve history position and jump resumes following after layout'
   const view = { scrollTop: 100, scrollHeight: 200, clientHeight: 100, addEventListener: (name, fn) => { events[name] = fn } }
   const button = { addEventListener: (name, fn) => { events['button' + name] = fn } }
   const follow = attach(view, button, fn => frames.push(fn))
-  view.scrollTop = 40; events.scroll()
+  events.wheel(); view.scrollTop = 40; events.scroll()
   follow.render(() => { view.scrollHeight = 250 })
   assert.equal(view.scrollTop, 40); assert.equal(button.hidden, false)
   events.buttonclick(); assert.equal(view.scrollTop, 250); assert.equal(button.hidden, true)
@@ -24,4 +24,18 @@ test('updates preserve history position and jump resumes following after layout'
   assert.equal(view.scrollTop, 250)
   follow.render(() => { view.scrollHeight = 300 })
   assert.equal(view.scrollTop, 300)
+})
+
+test('programmatic scroll resets (re-render, re-parenting) never stop following', () => {
+  const events = {}
+  const view = { scrollTop: 0, scrollHeight: 400, clientHeight: 100, addEventListener: (name, fn) => { events[name] = fn } }
+  const button = { addEventListener: (name, fn) => { events['button' + name] = fn } }
+  const follow = attach(view, button, () => {})
+  view.scrollTop = 0; events.scroll() // browser reset with no user input
+  assert.equal(follow.state.following, true)
+  assert.equal(view.scrollTop, 400)
+  assert.equal(button.hidden, true)
+  events.wheel(); view.scrollTop = 50; events.scroll() // the user scrolls up
+  assert.equal(follow.state.following, false)
+  assert.equal(button.hidden, false)
 })

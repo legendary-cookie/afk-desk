@@ -17,7 +17,16 @@
     function update() { button.hidden = state.following }
     function bottom() { view.scrollTop = view.scrollHeight; update() }
     function reset() { state.reset(); bottom(); const current = ++generation; schedule(() => { if (current === generation && state.following) bottom() }) }
-    view.addEventListener('scroll', () => { state.scroll(view); update() })
+    // Only a scroll the user caused (wheel, touch, scrollbar drag, keys) may stop following.
+    // Programmatic resets (re-render, re-parenting, layout changes) must never unpin the view.
+    let userIntentUntil = 0
+    const intent = () => { userIntentUntil = Date.now() + 1000 }
+    for (const type of ['wheel', 'touchmove', 'pointerdown', 'keydown']) view.addEventListener(type, intent, { passive: true })
+    view.addEventListener('scroll', () => {
+      if (Date.now() <= userIntentUntil) state.scroll(view)
+      else if (state.following) view.scrollTop = view.scrollHeight
+      update()
+    })
     button.addEventListener('click', reset)
     if (typeof ResizeObserver === 'function') {
       let width, height
