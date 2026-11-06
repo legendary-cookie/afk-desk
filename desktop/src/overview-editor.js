@@ -102,6 +102,9 @@ window.createOverviewEditor = function ({ dashboard, settings, accountId, save, 
   }
   function draw() {
     observer?.disconnect()
+    // Detaching a node resets its scroll position; remember every scrolled area and restore it after re-attaching.
+    const scrolled = []
+    for (const node of Object.values(nodes)) for (const el of [node, ...(node.querySelectorAll?.('*') || [])]) if (Number(el.scrollHeight) > Number(el.clientHeight) + 1 || Number(el.scrollTop) > 0) scrolled.push([el, el.scrollTop, el.scrollHeight - el.clientHeight - el.scrollTop <= 2])
     auto.checked = mode === 'auto'; notice.hidden = mode === 'auto'
     const size = viewport()
     const arranged = mode === 'auto' ? model.autoArrange(layout, size) : null
@@ -156,6 +159,7 @@ window.createOverviewEditor = function ({ dashboard, settings, accountId, save, 
     for (const [id, name] of Object.entries(model.names)) if (!byId.has(id)) { const option = document.createElement('option'); option.value = id; option.textContent = name; picker.append(option) }
     add.disabled = !picker.options.length
     if (mode === 'auto') arrangePanels(viewport(), true)
+    for (const [el, top, bottom] of scrolled) el.scrollTop = bottom ? el.scrollHeight : top
     observeContent()
     onReparent()
   }
