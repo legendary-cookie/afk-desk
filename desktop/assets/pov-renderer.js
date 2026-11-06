@@ -1,9 +1,9 @@
 /* Original procedural materials. No Minecraft assets or client code are distributed. */
 ;(function (root, factory) {
-  const api = factory()
+  const api = factory(typeof module === 'object' && module.exports ? require('./pov-math.js') : root.afkPovMath)
   if (typeof module === 'object' && module.exports) module.exports = api
   else root.afkVoxelRenderer = api
-})(typeof globalThis !== 'undefined' ? globalThis : this, function () {
+})(typeof globalThis !== 'undefined' ? globalThis : this, function (povMath) {
   const FULL = [[0, 0, 0, 1, 1, 1]]
   const textures = new Map()
   const frac = n => n - Math.floor(n)
@@ -169,7 +169,7 @@
       const width = clamp(Math.round(Number(requestedWidth) || 160), 16, 320), height = clamp(Math.round(Number(requestedHeight) || 90), 9, 180)
       if (!this.frame || this.frame.width !== width || this.frame.height !== height) this.frame = { width, height, data: new Uint8ClampedArray(width * height * 4) }
       const pixels = this.frame.data, p = snapshot.position || { x: 0, y: 0, z: 0 }
-      const origin = { x: p.x, y: p.y + 1.62, z: p.z }, yaw = Number(snapshot.yaw) || 0, pitch = Number(snapshot.pitch) || 0
+      const origin = { x: p.x, y: p.y + povMath.eyeHeight(snapshot), z: p.z }, { yaw, pitch } = povMath.viewBasis(snapshot.yaw, snapshot.pitch)
       const sy = Math.sin(yaw), cy = Math.cos(yaw), sp = Math.sin(pitch), cp = Math.cos(pitch)
       const scale = Math.tan(Math.PI / 5), aspect = width / height, maximum = clamp(Number(snapshot.renderDistance) || (snapshot.radius || 6) * 1.7, 6, 128)
       const ray = { x: 0, y: 0, z: 0 }

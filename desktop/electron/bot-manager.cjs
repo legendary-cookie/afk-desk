@@ -1,3 +1,4 @@
+const povMath = require('../assets/pov-math.js')
 const { boundedAction, queueInventoryAction } = require('./inventory-action.cjs')
 const hud = require('./hud.cjs')
 const { isWithinSchedule, deferSafety, installSafety } = require('./safety.cjs')
@@ -954,6 +955,10 @@ class BotManager {
     }))
     return { edition: 'java', radius: safeRadius, renderDistance: safeRadius > 12 ? safeRadius : undefined, position: vectorSnapshot(center), yaw: Number(bot.entity.yaw) || 0, pitch: Number(bot.entity.pitch) || 0, blocks, entities,
       blockRevision: session.worldBlockRevision || 0,
+      sneaking: bot.controlState?.sneak === true, eyeHeight: worldEye(bot).y - center.y,
+      digging: session.worldDigging && !session.worldDigging.cancelled ? {
+        block: session.worldDigging.block, progress: Math.min(.99, Math.max(0, (Date.now() - session.worldDigging.startedAt) / session.worldDigging.durationMs))
+      } : null,
       quickBarSlot: Math.max(0, Math.min(Number(bot.quickBarSlot) || 0, 8)),
       heldItem: bot.heldItem ? { name: String(bot.heldItem.name || '').slice(0, 80), displayName: String(bot.heldItem.displayName || bot.heldItem.name || '').slice(0, 100), count: Math.max(0, Math.min(Number(bot.heldItem.count) || 0, 999)) } : null,
       at: Date.now() }
@@ -1017,10 +1022,10 @@ class BotManager {
       return { slot }
     }
     if (bot.currentWindow) throw new Error('Close the server menu before interacting with the world.')
-    if (action === 'dig-crosshair') return this.digWorldBlock(id, session, crosshairBlock(bot))
+    if (action === 'dig-crosshair') return this.digWorldBlock(id, session, crosshairBlock(bot, true, target.ray), Boolean(target.ray))
     if (action === 'use-crosshair') {
       if (session.worldUsing) throw new Error('A world interaction is already running.')
-      const block = crosshairBlock(bot, false)
+      const block = crosshairBlock(bot, false, target.ray)
       if (!block) {
         if (bot.registry?.blocksByName?.[bot.heldItem?.name]) throw new Error("Can't place: nothing in reach")
         bot.activateItem()
@@ -1028,16 +1033,22 @@ class BotManager {
       }
       const face = blockFaceVector(block.face)
       session.worldUsing = true
+      let response
       try {
+        // false waits for Mineflayer's movement packet, rather than only updating
+        // local rotation. Do not let activateBlock turn back to the block centre.
+        await boundedAction(scope => scope.wait(() => bot.lookAt(block.intersect, false)), 2000, 'Looking at block')
+        if (this.sessions.get(id) !== session) throw new Error('This account is no longer online.')
+        if (worldEye(bot).distanceTo(block.intersect) > 5.001) throw new Error('Target is outside interaction range.')
         const heldName = bot.heldItem?.name
-        const heldBlock = heldName && bot.registry?.blocksByName?.[heldName]
-        if (heldBlock && (!isInteractiveBlock(block.name) || bot.controlState?.sneak)) {
-          await bot.placeBlock(block, face)
-          return { placed: true, position: block.position.plus(face), block: heldName }
-        }
-        await bot.activateBlock(block, face)
-        return { used: true, position: block.position, block: block.name }
+        const placed = Boolean(bot.registry?.blocksByName?.[heldName] && (!isInteractiveBlock(block.name) || bot.controlState?.sneak))
+        const position = placed ? block.position.plus(face) : block.position
+        response = watchWorldUse(bot, block, position, placed)
+        sendWorldUse(session, block)
+        const message = await response.promise
+        return { used: !placed, placed, position, block: placed ? heldName : block.name, message }
       } finally {
+        response?.cleanup()
         session.worldUsing = false
         this.invalidateWorldSnapshot(id, session)
       }
@@ -1074,16 +1085,17 @@ class BotManager {
   async digWorldBlock(id, session, block, turnToTarget = false) {
     if (session.worldDigging) throw new Error('Digging is already running.')
     if (!block || ['air', 'cave_air', 'void_air'].includes(block.name)) throw new Error('No visible block is in reach.')
-    const operation = { cancelled: false }
+    const operation = { cancelled: false, block: block.name, startedAt: Date.now(), durationMs: Math.max(1, Number(session.bot.digTime?.(block)) || 1000) }
     session.worldDigging = operation
     try {
       if (turnToTarget) {
-        await session.bot.lookAt(block.position.offset(0.5, 0.5, 0.5), true)
+        await boundedAction(scope => scope.wait(() => session.bot.lookAt(block.intersect || block.position.offset(0.5, 0.5, 0.5), false)), 2000, 'Looking at block')
         if (operation.cancelled || this.sessions.get(id) !== session) return { cancelled: true }
-        validateVisibleBlock(session.bot, block)
+        if (!block.intersect) validateVisibleBlock(session.bot, block)
       }
       // Keep the validated crosshair direction. Mineflayer's ignore mode also
       // installs cancellation synchronously instead of awaiting a look turn.
+      operation.startedAt = Date.now()
       await session.bot.dig(block, 'ignore')
       return operation.cancelled ? { cancelled: true } : { position: block.position, block: block.name }
     } catch (error) {
@@ -1599,19 +1611,78 @@ class BotManager {
 }
 
 function worldEye(bot) {
-  const height = Number(bot.entity.eyeHeight) || 1.62
-  return bot.entity.position.offset(0, Math.max(0.1, Math.min(height, 2)), 0)
+  return bot.entity.position.offset(0, povMath.eyeHeight({ eyeHeight: bot.entity.eyeHeight, sneaking: bot.controlState?.sneak === true }), 0)
 }
 
-function crosshairBlock(bot, required = true) {
+function crosshairBlock(bot, required = true, ray) {
   if (!bot.world?.raycast) throw new Error('World raycasting is not available yet.')
-  const yaw = Number(bot.entity.yaw) || 0
-  const pitch = Number(bot.entity.pitch) || 0
-  const direction = new Vec3(-Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch))
-  const block = bot.world.raycast(worldEye(bot), direction, 5)
-  if (block && (!block.intersect || worldEye(bot).distanceTo(block.intersect) > 5.001)) throw new Error('Target is outside interaction range.')
+  let origin = worldEye(bot)
+  let direction = povMath.cameraRay({ position: bot.entity.position, yaw: bot.entity.yaw, pitch: bot.entity.pitch }).direction
+  if (ray !== undefined) {
+    const vector = value => {
+      if (!value || !['x', 'y', 'z'].every(axis => Number.isFinite(value[axis]))) throw new Error('Invalid cursor ray.')
+      return new Vec3(value.x, value.y, value.z)
+    }
+    origin = vector(ray?.origin)
+    direction = vector(ray?.direction)
+    // The rendered camera interpolates movement; only accept origins near the
+    // live eye, and always enforce reach from both eyes on the backend.
+    if (origin.distanceTo(worldEye(bot)) > .75 || direction.norm() < .99 || direction.norm() > 1.01) throw new Error('Invalid cursor ray.')
+    direction = direction.normalize()
+  } else direction = new Vec3(direction.x, direction.y, direction.z)
+  const block = bot.world.raycast(origin, direction, 5)
+  if (block && (!block.intersect || worldEye(bot).distanceTo(block.intersect) > 5.001 || origin.distanceTo(block.intersect) > 5.001)) throw new Error('Target is outside interaction range.')
   if (!block && required) throw new Error('No visible block is in reach.')
   return block
+}
+
+function sendWorldUse(session, block) {
+  const bot = session.bot
+  const cursor = block.intersect.minus(block.position)
+  const packet = { location: block.position, direction: block.face, hand: 0,
+    cursorX: Math.max(0, Math.min(1, cursor.x)), cursorY: Math.max(0, Math.min(1, cursor.y)), cursorZ: Math.max(0, Math.min(1, cursor.z)) }
+  // Mineflayer 4.37 activateBlock and _genericPlace hardcode sequence: 0.
+  // Keep a counter on this connection, including placement and GUI interactions.
+  session.worldUseSequence = (session.worldUseSequence || 0) + 1
+  if (bot.supportFeature('blockPlaceHasHeldItem')) {
+    packet.heldItem = require('prismarine-item')(bot.registry).toNotch(bot.heldItem)
+    delete packet.hand
+  }
+  if (bot.supportFeature('blockPlaceHasHeldItem') || bot.supportFeature('blockPlaceHasHandAndIntCursor')) {
+    for (const axis of ['cursorX', 'cursorY', 'cursorZ']) packet[axis] = Math.min(15, Math.floor(packet[axis] * 16))
+  }
+  if (bot.supportFeature('blockPlaceHasInsideBlock')) Object.assign(packet, { insideBlock: false, sequence: session.worldUseSequence, worldBorderHit: false })
+  bot._client.write('block_place', packet)
+  bot.swingArm?.()
+}
+
+function watchWorldUse(bot, block, position, placed) {
+  const state = value => JSON.stringify([value?.name, value?.stateId, value?.getProperties?.()])
+  const before = state(block), beforePlaced = placed ? state(bot.blockAt?.(position)) : null
+  let finish, timer
+  const cleanup = () => {
+    clearTimeout(timer)
+    bot.removeListener('blockUpdate', update)
+    bot.removeListener('windowOpen', opened)
+    bot.removeListener('end', ended)
+  }
+  const promise = new Promise(resolve => { finish = message => { cleanup(); resolve(message) } })
+  const label = String(block.name).replace(/^minecraft:/, '').replace(/^(?:oak|spruce|birch|jungle|acacia|dark_oak|mangrove|cherry|pale_oak|bamboo|crimson|warped|iron|copper)_((?:trap)?door)$/, '$1').replace(/_/g, ' ')
+  const update = (_old, next) => {
+    if (next?.position?.equals(block.position) && state(next) !== before) {
+      const open = next.getProperties?.().open
+      finish(typeof open === 'boolean' ? `${open ? 'Opened' : 'Closed'} ${label}` : `Used ${label}`)
+    } else if (placed && next?.position?.equals(position) && state(next) !== beforePlaced) {
+      finish(`Placed ${String(next.name).replace(/_/g, ' ')}`)
+    }
+  }
+  const opened = () => finish(`Opened ${label}`)
+  const ended = () => finish('No response from server')
+  bot.on('blockUpdate', update)
+  bot.on('windowOpen', opened)
+  bot.on('end', ended)
+  timer = setTimeout(() => finish('No response from server'), 500)
+  return { promise, cleanup }
 }
 
 function validateVisibleBlock(bot, block) {

@@ -2672,9 +2672,9 @@ function selectPovTarget(event, capture = true) {
     // only starts the fallback gesture; it must remain free to become a drag.
     if (!capture) return
     try {
-      focusedCanvas?.requestPointerLock?.()?.catch?.(() => { el['pov-detail'].textContent = 'Mouse capture unavailable. Click to dig, right click to use/place, or drag to look; WASD moves.' })
+      focusedCanvas?.requestPointerLock?.()?.catch?.(() => { el['pov-detail'].textContent = 'Mouse capture unavailable. Hold left click to dig, right click to use/place, or drag to look; WASD moves.' })
     } catch {
-      el['pov-detail'].textContent = 'Mouse capture unavailable. Click to dig, right click to use/place, or drag to look; WASD moves.'
+      el['pov-detail'].textContent = 'Mouse capture unavailable. Hold left click to dig, right click to use/place, or drag to look; WASD moves.'
     }
     return
   }
@@ -2689,13 +2689,18 @@ function selectPovTarget(event, capture = true) {
 
 function handlePovMouseMove(event) {
   const locked = document.pointerLockElement
-  if (!locked && povDrag && !(event.buttons & 1)) povDrag = null
+  if (povDrag && !(event.buttons & 1)) { releasePovActions(0); povDrag = null }
   const canvas = locked || povDrag?.canvas
   const accountId = canvas?.closest?.('#pov-grid') ? canvas.dataset.accountId : null
   if (!accountId || accountId !== povFocusId || povPaused || !el['pov-dialog'].open || el['pov-view-mode'].value !== 'perspective') return
   if (!locked && !povDrag.dragged) {
     if (Math.hypot(event.clientX - povDrag.startX, event.clientY - povDrag.startY) <= 4) return
     povDrag.dragged = true
+    releasePovActions(0, accountId)
+  }
+  if (locked && povDrag && !povDrag.dragged) {
+    povDrag.x += Number(event.movementX) || 0; povDrag.y += Number(event.movementY) || 0
+    if (Math.hypot(povDrag.x, povDrag.y) > 4) { povDrag.dragged = true; releasePovActions(0, accountId) }
   }
   povLookDelta.accountId = accountId
   const delta = locked ? povMath.mouseLookDelta(event.movementX, event.movementY) : povMath.mouseLookDelta(event.clientX - povDrag.x, event.clientY - povDrag.y)
@@ -2731,7 +2736,7 @@ function handlePovPointerLockChange() {
   if (!active) { releaseAllManualInputs(povFocusId); releasePovActions() }
   el['pov-detail'].textContent = active
     ? 'Gameplay control active · WASD move · Space jumps · Mouse looks · Esc releases the mouse.'
-    : 'Click to dig and capture the mouse, right click to use/place, or drag to look.'
+    : 'Hold left click to dig and capture the mouse, right click to use/place, or drag to look.'
 }
 
 function drawPerspectivePov(snapshot, canvas, account) {
@@ -2742,6 +2747,7 @@ function drawPerspectivePov(snapshot, canvas, account) {
   const renderWidth = povFocusId ? (Number(el['pov-fps'].value) === 60 ? 192 : 256) : 128
   const renderHeight = Math.round(renderWidth * 9 / 16)
   const frame = cached.renderer.render(snapshot, renderWidth, renderHeight)
+  cached.snapshot = snapshot; cached.aspect = frame.width / frame.height
   const lowResolutionCanvas = cached.canvas
   if (lowResolutionCanvas.width !== renderWidth || lowResolutionCanvas.height !== renderHeight) {
     lowResolutionCanvas.width = renderWidth; lowResolutionCanvas.height = renderHeight
@@ -2753,6 +2759,7 @@ function drawPerspectivePov(snapshot, canvas, account) {
   context.drawImage(lowResolutionCanvas, 0, 0, width, height)
   drawPovEntities(context, snapshot, canvas)
   drawCrosshair(context, canvas)
+  drawPovActionHud(context, canvas, snapshot)
   if (state.settings.povShowHud !== false) drawPovHud(context, canvas, account)
   if (document.getElementById('pov-game-hud').checked) drawGameHud(context, canvas, state.telemetry.get(account.id)?.hud)
   canvas.dataset.position = JSON.stringify(snapshot.position); canvas.dataset.radius = String(snapshot.radius || 6)
@@ -2768,7 +2775,7 @@ function drawPovEntities(context, snapshot, canvas) {
   for (const entity of snapshot.entities || []) {
     const label = povMath.entityLabel(entity)
     if (!label) continue
-    const delta = { x: Number(entity.x ?? entity.position?.x) - snapshot.position.x, y: Number(entity.y ?? entity.position?.y) - snapshot.position.y - 1.62, z: Number(entity.z ?? entity.position?.z) - snapshot.position.z }
+    const delta = { x: Number(entity.x ?? entity.position?.x) - snapshot.position.x, y: Number(entity.y ?? entity.position?.y) - snapshot.position.y - povMath.eyeHeight(snapshot), z: Number(entity.z ?? entity.position?.z) - snapshot.position.z }
     const dot = vector => delta.x * vector.x + delta.y * vector.y + delta.z * vector.z
     const depth = dot(basis.forward)
     const distance = Math.hypot(delta.x, delta.y, delta.z)
@@ -2839,8 +2846,24 @@ function drawPovHud(context, canvas, account) {
   }
   const held = inventory.find(item => item.slot === 36 + selected) || snapshot.heldItem
   context.textAlign = 'center'; context.fillStyle = '#f3eedf'; context.font = `${Math.max(11, canvas.width / 52)}px sans-serif`
-  if (held) context.fillText(held.customName || held.displayName || held.name, canvas.width / 2, bottom - 34)
+  if (held) context.fillText(maskText(held.customName || held.displayName || held.name), canvas.width / 2, bottom - 34)
   context.lineWidth = 1
+}
+
+function drawPovActionHud(context, canvas, snapshot) {
+  context.save(); context.font = `${Math.max(11, canvas.width / 60)}px sans-serif`; context.textAlign = 'left'
+  if (snapshot.sneaking) {
+    context.fillStyle = '#080d12bb'; context.fillRect(8, 8, context.measureText('Sneaking').width + 16, 25)
+    context.fillStyle = '#ffdf85'; context.fillText('Sneaking', 16, 25)
+  }
+  if (snapshot.digging) {
+    const progress = Math.max(0, Math.min(1, Number(snapshot.digging.progress) || 0))
+    const x = canvas.width / 2 - 110, y = canvas.height / 2 + 25
+    context.fillStyle = '#080d12dd'; context.fillRect(x - 8, y - 18, 236, 38)
+    context.fillStyle = '#fff'; context.fillText(maskText(`Breaking ${snapshot.digging.block.replace(/_/g, ' ')} · ${Math.floor(progress * 100)}%`), x, y)
+    context.fillStyle = '#ffdf85'; context.fillRect(x, y + 8, 220 * progress, 4)
+  }
+  context.restore()
 }
 
 function showPovStatus(message, accountId = povFocusId) {
@@ -2850,18 +2873,29 @@ function showPovStatus(message, accountId = povFocusId) {
   povStatusTimer = setTimeout(() => { el['pov-action-status'].textContent = '' }, 2500)
 }
 
-function runPovMouseAction(accountId, button, held = false) {
+function runPovMouseAction(accountId, button, held = false, target = {}) {
   const key = `${accountId}|${button}`
   if (held && povHeldActions.has(key)) return
   if (held) povHeldActions.add(key)
   const action = button === 0 ? 'dig-crosshair' : 'use-crosshair'
   showPovStatus(button === 0 ? 'Breaking…' : 'Using…', accountId)
-  api.worldAction(accountId, action, {}).then(result => {
-    showPovStatus(result?.cancelled ? 'Dig cancelled' : result?.placed ? 'Placed' : button === 0 ? 'Broken' : 'Used', accountId)
+  api.worldAction(accountId, action, target).then(result => {
+    showPovStatus(result?.cancelled ? 'Dig cancelled' : result?.message || (button === 0 ? `Broke ${String(result?.block || 'block').replace(/_/g, ' ')}` : result?.placed ? 'Placed' : 'Used'), accountId)
   }).catch(error => {
     const message = cleanError(error)
     showPovStatus(/^Can't /.test(message) ? message : `${button === 0 ? "Can't break" : "Can't use/place"}: ${message}`, accountId)
   })
+}
+
+function povMouseTarget(event) {
+  if (document.pointerLockElement) return {}
+  const canvas = event.currentTarget, rectangle = canvas.getBoundingClientRect()
+  const cached = povCanvasRenderers.get(canvas)
+  const snapshot = cached?.snapshot || povDisplaySnapshots.get(canvas.dataset.accountId) || povSnapshots.get(canvas.dataset.accountId)
+  if (!snapshot?.position || !rectangle.width || !rectangle.height) return {}
+  const x = Math.max(0, Math.min(1, (event.clientX - rectangle.left) / rectangle.width))
+  const y = Math.max(0, Math.min(1, (event.clientY - rectangle.top) / rectangle.height))
+  return { ray: povMath.cameraRay(snapshot, x, y, cached?.aspect || canvas.width / canvas.height) }
 }
 
 function handlePovMouseDown(event) {
@@ -2869,28 +2903,24 @@ function handlePovMouseDown(event) {
   if (povPaused || !el['pov-dialog'].open || el['pov-view-mode'].value !== 'perspective' || ![0, 2].includes(event.button)) return
   event.preventDefault()
   if (!document.pointerLockElement) {
+    const target = povMouseTarget(event)
     povSuppressClick = false
     selectPovTarget(event, false)
     const focusedCanvas = [...el['pov-grid'].querySelectorAll('canvas')].find(entry => entry.dataset.accountId === canvas.dataset.accountId)
     if (event.button === 0) {
       povDrag = { canvas: focusedCanvas || canvas, startX: event.clientX, startY: event.clientY, x: event.clientX, y: event.clientY, dragged: false }
-    } else runPovMouseAction(canvas.dataset.accountId, 2, true)
+      runPovMouseAction(canvas.dataset.accountId, 0, true, target)
+    } else runPovMouseAction(canvas.dataset.accountId, 2, true, target)
     return
   }
   if (document.pointerLockElement !== canvas || canvas.dataset.accountId !== povFocusId) return
+  if (event.button === 0) povDrag = { canvas, x: 0, y: 0, dragged: false }
   runPovMouseAction(povFocusId, event.button, true)
 }
 function releasePovMouse(event) {
-  // A fallback click digs to completion. Sending stop-dig on this same mouseup
-  // would cancel it before Mineflayer's survival digging timer can finish.
-  const drag = povDrag
-  if (event.button === 0 && drag) {
+  if (event.button === 0 && povDrag) {
+    povSuppressClick = povDrag.dragged
     povDrag = null
-    povSuppressClick = drag.dragged
-    if (!drag.dragged && Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) <= 4 &&
-        event.target === drag.canvas && !povPaused && el['pov-dialog'].open) {
-      runPovMouseAction(drag.canvas.dataset.accountId, 0)
-    }
   }
   releasePovActions(event.button)
 }

@@ -11,6 +11,8 @@ function fixture(t) {
   bot.inventory.items = () => []
   bot.inventory.slots = []
   bot.setControlState = () => {}
+  bot.lookAt = async () => {}
+  bot.supportFeature = feature => feature === 'blockPlaceHasInsideBlock'
   bot.quit = () => bot.emit('end')
   bot.quickBarSlot = 0
   const manager = new BotManager({profilesPath: 'profiles', emit: () => {}, createBot: () => bot})
@@ -112,21 +114,27 @@ test('walking into a new snapshot anchor changes its revision even without block
   assert.ok(after.blocks.some(block => block.x === 3))
 })
 
-test('crosshair use places held blocks on the hit face but opens interactive blocks', async t => {
+test('crosshair use places held blocks on the hit face and opens GUIs while holding blocks', async t => {
   const {manager, bot} = fixture(t)
   const block = {name: 'stone', position: new Vec3(0, 65, -2), intersect: new Vec3(0, 65.62, -1), face: 3}
   bot.world = {raycast: () => block}
   bot.heldItem = {name: 'dirt', count: 5}
   bot.registry = {blocksByName: {dirt: {id: 3}}}
-  const placements = []
-  bot.placeBlock = async (target, face) => placements.push([target.name, face])
-  bot.activateBlock = async target => { bot.opened = target.name }
+  const packets = []
+  bot._client.write = (name, packet) => {
+    packets.push([name, packet])
+    if (block.name === 'stone') bot.emit('blockUpdate', null, {name: 'dirt', position: block.position.offset(0, 0, 1)})
+    else bot.emit('windowOpen', {})
+  }
   assert.equal((await manager.worldAction('world', 'use-crosshair')).placed, true)
-  assert.deepEqual(placements, [['stone', new Vec3(0, 0, 1)]])
-  block.name = 'chest'
-  await manager.worldAction('world', 'use-crosshair')
-  assert.equal(bot.opened, 'chest')
-  assert.equal(placements.length, 1)
+  assert.equal(packets[0][1].direction, 3)
+  for (const name of ['chest', 'barrel', 'crafting_table', 'furnace']) {
+    block.name = name
+    const result = await manager.worldAction('world', 'use-crosshair')
+    assert.equal(result.used, true)
+    assert.equal(result.message, `Opened ${name.replace(/_/g, ' ')}`)
+  }
+  assert.deepEqual(packets.map(([, p]) => p.sequence), [1, 2, 3, 4, 5])
 })
 
 test('hotbar validates exact indices, stop-use releases held items and missing raycast fails closed', async t => {
@@ -230,3 +238,182 @@ test('real crosshair ray hits the closest shape using live eye height, yaw and p
   bot.entity.pitch = 0
   await assert.rejects(manager.worldAction('world', 'dig-crosshair'), /in reach/)
 })
+
+
+test('cursor ray chooses the clicked trapdoor over the centre chest and looks before sending hit offsets and increasing sequences', async t => {
+  const { manager, bot } = fixture(t)
+  const WorldSync = require('prismarine-world/src/worldsync')
+  const { cameraRay } = require('../assets/pov-math.js')
+  const world = new WorldSync({})
+  bot.entity.position = new Vec3(.5, 64, .5)
+  const blocks = [
+    { name: 'chest', position: new Vec3(0, 65, -3), shapes: [[0, 0, 0, 1, 1, 1]] },
+    { name: 'oak_trapdoor', stateId: 1, position: new Vec3(2, 65, -3), shapes: [[0, 0, 0, 1, 1, .1875]], getProperties: () => ({ open: false }) }
+  ]
+  world.getBlock = point => blocks.find(b => b.position.equals(point)) || null
+  bot.world = world
+  let finishLook, lookPoint
+  bot.lookAt = (point, force) => {
+    assert.equal(force, false, 'wait for the look packet')
+    lookPoint = point
+    return new Promise(resolve => { finishLook = resolve })
+  }
+  const packets = []
+  bot._client.write = (name, packet) => {
+    assert.equal(name, 'block_place')
+    packets.push(packet)
+    const block = blocks.find(b => b.position.equals(packet.location))
+    if (block.name === 'chest') bot.emit('windowOpen', {})
+    else bot.emit('blockUpdate', block, { ...block, stateId: block.stateId + 1, getProperties: () => ({ open: packets.length === 1 }) })
+  }
+  const snapshot = { position: bot.entity.position, yaw: 0, pitch: 0 }
+  const ray = cameraRay(snapshot, .75, .5, 16 / 9)
+  const use = manager.worldAction('world', 'use-crosshair', { ray })
+  assert.equal(packets.length, 0, 'no interaction until the look finishes')
+  assert.ok(lookPoint.x > 2)
+  finishLook()
+  const opened = await use
+  assert.equal(opened.block, 'oak_trapdoor')
+  assert.equal(opened.message, 'Opened trapdoor')
+  assert.equal(packets[0].direction, 3)
+  assert.ok(Math.abs(packets[0].cursorX - (lookPoint.x - 2)) < 1e-10)
+  assert.ok(Math.abs(packets[0].cursorY - .62) < 1e-10)
+  assert.ok(Math.abs(packets[0].cursorZ - .1875) < 1e-10)
+  const close = manager.worldAction('world', 'use-crosshair', { ray })
+  finishLook()
+  assert.equal((await close).message, 'Closed trapdoor')
+  const centre = manager.worldAction('world', 'use-crosshair')
+  finishLook()
+  assert.equal((await centre).block, 'chest')
+  assert.deepEqual(packets.map(p => p.sequence), [1, 2, 3])
+})
+
+test('block state feedback covers doors, buttons and levers and ignores unrelated and unchanged updates', async t => {
+  const { manager, bot } = fixture(t)
+  const block = { name: 'oak_door', position: new Vec3(0, 65, -2), intersect: new Vec3(.25, 65.5, -1), face: 3, stateId: 10 }
+  bot.world = { raycast: () => block }
+  for (const name of ['oak_door', 'stone_button', 'lever']) {
+    block.name = name
+    bot._client.write = () => {
+      bot.emit('blockUpdate', block, block)
+      bot.emit('blockUpdate', block, { ...block, position: new Vec3(1, 65, -2), stateId: 11 })
+      bot.emit('blockUpdate', block, { ...block, stateId: 11, getProperties: () => ({ open: true }) })
+    }
+    const result = await manager.worldAction('world', 'use-crosshair')
+    assert.match(result.message, /^Opened /)
+    assert.equal(bot.listenerCount('windowOpen'), 1, 'response listeners are removed')
+  }
+})
+
+test('a use with no server state change reports no response after 500ms and cleans up', async t => {
+  const { manager, bot } = fixture(t)
+  const block = { name: 'oak_trapdoor', position: new Vec3(0, 65, -2), intersect: new Vec3(0, 65.62, -1), face: 3, stateId: 1 }
+  bot.world = { raycast: () => block }
+  let sent
+  const packetSent = new Promise(resolve => { sent = resolve })
+  bot._client.write = () => { bot.emit('blockUpdate', block, block); sent() }
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const pending = manager.worldAction('world', 'use-crosshair')
+  await packetSent
+  let done = false
+  pending.then(() => { done = true })
+  t.mock.timers.tick(499)
+  await Promise.resolve()
+  assert.equal(done, false)
+  t.mock.timers.tick(1)
+  assert.equal((await pending).message, 'No response from server')
+  assert.equal(bot.listenerCount('windowOpen'), 1)
+})
+
+test('sneaking snapshots and world rays lower eye height without subtracting twice; dig progress exists only during the hold', async t => {
+  const { manager, bot } = fixture(t)
+  const standing = manager.worldSnapshot('world', 2)
+  assert.equal(standing.sneaking, false)
+  assert.ok(Math.abs(standing.eyeHeight - 1.62) < 1e-9)
+  bot.controlState = { sneak: true }
+  const crouch = manager.worldSnapshot('world', 2)
+  assert.equal(crouch.sneaking, true)
+  assert.ok(Math.abs(standing.eyeHeight - crouch.eyeHeight - .3) < 1e-9)
+  bot.entity.eyeHeight = 1.27
+  assert.ok(Math.abs(manager.worldSnapshot('world', 2).eyeHeight - 1.27) < 1e-9)
+  const block = { name: 'stone', position: new Vec3(0, 65, -2), intersect: new Vec3(0, 65.27, -1), face: 3 }
+  bot.world = { raycast: eye => { assert.equal(eye.y, 65.27); return block } }
+  let finish
+  bot.digTime = () => 1000
+  bot.dig = () => new Promise(resolve => { finish = resolve })
+  bot.stopDigging = () => finish()
+  t.mock.timers.enable({ apis: ['Date'], now: 10000 })
+  const digging = manager.worldAction('world', 'dig-crosshair')
+  assert.equal(manager.worldSnapshot('world', 2).digging.progress, 0)
+  t.mock.timers.tick(400)
+  assert.deepEqual(manager.worldSnapshot('world', 2).digging, { block: 'stone', progress: .4 })
+  await manager.worldAction('world', 'stop-dig')
+  assert.equal(manager.worldSnapshot('world', 2).digging, null)
+  assert.equal((await digging).cancelled, true)
+})
+
+test('cursor rays reject forged distant eyes and malformed vectors before interacting', async t => {
+  const { manager, bot } = fixture(t)
+  bot.world = { raycast: () => assert.fail('invalid ray must not reach raycast') }
+  for (const ray of [null, { origin: { x: 100, y: 65, z: 0 }, direction: { x: 0, y: 0, z: -1 } }, { origin: { x: 0, y: 65.62, z: 0 }, direction: { x: NaN, y: 0, z: -1 } }]) {
+    await assert.rejects(manager.worldAction('world', 'use-crosshair', { ray }), /Invalid cursor ray/)
+  }
+})
+
+
+test('using a held block also observes target state changes for interactions such as composters', async t => {
+  const { manager, bot } = fixture(t)
+  const block = { name: 'composter', stateId: 1, position: new Vec3(0, 65, -2), intersect: new Vec3(0, 65.62, -1), face: 3 }
+  bot.world = { raycast: () => block }
+  bot.registry = { blocksByName: { wheat_seeds: {} } }
+  bot.heldItem = { name: 'wheat_seeds' }
+  bot._client.write = () => bot.emit('blockUpdate', block, { ...block, stateId: 2 })
+  assert.equal((await manager.worldAction('world', 'use-crosshair')).message, 'Used composter')
+})
+
+for (const version of ['1.21.1', '1.21.11']) {
+  test(`${version}: native Mineflayer look packet precedes serializable block_place with per-session sequences`, async t => {
+    const { manager, bot } = fixture(t)
+    const fs = require('node:fs'), vm = require('node:vm'), { createRequire } = require('node:module')
+    bot.registry = require('minecraft-data')(version)
+    bot.supportFeature = feature => bot.registry.supportFeature(feature)
+    bot.entity.velocity = new Vec3(0, 0, 0)
+    bot.game = { gameMode: 'survival' }
+    bot.isAlive = true
+    bot.swingArm = () => {}
+    const serializer = require('minecraft-protocol').createSerializer({ state: 'play', isServer: false, version })
+    const packets = []
+    bot._client.write = (name, params) => {
+      assert.ok(serializer.createPacketBuffer({ name, params }).length > 0)
+      packets.push({ name, params: { ...params } })
+      if (name === 'block_place') bot.emit('windowOpen', {})
+    }
+    let now = 0, tick
+    const physicsPath = require.resolve('mineflayer/lib/plugins/physics')
+    const nativeRequire = createRequire(physicsPath)
+    const context = { module: { exports: {} }, require: name => name === 'perf_hooks' ? { performance: { now: () => now } } : nativeRequire(name),
+      setInterval: fn => { tick = fn; return 1 }, clearInterval() {}, setTimeout, clearTimeout, console }
+    vm.runInNewContext(fs.readFileSync(physicsPath, 'utf8'), context)
+    context.module.exports(bot, { physicsEnabled: false })
+    const block = { name: 'chest', position: new Vec3(1, 65, -2), intersect: new Vec3(1.25, 65.5, -1), face: 3 }
+    bot.world = { raycast: () => block }
+    bot.blockAt = () => block
+    bot.emit('login')
+    bot._client.emit('position', { x: 0, y: 64, z: 0, yaw: 180, pitch: 0, flags: 0, teleportId: 1 })
+    packets.length = 0
+    const first = manager.worldAction('world', 'use-crosshair')
+    assert.equal(packets.length, 0, 'look has not reached the wire before a movement tick')
+    now += 50; tick()
+    assert.ok(packets.some(p => /look$/.test(p.name)), 'the native tick sends a look packet')
+    assert.equal((await first).message, 'Opened chest')
+    assert.ok(packets.findIndex(p => /look$/.test(p.name)) < packets.findIndex(p => p.name === 'block_place'))
+    const second = manager.worldAction('world', 'use-crosshair')
+    now += 50; tick()
+    await second
+    const uses = packets.filter(p => p.name === 'block_place').map(p => p.params)
+    assert.deepEqual(uses.map(p => p.sequence), [1, 2])
+    assert.equal(uses[0].cursorX, .25)
+    assert.equal(uses[0].cursorY, .5)
+    assert.equal(uses[0].cursorZ, 1)
+  })
+}

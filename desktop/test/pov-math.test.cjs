@@ -33,3 +33,26 @@ test('POV mouse look follows Minecraft yaw and pitch directions', () => {
   assert.equal(basis.pitch, 1.45)
   assert.ok(basis.forward.y > 0)
 })
+
+
+test('cursor rays invert the POV camera projection at any yaw and pitch', () => {
+  const { cameraRay, eyeHeight } = require('../assets/pov-math.js')
+  for (const yaw of [0, 1.2, -2]) for (const pitch of [0, .7, -.8]) {
+    const snapshot = { position: { x: 2, y: 64, z: -1 }, yaw, pitch }
+    const basis = viewBasis(yaw, pitch)
+    for (const [x, y] of [[.5, .5], [.9, .3], [.1, .8]]) {
+      const { origin, direction } = cameraRay(snapshot, x, y, 16 / 9)
+      assert.equal(origin.y, 64 + eyeHeight(snapshot))
+      const dot = v => v.x * direction.x + v.y * direction.y + v.z * direction.z
+      const focal = 540 / (2 * Math.tan(Math.PI / 5)), depth = dot(basis.forward)
+      assert.ok(Math.abs(480 + dot(basis.right) / depth * focal - x * 960) < 1e-8)
+      assert.ok(Math.abs(270 - dot(basis.up) / depth * focal - y * 540) < 1e-8)
+    }
+  }
+})
+
+test('sneaking lowers the eye by .3 blocks and already crouched heights are preserved', () => {
+  const { eyeHeight } = require('../assets/pov-math.js')
+  assert.ok(Math.abs(eyeHeight({}) - eyeHeight({ sneaking: true }) - .3) < 1e-10)
+  assert.equal(eyeHeight({ eyeHeight: 1.27, sneaking: true }), 1.27)
+})

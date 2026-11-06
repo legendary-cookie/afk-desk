@@ -94,3 +94,50 @@ test('render dimensions and snapshot input remain bounded', () => {
   const frame = renderer.render({ position: { x: 0, y: 0, z: 0 }, blocks: [] }, 9999, 9999)
   assert.ok(frame.width <= 320 && frame.height <= 180)
 })
+
+
+test('voxel renderer and cursor targeting share camera rays and the sneaking eye offset', () => {
+  const { cameraRay } = require('../assets/pov-math.js')
+  const renderer = new VoxelRenderer()
+  const snapshot = { position: { x: 2, y: 64, z: -1 }, yaw: 1.2, pitch: -.4, blocks: [] }
+  const origins = [], rays = []
+  renderer.trace = (origin, ray) => { origins.push({ ...origin }); rays.push({ ...ray }); return null }
+  renderer.render(snapshot, 17, 9)
+  const standing = origins[0].y
+  origins.length = 0; rays.length = 0
+  renderer.render({ ...snapshot, sneaking: true }, 17, 9)
+  assert.ok(Math.abs(standing - origins[0].y - .3) < 1e-9)
+  for (const [x, y] of [[8, 4], [15, 2], [1, 7]]) {
+    const expected = cameraRay({ ...snapshot, sneaking: true }, (x + .5) / 17, (y + .5) / 9, 17 / 9)
+    assert.deepEqual(origins[y * 17 + x], expected.origin)
+    for (const axis of ['x', 'y', 'z']) assert.ok(Math.abs(rays[y * 17 + x][axis] - expected.direction[axis]) < 1e-10)
+  }
+})
+
+test('POV and Wall action HUD show a persistent sneak badge and masked digging progress', () => {
+  const labels = [], bars = []
+  const context = vm.createContext({ maskText: text => text.replace('PrivatePlayer', 'Masked') })
+  const source = fs.readFileSync(require.resolve('../src/renderer.js'), 'utf8')
+  vm.runInContext(source.slice(source.indexOf('function drawPovActionHud('), source.indexOf('function showPovStatus(')), context)
+  const draw = { save() {}, restore() {}, measureText: () => ({ width: 60 }), fillText: text => labels.push(text), fillRect: (...args) => bars.push(args) }
+  const canvas = { width: 960, height: 540 }
+  context.drawPovActionHud(draw, canvas, { sneaking: true, digging: { block: 'PrivatePlayer_stone', progress: .4 } })
+  assert.deepEqual(labels, ['Sneaking', 'Breaking Masked stone · 40%'])
+  assert.equal(bars.at(-1)[2], 88)
+  labels.length = 0; bars.length = 0
+  context.drawPovActionHud(draw, canvas, { sneaking: false, digging: null })
+  assert.equal(labels.length, 0)
+  assert.equal(bars.length, 0)
+})
+
+
+test('held item custom names are masked before drawing the POV HUD', () => {
+  const labels = []
+  const context = vm.createContext({ state: { telemetry: new Map(), settings: {} }, povSnapshots: new Map(), window: {}, maskText: text => text.replace('PrivatePlayer', 'Masked') })
+  const source = fs.readFileSync(require.resolve('../src/renderer.js'), 'utf8')
+  vm.runInContext(source.slice(source.indexOf('function drawPovHud('), source.indexOf('function drawPovActionHud(')), context)
+  const draw = { fillRect() {}, strokeRect() {}, fillText: text => labels.push(text) }
+  context.state.telemetry.set('pov', { inventory: [{ slot: 36, customName: '<PrivatePlayer>', count: 1 }] })
+  context.drawPovHud(draw, { width: 960, height: 540 }, { id: 'pov' })
+  assert.equal(labels.at(-1), '<Masked>')
+})

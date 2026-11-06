@@ -17,6 +17,24 @@
     }
   }
 
+  function eyeHeight(snapshot = {}) {
+    const height = Number(snapshot.eyeHeight) || 1.62
+    // Mineflayer may already report a crouching eye. Never subtract twice.
+    return Math.max(.1, Math.min(height, snapshot.sneaking ? 1.32 : 2))
+  }
+
+  function cameraRay(snapshot, x = .5, y = .5, aspect = 16 / 9) {
+    const basis = viewBasis(snapshot.yaw, snapshot.pitch)
+    const scale = Math.tan(Math.PI / 5)
+    const u = (x * 2 - 1) * scale * aspect, v = (1 - y * 2) * scale
+    const direction = {}
+    for (const axis of ['x', 'y', 'z']) direction[axis] = basis.forward[axis] + basis.right[axis] * u + basis.up[axis] * v
+    const length = Math.hypot(direction.x, direction.y, direction.z)
+    for (const axis of ['x', 'y', 'z']) direction[axis] /= length
+    const p = snapshot.position
+    return { origin: { x: p.x, y: p.y + eyeHeight(snapshot), z: p.z }, direction }
+  }
+
   function projectHorizontal(dxValue, dzValue, yawValue = 0) {
     const dx = Number(dxValue) || 0, dz = Number(dzValue) || 0, yaw = Number(yawValue) || 0
     const sinYaw = Math.sin(yaw), cosYaw = Math.cos(yaw)
@@ -41,5 +59,5 @@
     return Math.max(1, Math.min(8, Number.isFinite(chunks) ? Math.round(chunks) : 1)) * 16
   }
 
-  return { viewBasis, projectHorizontal, mouseLookDelta, entityLabel, snapshotRadius }
+  return { eyeHeight, cameraRay, viewBasis, projectHorizontal, mouseLookDelta, entityLabel, snapshotRadius }
 })

@@ -17,9 +17,10 @@ function harness(t, lock) {
   const manager = new BotManager({ profilesPath: 'profiles', emit() {}, createBot: () => bot })
   manager.connect({ id: 'pov', username: 'test', host: 'localhost', antiAfk: false, autoReconnect: false })
   bot.entity = { position: new Vec3(0, 64, 0), yaw: 0, pitch: 0 }
+  bot.lookAt = async () => {}
   bot.look = async (yaw, pitch) => Object.assign(bot.entity, { yaw, pitch })
   t.after(() => manager.disconnect('pov'))
-  const canvas = { dataset: { accountId: 'pov' }, closest: () => true, focus() {}, requestPointerLock: lock }
+  const canvas = { width: 960, height: 540, getBoundingClientRect: () => ({ left: 0, top: 0, width: 960, height: 540 }), dataset: { accountId: 'pov' }, closest: () => true, focus() {}, requestPointerLock: lock }
   let rebuilds = 0
   const frames = []
   const statusTimeouts = []
@@ -46,7 +47,7 @@ function harness(t, lock) {
     povSuppressClick: false, povStatusTimer: null, povHeldActions: new Set(),
     clearTimeout() {}, setTimeout(fn) { statusTimeouts.push(fn); return statusTimeouts.length }, maskText: text => text,
     povLookAnimationFrame: null, povLookDelta: { accountId: null, yaw: 0, pitch: 0 },
-    povSnapshots: new Map([['pov', { yaw: 0, pitch: 0 }]]), povDisplaySnapshots: new Map(),
+    povSnapshots: new Map([['pov', { position: { x: 0, y: 64, z: 0 }, yaw: 0, pitch: 0 }]]), povDisplaySnapshots: new Map(), povCanvasRenderers: new WeakMap(),
     state: { selectedId: 'pov' }, document: { pointerLockElement: null, exitPointerLock() {} },
     el: { 'pov-view-mode': { value: 'perspective' }, 'pov-dialog': { open: true }, 'pov-detail': {}, 'pov-action-status': {}, 'pov-grid': { querySelectorAll: () => [canvas] } },
     render() {}, renderPovGrid() { rebuilds++ }, startPovPolling() {}, releaseAllManualInputs() {},
@@ -139,45 +140,62 @@ test('focused POV keyboard movement reaches the bot and releases on keyup or blu
 })
 
 
-test('unlocked click digs to completion, jitter does not look, and dragging past four pixels only looks', async t => {
+test('unlocked hold starts digging, click release cancels, and drag past four pixels cancels before looking', async t => {
   const h = harness(t, () => { throw new Error('capture denied') })
   const block = { name: 'stone', position: new Vec3(0, 65, -2), intersect: new Vec3(0, 65.62, -1), face: 3 }
   h.bot.world = { raycast: () => block }
-  let finishDig
-  h.bot.dig = () => new Promise(resolve => { finishDig = resolve })
-  h.bot.stopDigging = () => assert.fail('fallback mouseup must not cancel a survival dig')
-  const down = (x = 20) => h.context.handlePovMouseDown({ currentTarget: h.canvas, button: 0, clientX: x, clientY: 30, preventDefault() {} })
-  const up = (x = 20) => h.context.releasePovMouse({ target: h.canvas, button: 0, clientX: x, clientY: 30 })
+  let finishDig, digs = 0, stops = 0
+  h.bot.dig = () => { digs++; return new Promise(resolve => { finishDig = resolve }) }
+  h.bot.stopDigging = () => { stops++; finishDig?.() }
+  const down = () => h.context.handlePovMouseDown({ currentTarget: h.canvas, button: 0, clientX: 480, clientY: 270, preventDefault() {} })
+  const up = () => h.context.releasePovMouse({ target: h.canvas, button: 0, clientX: 480, clientY: 270 })
   down()
-  h.context.handlePovMouseMove({ buttons: 1, clientX: 24, clientY: 30 })
-  assert.equal(h.frames.length, 0, 'four pixels is a click')
-  up(24)
-  assert.deepEqual(h.actions.map(a => a[1]), ['dig-crosshair'])
-  assert.equal(h.context.el['pov-action-status'].textContent, 'Breaking…')
-  finishDig()
+  assert.equal(h.actions[0][1], 'dig-crosshair', 'start is sent on mousedown')
   await new Promise(resolve => setImmediate(resolve))
-  assert.equal(h.context.el['pov-action-status'].textContent, 'Broken')
+  assert.equal(digs, 1)
+  assert.equal(h.context.el['pov-action-status'].textContent, 'Breaking…')
+  h.context.handlePovMouseMove({ buttons: 1, clientX: 484, clientY: 270 })
+  assert.equal(h.frames.length, 0)
+  assert.equal(stops, 0, 'four pixels still holds the dig')
+  up()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(h.actions.map(a => a[1]), ['dig-crosshair', 'stop-dig'])
+  assert.equal(h.context.el['pov-action-status'].textContent, 'Dig cancelled', 'a click cannot complete a survival dig')
   down()
-  h.context.handlePovMouseMove({ buttons: 1, clientX: 25, clientY: 30 })
+  await new Promise(resolve => setImmediate(resolve))
+  h.context.handlePovMouseMove({ buttons: 1, clientX: 485, clientY: 270 })
+  assert.equal(stops, 2)
   assert.equal(h.frames.length, 1)
-  up(25)
-  assert.equal(h.actions.length, 1, 'drag never digs')
+  up()
+  assert.deepEqual(h.actions.map(a => a[1]), ['dig-crosshair', 'stop-dig', 'dig-crosshair', 'stop-dig'])
   h.context.selectPovTarget({ type: 'click', currentTarget: h.canvas })
-  assert.equal(h.context.povSuppressClick, false, 'drag click is consumed without requesting capture')
-  h.bot.stopDigging = () => {}
+  assert.equal(h.context.povSuppressClick, false, 'drag click is consumed')
 })
 
-test('unlocked right click places at the crosshair and reports errors and transient results', async t => {
+test('holding until completion reports the broken block, including instant breaks', async t => {
   const h = harness(t)
-  h.bot.world = { raycast: () => ({ name: 'stone', position: new Vec3(0, 65, -2), intersect: new Vec3(0, 65.62, -1), face: 3 }) }
+  h.bot.world = { raycast: () => ({ name: 'short_grass', position: new Vec3(0, 65, -2), intersect: new Vec3(0, 65.62, -1), face: 3 }) }
+  h.bot.dig = async () => {}
+  h.context.handlePovMouseDown({ currentTarget: h.canvas, button: 0, clientX: 480, clientY: 270, preventDefault() {} })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(h.context.el['pov-action-status'].textContent, 'Broke short grass')
+  h.context.releasePovMouse({ button: 0 })
+})
+
+test('unlocked right click sends the cursor ray and reports server feedback and errors', async t => {
+  const h = harness(t)
+  const block = { name: 'stone', position: new Vec3(0, 65, -2), intersect: new Vec3(0, 65.62, -1), face: 3 }
+  h.bot.world = { raycast: () => block }
   h.bot.registry = { blocksByName: { dirt: { id: 3 } } }
   h.bot.heldItem = { name: 'dirt' }
-  h.bot.placeBlock = async () => {}
+  h.bot.supportFeature = feature => feature === 'blockPlaceHasInsideBlock'
+  h.bot._client.write = () => h.bot.emit('blockUpdate', null, { name: 'dirt', position: block.position.offset(0, 0, 1) })
   h.bot.deactivateItem = () => {}
-  const down = () => h.context.handlePovMouseDown({ currentTarget: h.canvas, button: 2, preventDefault() {} })
+  const down = () => h.context.handlePovMouseDown({ currentTarget: h.canvas, button: 2, clientX: 700, clientY: 270, preventDefault() {} })
   down()
   await new Promise(resolve => setImmediate(resolve))
-  assert.equal(h.context.el['pov-action-status'].textContent, 'Placed')
+  assert.equal(h.context.el['pov-action-status'].textContent, 'Placed dirt')
+  assert.ok(h.actions[0][2].ray.direction.x > 0, 'right of centre selects a different ray')
   h.context.releasePovMouse({ button: 2 })
   assert.deepEqual(h.actions.map(a => a[1]), ['use-crosshair', 'stop-use'])
   h.bot.world.raycast = () => null
@@ -186,6 +204,26 @@ test('unlocked right click places at the crosshair and reports errors and transi
   assert.equal(h.context.el['pov-action-status'].textContent, "Can't place: nothing in reach")
   h.statusTimeouts.at(-1)()
   assert.equal(h.context.el['pov-action-status'].textContent, '')
+})
+
+test('captured drag cancels digging after four pixels and mouseup remains safe', async t => {
+  const h = harness(t)
+  h.context.document.pointerLockElement = h.canvas
+  const block = { name: 'stone', position: new Vec3(0, 65, -2), intersect: new Vec3(0, 65.62, -1), face: 3 }
+  h.bot.world = { raycast: () => block }
+  let finish, stopped = 0
+  h.bot.dig = () => new Promise(resolve => { finish = resolve })
+  h.bot.stopDigging = () => { stopped++; finish() }
+  h.context.handlePovMouseDown({ currentTarget: h.canvas, button: 0, preventDefault() {} })
+  assert.equal(h.actions[0][2].ray, undefined, 'pointer lock uses the live centre crosshair')
+  h.context.handlePovMouseMove({ buttons: 1, movementX: 4, movementY: 0 })
+  assert.equal(stopped, 0)
+  h.context.handlePovMouseMove({ buttons: 1, movementX: 1, movementY: 0 })
+  assert.equal(stopped, 1)
+  h.context.releasePovMouse({ button: 0 })
+  assert.equal(stopped, 1)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(h.context.el['pov-action-status'].textContent, 'Dig cancelled')
 })
 
 test('captured buttons still start and stop dig/use and capture is requested once on click', t => {
@@ -266,7 +304,7 @@ test('POV status masks literal untrusted errors and ignores other feeds and clos
   assert.equal(status.textContent, original)
 })
 
-test('fallback mouseup outside the canvas or after pause never digs', t => {
+test('fallback mouseup outside the canvas or after pause always stops digging', t => {
   const h = harness(t)
   const down = () => h.context.handlePovMouseDown({ currentTarget: h.canvas, button: 0, clientX: 10, clientY: 10, preventDefault() {} })
   down()
@@ -274,5 +312,15 @@ test('fallback mouseup outside the canvas or after pause never digs', t => {
   down()
   h.context.povPaused = true
   h.context.releasePovMouse({ button: 0, target: h.canvas, clientX: 10, clientY: 10 })
-  assert.equal(h.actions.length, 0)
+  assert.deepEqual(h.actions.map(a => a[1]), ['dig-crosshair', 'stop-dig', 'dig-crosshair', 'stop-dig'])
+})
+
+
+test('cursor targeting uses the last drawn interpolated camera, including its aspect, before focusing', t => {
+  const h = harness(t)
+  const drawn = { position: { x: .25, y: 64, z: 0 }, yaw: .4, pitch: -.2, sneaking: true }
+  h.context.povCanvasRenderers.set(h.canvas, { snapshot: drawn, aspect: 128 / 72 })
+  const actual = h.context.povMouseTarget({ currentTarget: h.canvas, clientX: 720, clientY: 135 })
+  const expected = require('../assets/pov-math.js').cameraRay(drawn, .75, .25, 128 / 72)
+  assert.deepEqual(JSON.parse(JSON.stringify(actual.ray)), expected)
 })
