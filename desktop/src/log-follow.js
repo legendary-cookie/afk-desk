@@ -36,6 +36,10 @@
         width = rect.width; height = rect.height
       }).observe(view)
     }
+    // Lines can be appended by code that does not go through render(); keep pinned when following.
+    if (typeof MutationObserver === 'function') {
+      new MutationObserver(() => { if (state.following) view.scrollTop = view.scrollHeight }).observe(view, { childList: true, subtree: true, characterData: true })
+    }
     update()
     return { state, reset, render(change) {
       const follow = state.following, top = view.scrollTop
