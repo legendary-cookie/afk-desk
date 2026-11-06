@@ -109,7 +109,7 @@ const el = Object.fromEntries([
   'quick-scale', 'quick-scale-number', 'reset-scale', 'quick-scale-value', 'quick-workspace-design', 'quick-color-theme', 'workspace-design', 'color-theme', 'display-menu', 'console-menu',
   'update-banner', 'update-message', 'update-open', 'update-dismiss', 'check-updates', 'export-logs', 'update-check-enabled', 'streamer-quick-toggle', 'streamer-mode', 'macro-menu', 'settings-dialog', 'close-settings', 'start-with-windows', 'notifications-enabled', 'notify-attach-pov', 'notify-attach-inventory', 'notify-pov-offscreen', 'stagger-startup-connections', 'use-launcher-pack-cache', 'startup-connection-delay', 'save-settings', 'empty-state',
   'dashboard', 'account-title', 'app-version', 'settings-app-version', 'edit-account', 'open-logs', 'open-automations', 'open-pov', 'connection-button', 'status-banner',
-  'status-name', 'status-detail', 'server-address', 'detail-username', 'detail-server', 'detail-version', 'detail-antiafk', 'detail-environment', 'detail-water', 'detail-health',
+  'header-server', 'header-version', 'status-name', 'status-detail', 'server-address', 'detail-username', 'detail-server', 'detail-version', 'detail-antiafk', 'detail-environment', 'detail-water', 'detail-health',
   'detail-hunger', 'detail-coordinates', 'detail-chest', 'detail-dimension', 'detail-safety', 'inventory-count', 'inventory-grid', 'auto-deposit-toggle', 'hold-selected', 'equip-destination', 'equip-selected',
   'lock-selected', 'inventory-action-count', 'deposit-selected', 'drop-count-selected', 'drop-selected', 'toggle-inventory', 'console-log', 'clear-console', 'chat-form', 'chat-message',
   'chat-suggestions', 'macro-pad', 'manage-macros', 'macro-dialog', 'close-macro-dialog', 'macro-editor', 'macro-rows', 'add-macro', 'cancel-macros', 'save-macros',
@@ -389,8 +389,10 @@ function render() {
   el['server-address'].textContent = `${account.host}:${account.port}`
   el['detail-username'].textContent = state.settings.streamerMode ? displayAccount(account) : account.username
   el['detail-server'].textContent = `${account.host}:${account.port}`
+  el['header-server'].textContent = maskText(`${account.host}:${account.port}`)
   const resolvedVersion = state.resolvedVersions.get(account.id) || account.lastSuccessfulVersion
   el['detail-version'].textContent = account.edition === 'bedrock' ? `Bedrock ${resolvedVersion || 'auto'}` : account.version || (resolvedVersion ? `${resolvedVersion} (auto)` : 'Auto-detect')
+  el['header-version'].textContent = el['detail-version'].textContent
   const minDelay = account.antiAfkMinDelay ?? account.antiAfkInterval ?? 45
   const maxDelay = account.antiAfkMaxDelay ?? account.antiAfkInterval ?? minDelay
   el['detail-antiafk'].textContent = account.antiAfk ? `${minDelay}–${maxDelay} seconds` : 'Disabled'
@@ -405,7 +407,8 @@ function render() {
 
 function renderAccountList() {
   el['account-count'].textContent = state.accounts.length
-  el['account-list'].replaceChildren(...state.accounts.map((account, index) => {
+  const groupOpen = new Map([...el['account-list'].querySelectorAll('.account-group')].map(group => [group.dataset.groupId, group.open]))
+  const rows = state.accounts.map((account, index) => {
     const row = document.createElement('div')
     row.className = 'account-row'
     row.draggable = state.accounts.length > 1
@@ -413,7 +416,7 @@ function renderAccountList() {
     const button = document.createElement('button')
     const status = getStatus(account.id).status
     button.type = 'button'
-    button.className = 'account-item'
+    button.className = `account-item ${status === 'online' ? 'online' : ['connecting', 'connected', 'reconnecting'].includes(status) ? 'connecting' : 'offline'}`
     button.setAttribute('aria-current', String(account.id === state.selectedId))
     const avatar = createPlayerHead(account, 'account-avatar')
     const copy = document.createElement('span')
@@ -429,7 +432,11 @@ function renderAccountList() {
     const accountLabel = `${displayAccount(account)} (${status}) - ${account.host}`
     button.setAttribute('aria-label', accountLabel)
     button.title = accountLabel
-    button.append(avatar, copy, indicator)
+    const vitals = document.createElement('span')
+    vitals.className = 'account-vitals'
+    vitals.hidden = status !== 'online'
+    vitals.append(...createAccountVitals(state.telemetry.get(account.id)))
+    button.append(avatar, copy, indicator, vitals)
     button.addEventListener('click', () => {
       releaseAllManualInputs()
       state.selectedId = account.id
@@ -470,7 +477,47 @@ function renderAccountList() {
     })
     row.addEventListener('dragend', clearDragStyles)
     return row
-  }))
+  })
+  const groups = new Map()
+  const sections = []
+  state.accounts.forEach((account, index) => {
+    const group = account.linkGroup
+    if (!group?.id) { sections.push(rows[index]); return }
+    if (!groups.has(group.id)) {
+      const section = document.createElement('details')
+      section.className = 'account-group'
+      section.dataset.groupId = group.id
+      section.open = groupOpen.get(group.id) ?? true
+      const heading = document.createElement('summary')
+      heading.textContent = maskText(group.name || 'Linked profiles')
+      const contents = document.createElement('div')
+      contents.className = 'account-group-rows'
+      section.append(heading, contents)
+      groups.set(group.id, contents)
+      sections.push(section)
+    }
+    groups.get(group.id).append(rows[index])
+  })
+  el['account-list'].replaceChildren(...sections)
+}
+
+function createAccountVitals(telemetry) {
+  return ['health', 'food'].map(key => {
+    const meter = document.createElement('meter')
+    meter.className = `account-vital ${key}`
+    meter.min = 0
+    meter.max = 20
+    const value = Number(telemetry?.[key])
+    meter.value = Number.isFinite(value) ? Math.max(0, Math.min(20, value)) : 0
+    meter.setAttribute('aria-label', `${key === 'health' ? 'Health' : 'Food'}: ${meter.value} of 20`)
+    return meter
+  })
+}
+
+function updateAccountVitals(id) {
+  const row = [...el['account-list'].querySelectorAll('.account-row')].find(row => row.dataset.accountId === id)
+  const vitals = row?.querySelector('.account-vitals')
+  if (vitals) vitals.replaceChildren(...createAccountVitals(state.telemetry.get(id)))
 }
 
 function createOrderButton(account, direction, disabled) {
@@ -526,7 +573,8 @@ function renderStatus({ status, detail }) {
   const canInteract = online || status === 'connected'
   const active = online || status === 'connecting' || status === 'connected' || status === 'reconnecting'
   el['status-banner'].className = `status-banner ${['connected', 'reconnecting'].includes(status) ? 'connecting' : status}`
-  el['status-name'].textContent = status
+  el['status-name'].textContent = online ? 'Online' : active ? 'Connecting' : 'Offline'
+  el['status-banner'].title = maskText(detail || status)
   el['status-detail'].textContent = maskText(detail)
   el['connection-button'].textContent = status === 'reconnecting' ? 'Cancel reconnect' : active ? 'Disconnect' : 'Connect'
   el['connection-button'].className = `button ${active ? 'secondary' : 'primary'}`
@@ -1534,6 +1582,7 @@ function handleBotEvent({ type, id, payload }) {
   }
   if (type === 'telemetry') {
     state.telemetry.set(id, payload)
+    updateAccountVitals(id)
     if (id === state.selectedId) renderTelemetry()
   }
   if (type === 'window') {
@@ -1545,7 +1594,10 @@ function handleBotEvent({ type, id, payload }) {
     state.resolvedVersions.set(id, payload.version)
     const account = state.accounts.find((item) => item.id === id)
     if (account) account.lastSuccessfulVersion = payload.version
-    if (id === state.selectedId) el['detail-version'].textContent = account?.version || `${payload.version} (auto)`
+    if (id === state.selectedId) {
+      el['detail-version'].textContent = account?.version || `${payload.version} (auto)`
+      el['header-version'].textContent = el['detail-version'].textContent
+    }
   }
   if (type === 'identity') {
     const account = state.accounts.find((item) => item.id === id)
@@ -2940,9 +2992,18 @@ async function activateChatClick(click, event = {}) {
 function toast(message, kind = '') {
   const item = document.createElement('div')
   item.className = `toast ${kind}`
-  item.textContent = maskText(message)
+  const copy = document.createElement('span')
+  copy.className = 'toast-message'
+  copy.textContent = maskText(message)
+  const dismiss = document.createElement('button')
+  dismiss.type = 'button'
+  dismiss.className = 'icon-button toast-dismiss'
+  dismiss.textContent = '×'
+  dismiss.setAttribute('aria-label', 'Dismiss notification')
+  dismiss.addEventListener('click', () => item.remove())
+  item.append(copy, dismiss)
   el['toast-region'].append(item)
-  setTimeout(() => item.remove(), 4000)
+  if (kind !== 'error') setTimeout(() => item.remove(), 4000)
 }
 
 init().catch((error) => toast(cleanError(error), 'error'))

@@ -543,3 +543,73 @@ test('upcoming runs use existing IPC and appear in connection details without si
   assert.match(renderer, /api\.getUpcomingRuns\(id\)/)
   assert.doesNotMatch(renderer, /upcoming-runs|summary\.textContent = 'Next runs'/)
 })
+
+// Approved redesign palette. Saved theme values remain stable for the Display menu.
+test('redesign tokens exist in dark and light, and legacy themes resolve through them', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', 'src', 'styles.css'), 'utf8')
+  const html = fs.readFileSync(path.join(__dirname, '..', 'src', 'index.html'), 'utf8')
+  const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+  const tokensFor = selector => Object.fromEntries(rules.filter(([, selectors]) => selectors.trim().split(/,\s*/).includes(selector)).flatMap(([, , body]) => [...body.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)].map(([, name, value]) => [name, value.trim()])))
+  const required = ['bg', 'surface', 'raised', 'line', 'text', 'muted', 'accent', 'ok', 'warn', 'danger']
+  const dark = tokensFor(':root')
+  const light = tokensFor(':root[data-theme="arctic"]')
+  for (const [name, tokens] of [['dark', dark], ['light', light]]) {
+    for (const token of required) assert.ok(tokens[`--${token}`], `${name}: --${token}`)
+  }
+  assert.equal(dark['--bg'], '#16171A')
+  assert.equal(dark['--accent'], '#4C7DF0')
+  assert.equal(light['--bg'], '#F6F7F9')
+  assert.equal(light['--accent'], '#3366E0')
+  for (const token of ['ok', 'warn', 'danger']) assert.equal(light[`--${token}`], dark[`--${token}`])
+  for (const theme of ['obsidian', 'midnight', 'graphite', 'ember', 'arctic', 'high-contrast']) {
+    assert.ok(css.includes(`:root[data-theme="${theme}"]`), theme)
+    for (const id of ['quick-color-theme', 'color-theme']) {
+      const options = html.match(new RegExp(`<select id="${id}"[^>]*>([\\s\\S]*?)</select>`))[1]
+      assert.ok(options.includes(`value="${theme}"`), `${id}: ${theme}`)
+    }
+    const resolved = { ...dark, ...tokensFor(`:root[data-theme="${theme}"]`) }
+    assert.equal(resolved['--surface-raised'], 'var(--raised)')
+    assert.equal(resolved['--border'], 'var(--line)')
+    for (const value of Object.values(resolved)) {
+      for (const [, dependency] of value.matchAll(/var\((--[\w-]+)\)/g)) assert.ok(resolved[dependency], `${theme}: ${dependency}`)
+    }
+  }
+})
+
+test('redesign labels use sentence case and surface colours only come from tokens', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', 'src', 'styles.css'), 'utf8')
+  assert.doesNotMatch(css, /text-transform\s*:\s*uppercase/i)
+  assert.doesNotMatch(css, /letter-spacing\s*:/i)
+  const withoutTokens = css.replace(/--[\w-]+\s*:\s*[^;{}]+;/g, '')
+  assert.doesNotMatch(withoutTokens, /#[\da-f]{3,8}\b|\brgba?\(|\bhsla?\(/i, 'Colours belong in custom properties, including Minecraft content colours')
+  assert.doesNotMatch(withoutTokens, /(?:color|background)\s*:\s*(?:white|black)\b/i)
+  assert.match(css, /:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--accent\);[^}]*outline-offset:\s*2px;/)
+  assert.match(css, /@media\s*\(max-width:\s*1099px\)[\s\S]*grid-template-columns:\s*56px minmax\(0,\s*1fr\)/)
+  assert.match(css, /@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*animation:\s*none !important;[\s\S]*transition:\s*none !important;/)
+})
+
+test('secondary screens share dialog, canvas and narrow rail chrome', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'src', 'index.html'), 'utf8')
+  const css = fs.readFileSync(path.join(__dirname, '..', 'src', 'styles.css'), 'utf8')
+  for (const id of ['bulk-appearance-dialog', 'share-link-dialog']) {
+    const body = html.match(new RegExp(`<dialog id="${id}"[^>]*>([\\s\\S]*?)</dialog>`))[1]
+    assert.match(body, /class="dialog-header"/)
+    assert.match(body, /class="dialog-body"/)
+    assert.match(body, /class="dialog-footer"/)
+  }
+  assert.match(html, /id="header-server"/)
+  assert.match(html, /id="header-version"/)
+  assert.match(css, /\.macro-canvas-node-header\s*\{[^}]*background-color:\s*var\(--raised\) !important;[^}]*color:\s*var\(--text\)/)
+  for (const selector of ['.onboarding-card', '.pov-card', '.wall-status', '.minimap-options', '.notifications-panel', '.persistent-log-view', '.overview-controls', '.overview-module-bar']) assert.ok(css.includes(selector), selector)
+})
+
+
+test('header keeps secondary actions in a native keyboard-accessible more menu', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'src', 'index.html'), 'utf8')
+  assert.match(html, /id="account-menu-trigger"[^>]*type="button"[^>]*popovertarget="account-menu"[^>]*aria-label="More account actions"/)
+  const menu = html.match(/<div id="account-menu"[^>]*popover>([\s\S]*?)<\/div>/)[1]
+  for (const id of ['streamer-quick-toggle', 'open-automations']) {
+    assert.match(menu, new RegExp(`id="${id}"[^>]*popovertarget="account-menu"[^>]*popovertargetaction="hide"`))
+  }
+  assert.match(html, /id="display-menu-trigger"[^>]*popovertarget="display-menu"/)
+})
