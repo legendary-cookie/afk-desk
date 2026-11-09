@@ -170,17 +170,7 @@ class BotManager {
     hud.installHud(bot, emitTelemetry)
     const requestRejoin = () => this.requestServerChange(account.id, session)
     for (const packet of ['login', 'respawn']) bot._client?.on?.(packet, requestRejoin)
-    const metadata = new Map()
-    const metadataChanged = (key, value) => {
-      if (metadata.get(key) === value) return
-      metadata.set(key, value)
-      requestRejoin()
-    }
-    bot._client?.on?.('playerlist_header', packet => metadataChanged('tab', JSON.stringify([packet.header, packet.footer])))
-    bot._client?.on?.('scoreboard_objective', packet => {
-      if (packet.action !== 1 && packet.displayText != null) metadataChanged(`score:${packet.name}`, JSON.stringify(packet.displayText))
-    })
-    bot.on('scoreboardTitleChanged', board => metadataChanged(`score:${board?.name}`, JSON.stringify(board?.title)))
+    // Tab-list and scoreboard text change constantly (player counts, TPS) and are not a server switch.
 
     bot.on('login', () => {
       if (this.sessions.get(account.id) !== session) return
@@ -641,8 +631,10 @@ class BotManager {
   }
 
   confirmServerChange(id, session) {
-    if (!session.serverChangeRetryMessage && !session.pendingMessageConfirmation && !session.serverChangeRetryTimer) return
+    // Being on the target (for example 'already connected') always ends the rejoin state.
     this.clearServerChangeRetry(id, session)
+    session.safetyStatus = session.safetyStatus && /^Rejoining/.test(session.safetyStatus) ? null : session.safetyStatus
+    this.updateRejoinStatus?.(id, session)
   }
 
   clearServerChangeRetry(id, session, clearState = true) {

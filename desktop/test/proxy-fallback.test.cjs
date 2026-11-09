@@ -96,7 +96,7 @@ for (const confirmation of ['You are already connected to this server!', 'Connec
   })
 }
 
-for (const event of ['login', 'respawn', 'packet-login', 'packet-respawn', 'tab', 'scoreboard']) {
+for (const event of ['login', 'respawn', 'packet-login', 'packet-respawn']) {
   test(`same-dimension ${event} starts a server-change command`, t => {
     const { bot, tick } = fixture(t)
     if (event.startsWith('packet-')) bot._client.emit(event.slice(7), {dimension: 'overworld'})
@@ -105,6 +105,18 @@ for (const event of ['login', 'respawn', 'packet-login', 'packet-respawn', 'tab'
     else bot.emit(event)
     bot.emit('health'); tick(0)
     assert.equal(bot.messages.length, 1)
+  })
+}
+
+for (const event of ['tab', 'scoreboard']) {
+  test(`${event} text changes alone never send a server-change command`, t => {
+    const { bot, tick } = fixture(t)
+    for (let i = 0; i < 5; i++) {
+      if (event === 'tab') bot._client.emit('playerlist_header', {header: 'Lobby', footer: `Online ${i}`})
+      else bot._client.emit('scoreboard_objective', {action: 2, name: 'sidebar', displayText: `Lobby ${i}`})
+      tick(120_000)
+    }
+    assert.equal(bot.messages.length, 0)
   })
 }
 
