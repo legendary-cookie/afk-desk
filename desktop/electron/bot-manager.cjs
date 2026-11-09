@@ -1258,7 +1258,10 @@ class BotManager {
 
   requestServerChange(id, session) {
     if (this.sessions.get(id) !== session || !session.account.serverChangeMessage) return
-    if (session.serverChangeRetryMessage === session.account.serverChangeMessage) return
+    // A rejoin with nothing pending (no queued send, no confirmation or retry timer) is stale: clear it so it can never block a new rejoin.
+    const rejoinActive = session.pendingMessageConfirmation || session.serverChangeRetryTimer || session.messageConfirmationTimer || session.queuedServerSwitches?.size
+    if (session.serverChangeRetryMessage && !rejoinActive) this.clearServerChangeRetry(id, session)
+    else if (session.serverChangeRetryMessage === session.account.serverChangeMessage) return
     if (session.serverChangeRetryMessage) this.clearServerChangeRetry(id, session)
     this.scheduleMessage(id, session.account.serverChangeMessage, session.account.messageDelay, { kind: 'serverChange' })
   }

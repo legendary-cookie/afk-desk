@@ -238,3 +238,12 @@ test('confirmation removes a cooldown-deferred command from upcoming runs', t =>
   tick(60_000)
   assert.equal(bot.messages.length, 1)
 })
+
+test('a stale rejoin state with nothing pending never blocks the next kick', t => {
+  const { bot, tick, session } = fixture(t)
+  session.serverChangeRetryMessage = session.account.serverChangeMessage
+  session.pendingMessageConfirmation = null; session.serverChangeRetryTimer = null; session.messageConfirmationTimer = null
+  session.queuedServerSwitches?.clear?.()
+  bot.emit('messagestr', 'You were kicked from towny: An internal server connection error occurred.'); tick(0)
+  assert.equal(bot.messages.length, 1)
+})
