@@ -175,3 +175,11 @@ test('overview migration retains module selections and persists modes for each s
   assert.deepEqual(store.get().overviewLayout, edited)
   assert.deepEqual(Object.keys(store.get().overviewLayout).sort(), ['global', 'globalMode', 'overrideModes', 'overrides', 'version'])
 })
+
+ test('AccountStore preserves the configurable proxy fallback pattern', (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'afkdesk-rejoin-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const store = new AccountStore(directory)
+  store.save({ id: 'rejoin', serverChangeMessage: '/server towny', serverChangeKickPattern: 'backend unavailable' })
+  assert.deepEqual(store.list(), [{ id: 'rejoin', serverChangeMessage: '/server towny', serverChangeKickPattern: 'backend unavailable' }])
+ })

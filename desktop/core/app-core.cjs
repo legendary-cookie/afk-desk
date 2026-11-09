@@ -1099,6 +1099,7 @@ function validateAccount(input, existing, secretBox, normalizeSkinUrl = defaultN
     automations: normalizeAutomations(input?.automations ?? existing?.automations),
     joinMessage: String(input?.joinMessage || '').trim().slice(0, 256),
     serverChangeMessage: String(input?.serverChangeMessage || '').trim().slice(0, 256),
+    serverChangeKickPattern: String(input?.serverChangeKickPattern ?? existing?.serverChangeKickPattern ?? '').slice(0, 512),
     messageDelay: Math.max(0, Math.min(input?.messageDelay === '' || input?.messageDelay == null ? 6 : Number(input.messageDelay) || 0, 600)),
     serverChangeRetryMinutes: Math.round(bounded(input?.serverChangeRetryMinutes ?? existing?.serverChangeRetryMinutes, 0, 1440, 30))
   }

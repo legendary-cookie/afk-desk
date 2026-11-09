@@ -377,7 +377,7 @@
           <label class="field full"><span>On server join</span><textarea id="join-message" maxlength="256" rows="2" placeholder="Example: /login password or Hello!"></textarea></label>
           <label class="field full"><span>On server/world change</span><textarea id="server-change-message" maxlength="256" rows="2" placeholder="Example: /server survival"></textarea></label>
           <label class="field full"><span>Wait after the server is ready (seconds)</span><input id="message-delay" type="number" min="0" max="600" value="6" /><small>Applies to automatic join and server/world-change messages.</small></label>
-          <label class="field full"><span>Retry server/world messages for (minutes)</span><input id="server-change-retry-minutes" type="number" min="0" max="1440" value="30" /><small>Retries after proxy failures or a server command that does not change worlds. 0 disables retries.</small></label>
+          <label class="field full"><span>Server/world message retries (0 disables)</span><input id="server-change-retry-minutes" type="number" min="0" max="1440" value="30" /><small>Any positive value keeps retrying after proxy failures until the destination is confirmed. 0 disables retries.</small></label>
         </div>
         <p id="form-error" class="form-error" role="alert" hidden></p>
         <footer class="dialog-footer">

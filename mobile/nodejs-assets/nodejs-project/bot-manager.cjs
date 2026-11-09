@@ -17,8 +17,10 @@ const MAX_AUTO_DEPOSIT_RANGE = 16
 const CONTAINER_SCAN_INTERVAL = 5000
 const STABLE_SESSION_MS = 60_000
 const CONNECTION_TIMEOUT_MS = 120_000
-const MESSAGE_CONFIRMATION_MS = 15_000
-const SERVER_CHANGE_RETRY_DELAYS = [15, 30, 60, 120]
+const AUTOMATIC_SWITCH_COOLDOWN_MS = 60_000
+const MESSAGE_CONFIRMATION_MS = 20_000
+const SERVER_CHANGE_RETRY_DELAYS = [15, 30, 60, 120, 300]
+const DEFAULT_SERVER_CHANGE_KICK_PATTERN = /kicked from|you were sent to|server .* (?:restart|closed|down)|connection error|could not connect to a default or fallback server|lost connection to/i
 const DEVICE_LOGIN_TIMEOUT_MS = 15 * 60_000
 const CONFIGURATION_BLOCKED_GAMEPLAY_PACKETS = new Set([
   'position', 'look', 'position_look', 'flying', 'player_input', 'tick_end',
@@ -30,13 +32,15 @@ const CONFIGURATION_BLOCKED_GAMEPLAY_PACKETS = new Set([
 ])
 
 class BotManager {
-  constructor({ profilesPath, emit, diagnose = () => {}, createBot = mineflayer.createBot, scheduleReconnectTimer = setTimeout, clearReconnectTimer = clearTimeout, resourcePackLoader }) {
+  constructor({ profilesPath, emit, diagnose = () => {}, createBot = mineflayer.createBot, scheduleReconnectTimer = setTimeout, clearReconnectTimer = clearTimeout, scheduleNetworkTimer = setTimeout, clearNetworkTimer = clearTimeout, resourcePackLoader }) {
     this.profilesPath = profilesPath
     this.emit = emit
     this.diagnose = diagnose
     this.createBot = createBot
     this.scheduleReconnectTimer = scheduleReconnectTimer
     this.clearReconnectTimer = clearReconnectTimer
+    this.scheduleNetworkTimer = scheduleNetworkTimer
+    this.clearNetworkTimer = clearNetworkTimer
     this.resourcePackLoader = resourcePackLoader || new ResourcePackLoader({ cacheDir: path.join(path.dirname(profilesPath), 'resource-packs') })
     this.sessions = new Map()
     this.reconnects = new Map()
@@ -164,11 +168,24 @@ class BotManager {
     }
 
     hud.installHud(bot, emitTelemetry)
+    const requestRejoin = () => this.requestServerChange(account.id, session)
+    for (const packet of ['login', 'respawn']) bot._client?.on?.(packet, requestRejoin)
+    const metadata = new Map()
+    const metadataChanged = (key, value) => {
+      if (metadata.get(key) === value) return
+      metadata.set(key, value)
+      requestRejoin()
+    }
+    bot._client?.on?.('playerlist_header', packet => metadataChanged('tab', JSON.stringify([packet.header, packet.footer])))
+    bot._client?.on?.('scoreboard_objective', packet => {
+      if (packet.action !== 1 && packet.displayText != null) metadataChanged(`score:${packet.name}`, JSON.stringify(packet.displayText))
+    })
+    bot.on('scoreboardTitleChanged', board => metadataChanged(`score:${board?.name}`, JSON.stringify(board?.title)))
 
     bot.on('login', () => {
       if (this.sessions.get(account.id) !== session) return
       const dimension = bot.game?.dimension
-      if (session.lastDimension !== null && dimension != null && dimension !== session.lastDimension) this.confirmServerChange(session)
+      this.requestServerChange(account.id, session)
       if (dimension != null) session.lastDimension = dimension
       if (!session.ready) this.armConnectionWatchdog(account.id, session, CONNECTION_TIMEOUT_MS)
       if (!session.ready) this.status(account.id, 'connected', 'Authenticated. Joining world…')
@@ -177,7 +194,7 @@ class BotManager {
     bot.on('playerJoined', (player) => { if (this.sessions.get(account.id) !== session) return; if (player?.username === bot.username) emitIdentity(); else this.emit('playerAppears', account.id, { username: player?.username }) })
     bot.on('death', () => { if (this.sessions.get(account.id) === session) this.emit('death', account.id, {}) })
     bot.on('playerUpdated', (player) => { if (player?.username === bot.username) emitIdentity() })
-    bot.on('health', emitTelemetry)
+    bot.on('health', () => { session.worldReadyAt ||= Date.now(); emitTelemetry() })
     bot.inventory?.on?.('updateSlot', emitTelemetry)
     bot.on('windowOpen', (window) => {
       if (this.sessions.get(account.id) !== session || session.depositing) return
@@ -229,18 +246,18 @@ class BotManager {
         this.diagnose({ event: 'resource_pack_unavailable', host, reason })
       }
     })
-    bot.on('spawn', markReady)
+    bot.on('spawn', () => { session.worldReadyAt ||= Date.now(); markReady() })
     bot.on('forcedMove', markReady)
     bot.on('respawn', () => {
       if (this.sessions.get(account.id) !== session) return
       markReady()
       this.emit('respawn', account.id, {})
-      this.confirmServerChange(session)
-      if (session.account.serverChangeMessage) this.scheduleMessage(account.id, session.account.serverChangeMessage, session.account.messageDelay, 'serverChange')
+      this.requestServerChange(account.id, session)
     })
     bot.on('messagestr', (message, _position, originalMessage) => {
       if (this.sessions.get(account.id) !== session) return
       this.handleMessageConfirmation(account.id, session, String(message || ''))
+      session.worldReadyAt ||= Date.now()
       markReady()
       const formatted = originalMessage?.toMotd?.() || message
       this.emit('log', account.id, { kind: 'chat', message, segments: parseInteractiveChat(originalMessage, message, formatted), at: Date.now() })
@@ -489,7 +506,8 @@ class BotManager {
     const session = this.sessions.get(id)
     if (!session) return
     const snapshot = buildTelemetry(session.bot, session.nearestChest, session.resourcePack)
-    snapshot.safetyStatus = session.safetyStatus || null
+    snapshot.safetyStatus = this.rejoinStatus?.(session) || session.safetyStatus || null
+    this.updateRejoinStatus?.(id, session)
     const { at: _at, ...stableSnapshot } = snapshot
     const key = JSON.stringify(stableSnapshot)
     if (key === session.telemetryKey) return
@@ -497,25 +515,176 @@ class BotManager {
     this.emit('telemetry', id, snapshot)
   }
 
-  scheduleMessage(id, message, delaySeconds = 2, kind = 'manual', retry = false) {
+  requestServerChange(id, session) {
+    if (this.sessions.get(id) !== session || !session.account.serverChangeMessage) return
+    if (session.serverChangeRetryMessage === session.account.serverChangeMessage) return
+    if (session.serverChangeRetryMessage) this.clearServerChangeRetry(id, session)
+    this.scheduleMessage(id, session.account.serverChangeMessage, session.account.messageDelay, { kind: 'serverChange' })
+  }
+
+  scheduleMessage(id, message, delaySeconds = 2, options = {}) {
+    const { kind = 'manual' } = typeof options === 'string' ? { kind: options } : options
     const session = this.sessions.get(id)
     if (!session) return
+    const automaticSwitch = automaticServerSwitchKey(message)
+    session.automaticServerSwitches ||= new Map()
+    session.queuedServerSwitches ||= new Map()
+    if (automaticSwitch && session.queuedServerSwitches.has(automaticSwitch)) return
+    const token = { timers: new Set() }
+    if (automaticSwitch) session.queuedServerSwitches.set(automaticSwitch, token)
+    if (kind === 'serverChange' || kind === 'join' && automaticSwitch) session.serverChangeRetryMessage = message
     const delay = Math.max(0, Math.min(Number(delaySeconds) || 0, 30)) * 1000
-    const timer = setTimeout(() => {
-      session.messageTimers.delete(timer)
-      session.upcomingMessages.delete(timer)
-      if (this.sessions.get(id) !== session) return
-      if (kind === 'join' && message !== session.account.joinMessage) return
-      if (kind === 'serverChange' && message !== session.account.serverChangeMessage) return
-      if (kind === 'antiAfk' && (session.account.antiAfk === false || !session.account.antiAfkChatEnabled || message !== session.account.antiAfkChatMessage)) return
-      try {
-        this.sendChat(id, String(message).slice(0, 256))
-        if ((kind === 'join' || kind === 'serverChange') && Number(session.account.serverChangeRetryMinutes ?? 30) > 0) this.startMessageConfirmation(id, session, String(message).slice(0, 256))
+    const startedAt = Date.now()
+    const valid = () => this.sessions.get(id) === session && (!automaticSwitch || session.queuedServerSwitches.get(automaticSwitch) === token)
+    const schedule = (callback, wait) => {
+      const timer = setTimeout(() => {
+        token.timers.delete(timer)
+        session.messageTimers.delete(timer)
+        session.upcomingMessages?.delete(timer)
+        if (valid()) callback()
+      }, wait)
+      token.timers.add(timer)
+      session.messageTimers.add(timer)
+      session.upcomingMessages ||= new Map()
+      session.upcomingMessages.set(timer, { kind: 'message', label: kind === 'join' ? 'Join message' : kind === 'serverChange' ? 'Server change message' : kind === 'antiAfk' ? 'Anti-AFK message' : 'Scheduled message', at: Date.now() + wait })
+      if (automaticSwitch) session.serverChangeRetryAt = Date.now() + wait
+    }
+    const send = () => {
+      if (session.switching || automaticSwitch && !session.worldReadyAt && Date.now() - startedAt < 20_000) {
+        schedule(send, 500)
+        return
       }
-      catch (error) { this.emit('log', id, { kind: 'error', message: `Automatic message failed: ${error.message}`, at: Date.now() }) }
-    }, delay)
-    session.messageTimers.add(timer)
-    session.upcomingMessages.set(timer, { kind: 'message', at: Date.now() + delay })
+      if (automaticSwitch) {
+        const now = Date.now()
+        const readyAt = session.worldReadyAt || startedAt + 20_000
+        const last = session.automaticServerSwitches.get(automaticSwitch)
+        const sendAt = Math.max(readyAt + delay, last == null ? 0 : last + AUTOMATIC_SWITCH_COOLDOWN_MS, this.nextAutomaticServerSwitchAt || 0)
+        if (sendAt > now) {
+          schedule(send, sendAt - now)
+          return
+        }
+        this.nextAutomaticServerSwitchAt = now + 3000
+      }
+      sendNow()
+    }
+    const sendNow = () => {
+      if (automaticSwitch) session.queuedServerSwitches.delete(automaticSwitch)
+      if (kind === 'join' && message !== session.account.joinMessage || kind === 'serverChange' && message !== session.account.serverChangeMessage) return
+      if (kind === 'antiAfk' && (session.account.antiAfk === false || !session.account.antiAfkChatEnabled || message !== session.account.antiAfkChatMessage)) return
+      const confirm = (kind === 'join' || kind === 'serverChange') && Number(session.account.serverChangeRetryMinutes ?? 30) > 0
+      // Install confirmation before chat(): a proxy may answer synchronously.
+      if (confirm) this.startMessageConfirmation(id, session, String(message).slice(0, 256))
+      if (automaticSwitch) session.automaticServerSwitches.set(automaticSwitch, Date.now())
+      try { this.sendChat(id, String(message).slice(0, 256)) }
+      catch (error) {
+        this.emit('log', id, { kind: 'error', message: `Automatic message failed: ${error.message}`, at: Date.now() })
+        if (confirm && session.pendingMessageConfirmation) this.retryServerChange(id, session, session.pendingMessageConfirmation)
+      }
+      if (!confirm && session.serverChangeRetryMessage === message) this.clearServerChangeRetry(id, session)
+    }
+    schedule(send, delay)
+    this.updateRejoinStatus(id, session)
+  }
+
+  startMessageConfirmation(id, session, message) {
+    this.clearServerChangeRetry(id, session, false)
+    const pending = { message, startedAt: session.serverChangeRetryStartedAt || Date.now() }
+    session.serverChangeRetryMessage = message
+    session.serverChangeRetryStartedAt = pending.startedAt
+    session.serverChangeRetryAttempts = (session.serverChangeRetryAttempts || 0) + 1
+    session.pendingMessageConfirmation = pending
+    session.serverChangeRetryAt = Date.now() + MESSAGE_CONFIRMATION_MS
+    session.messageConfirmationTimer = this.scheduleNetworkTimer(() => {
+      session.messageConfirmationTimer = null
+      if (this.sessions.get(id) === session && session.pendingMessageConfirmation === pending) this.confirmServerChange(id, session)
+    }, MESSAGE_CONFIRMATION_MS)
+    this.updateRejoinStatus(id, session)
+  }
+
+  handleMessageConfirmation(id, session, message) {
+    if (this.sessions.get(id) !== session) return
+    const plain = hud.segments(message).map(part => part.text).join('')
+    let kickPattern = DEFAULT_SERVER_CHANGE_KICK_PATTERN
+    try { if (session.account.serverChangeKickPattern) kickPattern = new RegExp(session.account.serverChangeKickPattern, 'i') } catch {}
+    const failed = kickPattern.test(plain) || /could not connect|unable to connect|server is (?:restarting|offline|starting|down)|not online|is currently (?:offline|unavailable)|connection refused|already connecting/i.test(plain)
+    if (failed) {
+      if (session.pendingMessageConfirmation) this.retryServerChange(id, session, session.pendingMessageConfirmation)
+      else this.requestServerChange(id, session)
+      return
+    }
+    const messageSent = session.pendingMessageConfirmation?.message || session.serverChangeRetryMessage
+    if (!messageSent) return
+    const target = /^\s*\/(?:server|join|play)\s+(\S+)/i.exec(messageSent)?.[1]
+    const escaped = target?.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const mentionsTarget = escaped && new RegExp(`(?:^|[^a-z0-9_])${escaped}(?![a-z0-9_])`, 'i').test(plain)
+    if (/already connected/i.test(plain) || mentionsTarget && /connecting you to|welcome/i.test(plain)) this.confirmServerChange(id, session)
+  }
+
+  retryServerChange(id, session, pending) {
+    if (this.sessions.get(id) !== session || session.pendingMessageConfirmation !== pending) return
+    this.clearServerChangeRetry(id, session, false)
+    session.pendingMessageConfirmation = null
+    // A positive legacy retry window enables recovery until confirmed.
+    if (Number(session.account.serverChangeRetryMinutes ?? 30) === 0) return this.clearServerChangeRetry(id, session)
+    const seconds = SERVER_CHANGE_RETRY_DELAYS[Math.min(Math.max(0, session.serverChangeRetryAttempts - 1), SERVER_CHANGE_RETRY_DELAYS.length - 1)]
+    const last = session.automaticServerSwitches?.get(automaticServerSwitchKey(pending.message))
+    session.serverChangeRetryAt = Math.max(Date.now() + seconds * 1000, last == null ? 0 : last + AUTOMATIC_SWITCH_COOLDOWN_MS)
+    session.nextServerChangeRetry = session.serverChangeRetryAt
+    const wait = session.serverChangeRetryAt - Date.now()
+    this.emit('log', id, { kind: 'info', message: `Server not ready, retrying ${pending.message} in ${Math.ceil(wait / 1000)}s (attempt ${session.serverChangeRetryAttempts + 1})`, at: Date.now() })
+    session.serverChangeRetryTimer = this.scheduleNetworkTimer(() => {
+      session.serverChangeRetryTimer = null
+      if (this.sessions.get(id) !== session || (pending.message !== session.account.joinMessage && pending.message !== session.account.serverChangeMessage)) return this.clearServerChangeRetry(id, session)
+      this.scheduleMessage(id, pending.message, 0, { kind: pending.message === session.account.serverChangeMessage ? 'serverChange' : 'join', retry: true })
+    }, wait)
+    this.updateRejoinStatus(id, session)
+  }
+
+  confirmServerChange(id, session) {
+    if (!session.serverChangeRetryMessage && !session.pendingMessageConfirmation && !session.serverChangeRetryTimer) return
+    this.clearServerChangeRetry(id, session)
+  }
+
+  clearServerChangeRetry(id, session, clearState = true) {
+    if (session.messageConfirmationTimer) this.clearNetworkTimer(session.messageConfirmationTimer)
+    if (session.serverChangeRetryTimer) this.clearNetworkTimer(session.serverChangeRetryTimer)
+    session.messageConfirmationTimer = null
+    session.serverChangeRetryTimer = null
+    if (clearState) {
+      const wasRejoining = Boolean(session.serverChangeRetryMessage)
+      for (const token of session.queuedServerSwitches?.values() || []) {
+        for (const timer of token.timers) {
+          clearTimeout(timer)
+          session.messageTimers.delete(timer)
+          session.upcomingMessages?.delete(timer)
+        }
+      }
+      session.queuedServerSwitches?.clear()
+      session.pendingMessageConfirmation = null
+      session.serverChangeRetryStartedAt = 0
+      session.serverChangeRetryAttempts = 0
+      session.serverChangeRetryMessage = ''
+      session.serverChangeRetryAt = 0
+      if (wasRejoining && this.sessions.get(id) === session && session.ready) {
+        this.status(id, 'online', `Online as ${session.bot.username}`)
+        this.emitTelemetry(id)
+      }
+    }
+  }
+
+  rejoinStatus(session) {
+    if (!session?.serverChangeRetryMessage || !automaticServerSwitchKey(session.serverChangeRetryMessage) && session.serverChangeRetryMessage !== session.account.serverChangeMessage) return ''
+    const target = /^\s*\/(?:server|join|play)\s+(\S+)/i.exec(session.serverChangeRetryMessage)?.[1] || session.serverChangeRetryMessage
+    return `Rejoining ${target} (attempt ${Math.max(1, session.serverChangeRetryAttempts || 0)}, next in ${Math.max(0, Math.ceil(((session.serverChangeRetryAt || Date.now()) - Date.now()) / 1000))}s)`
+  }
+
+  updateRejoinStatus(id, session) {
+    const detail = this.rejoinStatus(session)
+    if (detail && detail !== session.lastRejoinStatus) {
+      session.lastRejoinStatus = detail
+      this.status(id, session.ready ? 'online' : 'connected', detail)
+    }
+    if (!detail) session.lastRejoinStatus = ''
   }
 
   getUpcomingRuns(id) {
@@ -539,70 +708,11 @@ class BotManager {
     }
     if (!session) return Boolean(reconnect)
     const message = session.pendingMessageConfirmation?.message || session.serverChangeRetryMessage
-    if ((message && message !== account.joinMessage && message !== account.serverChangeMessage) || account.serverChangeRetryMinutes === 0) this.clearServerChangeRetry(session)
+    if ((message && message !== account.joinMessage && message !== account.serverChangeMessage) || account.serverChangeRetryMinutes === 0) this.clearServerChangeRetry(account.id, session)
     session.account = { ...session.account, ...account }
     if (session.bot.entity && session.account.antiAfk !== false) this.enableAntiAfk(account.id, session.account.antiAfkInterval)
     else if (session.antiAfkChatTimer) { clearInterval(session.antiAfkChatTimer); session.antiAfkChatTimer = null }
     return true
-  }
-
-  startMessageConfirmation(id, session, message) {
-    this.clearServerChangeRetry(session, false)
-    const pending = { message, expectedWorldChange: /^\s*\/(?:server|join|play)(?:\s|$)/i.test(message), startedAt: session.serverChangeRetryStartedAt || Date.now() }
-    session.serverChangeRetryMessage = message
-    session.serverChangeRetryStartedAt = pending.startedAt
-    session.pendingMessageConfirmation = pending
-    session.messageConfirmationTimer = setTimeout(() => {
-      session.messageConfirmationTimer = null
-      if (this.sessions.get(id) === session && session.pendingMessageConfirmation === pending) {
-        if (pending.expectedWorldChange) this.retryServerChange(id, session, pending)
-        else this.confirmServerChange(session)
-      }
-    }, MESSAGE_CONFIRMATION_MS)
-  }
-
-  handleMessageConfirmation(id, session, message) {
-    const pending = session.pendingMessageConfirmation
-    if (!pending) return
-    if (/already connected/i.test(message)) return this.confirmServerChange(session)
-    if (!/could not connect|unable to connect|server is (?:restarting|offline|starting|down)|not online|is currently (?:offline|unavailable)|connection refused|already connecting/i.test(message)) return
-    this.retryServerChange(id, session, pending)
-  }
-
-  retryServerChange(id, session, pending) {
-    if (this.sessions.get(id) !== session || session.pendingMessageConfirmation !== pending) return
-    clearTimeout(session.messageConfirmationTimer)
-    session.messageConfirmationTimer = null
-    session.pendingMessageConfirmation = null
-    const minutes = clampNumber(session.account.serverChangeRetryMinutes ?? 30, 0, 1440, 30)
-    if (!minutes || Date.now() - pending.startedAt >= minutes * 60_000) return this.clearServerChangeRetry(session)
-    const attempt = ++session.serverChangeRetryAttempts + 1
-    const seconds = SERVER_CHANGE_RETRY_DELAYS[Math.min(session.serverChangeRetryAttempts - 1, SERVER_CHANGE_RETRY_DELAYS.length - 1)]
-    session.nextServerChangeRetry = Date.now() + seconds * 1000
-    this.emit('log', id, { kind: 'info', message: `Server not ready, retrying ${pending.message} in ${seconds}s (attempt ${attempt})`, at: Date.now() })
-    session.serverChangeRetryTimer = setTimeout(() => {
-      session.serverChangeRetryTimer = null
-      if (this.sessions.get(id) !== session || Date.now() - pending.startedAt >= minutes * 60_000 || (pending.message !== session.account.joinMessage && pending.message !== session.account.serverChangeMessage)) return this.clearServerChangeRetry(session)
-      this.scheduleMessage(id, pending.message, 0, pending.message === session.account.joinMessage ? 'join' : 'serverChange', true)
-    }, seconds * 1000)
-  }
-
-  confirmServerChange(session) {
-    if (!session.pendingMessageConfirmation && !session.serverChangeRetryTimer) return
-    this.clearServerChangeRetry(session)
-  }
-
-  clearServerChangeRetry(session, clearState = true) {
-    clearTimeout(session.messageConfirmationTimer)
-    clearTimeout(session.serverChangeRetryTimer)
-    session.messageConfirmationTimer = null
-    session.serverChangeRetryTimer = null
-    if (clearState) {
-      session.pendingMessageConfirmation = null
-      session.serverChangeRetryStartedAt = 0
-      session.serverChangeRetryAttempts = 0
-      session.serverChangeRetryMessage = ''
-    }
   }
 
   enableAntiAfk(id, seconds = 45) {
@@ -653,7 +763,7 @@ class BotManager {
     for (const timer of session.messageTimers || []) clearTimeout(timer)
     session.messageTimers?.clear()
     session.upcomingMessages?.clear()
-    this.clearServerChangeRetry(session)
+    this.clearServerChangeRetry(session.account?.id, session)
     session.antiAfkTimer = null
     session.jumpTimer = null
     session.telemetryTimer = null
@@ -667,8 +777,14 @@ class BotManager {
   }
 
   status(id, status, detail) {
+    if (status === 'online' || status === 'connected') detail = this.rejoinStatus(this.sessions.get(id)) || detail
     this.emit('status', id, { status, detail, at: Date.now() })
   }
+}
+
+function automaticServerSwitchKey(message) {
+  const normalized = String(message || '').trim().replace(/\s+/g, ' ').toLowerCase()
+  return /^\/(?:server|join|play)(?:\s|$)/.test(normalized) ? normalized : ''
 }
 
 function normalizeLoginCode(code) {

@@ -557,7 +557,7 @@ function AccountModal({streamerMode, value, onClose, onSave, onDelete}: {streame
         <Field label="Message after joining" value={draft.joinMessage} onChange={(v: string) => set('joinMessage', v)} />
         <Field label="Message after changing servers" value={draft.serverChangeMessage} onChange={(v: string) => set('serverChangeMessage', v)} />
         <Field label="Automatic message delay (seconds)" value={draft.messageDelay} onChange={(v: string) => set('messageDelay', v)} keyboardType="number-pad" />
-        <Field label="Retry server messages for (minutes; 0 disables)" value={draft.serverChangeRetryMinutes} onChange={(v: string) => set('serverChangeRetryMinutes', v)} keyboardType="number-pad" />
+        <Field label="Server-message retries (0 disables; positive enables)" value={draft.serverChangeRetryMinutes} onChange={(v: string) => set('serverChangeRetryMinutes', v)} keyboardType="number-pad" />
         <Toggle label="Auto-deposit inventory" value={draft.autoDepositToChest === true} onChange={v => set('autoDepositToChest', v)} />
         <Field label="Auto-deposit range (1–16 blocks)" value={draft.autoDepositRange || '5'} onChange={(v: string) => set('autoDepositRange', v)} keyboardType="number-pad" />
         <Text style={styles.help}>Deposit trigger: {draft.autoDepositMode}</Text>

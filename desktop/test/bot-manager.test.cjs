@@ -380,7 +380,7 @@ test('automatic server switches wait until the world reports ready', async (t) =
   assert.deepEqual(bot.writes, [])
 })
 
-test('automatic server message retries after proxy failure and is cancelled by respawn', async (t) => {
+test('automatic server message retries after proxy failure and is confirmed by chat', async (t) => {
   const timers = []
   const events = []
   const bot = new FakeBot()
@@ -397,14 +397,16 @@ test('automatic server message retries after proxy failure and is cancelled by r
   await new Promise((resolve) => setTimeout(resolve, 5))
   assert.deepEqual(bot.messages, ['/server towny'])
   bot.emit('messagestr', 'Could not connect to that server')
-  assert.ok(events.some(([type, , entry]) => type === 'log' && entry.kind === 'info' && /retrying \/server towny in 15s/.test(entry.message)))
-  const retry = timers.find((timer) => timer.ms === 15_000 && !timer.cleared)
+  assert.ok(events.some(([type, , entry]) => type === 'log' && entry.kind === 'info' && /retrying \/server towny in 60s/.test(entry.message)))
+  const retry = manager.sessions.get('message-retry').serverChangeRetryTimer
   assert.ok(retry)
   bot.emit('respawn')
+  assert.equal(retry.cleared, false)
+  bot.emit('messagestr', 'Connecting you to towny')
   assert.equal(retry.cleared, true)
 })
 
-test('server message retry window expiry and zero setting stop retries', async (t) => {
+test('server messages keep retrying past the old window, and zero disables retries', async (t) => {
   for (const [id, retryMinutes, expire] of [['message-retry-expired', 1, true], ['message-retry-disabled', 0, false]]) {
     const timers = []
     const bot = new FakeBot()
@@ -421,11 +423,11 @@ test('server message retry window expiry and zero setting stop retries', async (
     await new Promise((resolve) => setTimeout(resolve, 5))
     if (expire) manager.sessions.get(id).pendingMessageConfirmation.startedAt = Date.now() - 61_000
     bot.emit('messagestr', 'Connection refused')
-    assert.equal(timers.some((timer) => timer.ms === 15_000 && !timer.cleared), false)
+    assert.equal(Boolean(manager.sessions.get(id).serverChangeRetryTimer), expire)
   }
 })
 
-test('a /server message without a world change retries after the confirmation window', async (t) => {
+test('a /server message without another kick is confirmed after twenty seconds', async (t) => {
   const timers = []
   const events = []
   const bot = new FakeBot()
@@ -440,11 +442,11 @@ test('a /server message without a world change retries after the confirmation wi
   bot.emit('spawn')
   bot.emit('health')
   await new Promise(resolve => setTimeout(resolve, 5))
-  const confirmation = timers.find(timer => timer.ms === 15_000 && !timer.cleared)
+  const confirmation = timers.find(timer => timer.ms === 20_000 && !timer.cleared)
   assert.ok(confirmation)
   confirmation.callback()
-  assert.ok(timers.some(timer => timer.ms === 15_000 && !timer.cleared && timer !== confirmation))
-  assert.ok(events.some(([type, , entry]) => type === 'log' && entry.kind === 'info' && /retrying \/server towny in 15s/.test(entry.message)))
+  assert.equal(manager.sessions.get('message-no-world-change').pendingMessageConfirmation, null)
+  assert.equal(manager.sessions.get('message-no-world-change').serverChangeRetryTimer, null)
 })
 
 test('already-connected proxy response confirms the message without retrying', async (t) => {
@@ -463,7 +465,7 @@ test('already-connected proxy response confirms the message without retrying', a
   await new Promise(resolve => setTimeout(resolve, 5))
   bot.emit('messagestr', 'You are already connected to that server')
   assert.equal(manager.sessions.get('message-already-connected').pendingMessageConfirmation, null)
-  assert.equal(timers.some(timer => timer.ms === 15_000 && !timer.cleared), false)
+  assert.equal(manager.sessions.get('message-already-connected').serverChangeRetryTimer, null)
 })
 
 test('clearing an automatic message cancels its pending retry', async (t) => {
@@ -482,7 +484,7 @@ test('clearing an automatic message cancels its pending retry', async (t) => {
   bot.emit('health')
   await new Promise(resolve => setTimeout(resolve, 5))
   bot.emit('messagestr', 'Could not connect')
-  const retry = timers.find(timer => timer.ms === 15_000 && !timer.cleared)
+  const retry = manager.sessions.get(account.id).serverChangeRetryTimer
   assert.ok(retry)
   manager.updateAccountConfig({ ...account, joinMessage: '' })
   assert.equal(retry.cleared, true)

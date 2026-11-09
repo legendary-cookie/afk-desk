@@ -34,7 +34,7 @@ test('mobile auto-deposit modes count unlocked main-inventory slots only', () =>
   assert.equal(shouldAutoDeposit(session, 11000), true)
 })
 
-test('mobile cancels a pending automatic-message retry when a world change confirms it', async (t) => {
+test('mobile keeps retrying through fallback respawns until chat confirms arrival', async (t) => {
   const bot = new FakeBot()
   bot.chat = message => { bot.sent = [...(bot.sent || []), message] }
   const logs = []
@@ -47,8 +47,10 @@ test('mobile cancels a pending automatic-message retry when a world change confi
   bot.emit('messagestr', 'Unable to connect')
   const session = manager.sessions.get('mobile-message-retry')
   assert.ok(session.serverChangeRetryTimer)
-  assert.ok(logs.some(([type, , entry]) => type === 'log' && entry.kind === 'info' && /retrying \/server towny in 15s/.test(entry.message)))
+  assert.ok(logs.some(([type, , entry]) => type === 'log' && entry.kind === 'info' && /retrying \/server towny in 60s/.test(entry.message)))
   bot.emit('respawn')
+  assert.ok(session.serverChangeRetryTimer)
+  bot.emit('messagestr', 'You are already connected to this server!')
   assert.equal(session.serverChangeRetryTimer, null)
 })
 

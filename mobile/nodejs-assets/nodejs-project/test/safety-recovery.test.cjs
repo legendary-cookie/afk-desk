@@ -215,9 +215,9 @@ test('safety status is carried in telemetry and wait logs distinguish omen, raid
   x.session.account.autoOminousCooldown = 0
   x.bot.entity.effects[31] = {}; x.bot.emit('health'); await flush()
   assert.match(x.session.safetyStatus, /omen effect active/)
-  x.bot.entity.effects = {}; x.bot.bossBars = [{ title: { translate: 'event.minecraft.raid' } }]
+  x.bot.entity.effects = {}; const raid = { entityUUID: 'raid', title: { translate: 'event.minecraft.raid' } }; x.bot.emit('bossBarCreated', raid)
   x.bot.emit('health'); await flush(); assert.match(x.session.safetyStatus, /raid active/)
-  x.bot.bossBars = []; x.session.account.lockedInventorySlots = [37]
+  x.bot.emit('bossBarDeleted', raid); x.session.account.lockedInventorySlots = [37]
   x.bot.emit('health'); await flush(); assert.match(x.session.safetyStatus, /consumed/)
   BotManager.prototype.emitTelemetry.call(x.manager, 'a')
   assert.equal(x.events.filter(([type]) => type === 'telemetry').at(-1)[2].safetyStatus, x.session.safetyStatus)

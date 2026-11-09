@@ -56,8 +56,8 @@ function hasEffect(bot, name) {
   const id = bot.registry?.effectsByName?.[name]?.id
   return (id != null && effects[id] != null) || Object.keys(effects).some(key => key.replace(/[^a-z]/gi, '').toLowerCase() === name.toLowerCase())
 }
-function hasRaid(bot) {
-  return (bot.bossBars || []).some(bar => {
+function hasRaid(bot, now = Date.now()) {
+  return require('./hud.cjs').activeBossBars(bot, now).some(bar => {
     const parts = require('./hud.cjs').segments(bar.title).map(part => part.text)
     return /^Raid/.test(parts.join('')) || parts.some(text => /^event\.minecraft\.raid(?:\.(?:victory|defeat))?$/.test(text))
   })
@@ -76,7 +76,7 @@ function pickConsumable(account, bot, lastDamage, lastBottle, now = Date.now(), 
     const apple = items.find(item => item.name === preferred) || items.find(item => ['golden_apple', 'enchanted_golden_apple'].includes(item.name))
     if (apple) return apple
   }
-  if (account.autoOminousBottle && !hasEffect(bot, 'BadOmen') && !hasEffect(bot, 'RaidOmen') && !hasEffect(bot, 'TrialOmen') && !hasRaid(bot) && (lastBottle == null || now - lastBottle >= (Number(account.autoOminousCooldown ?? 0) * 1000))) {
+  if (account.autoOminousBottle && !hasEffect(bot, 'BadOmen') && !hasEffect(bot, 'RaidOmen') && !hasEffect(bot, 'TrialOmen') && !hasRaid(bot, now) && (lastBottle == null || now - lastBottle >= (Number(account.autoOminousCooldown ?? 0) * 1000))) {
     const bottles = items.filter(item => item.name === 'ominous_bottle')
     const order = account.autoOminousOrder ?? (account.autoOminousAmplifier == null || Number(account.autoOminousAmplifier) >= 4 ? 'highest' : 'lowest')
     return bottles.sort((a, b) => (order === 'lowest' ? 1 : -1) * (bottleAmplifier(a) - bottleAmplifier(b)))[0] || null
@@ -136,6 +136,7 @@ function deferSafety(manager, account, state) {
 }
 function installSafety(manager, account, session, state, { actionTimeoutMs = INVENTORY_TIMEOUT_MS, cleanupTimeoutMs = 2000 } = {}) {
   const bot = session.bot
+  require('./hud.cjs').installBossBarTracking(bot)
   let previousHealth = bot.health, lastDamage = null, lastBottle = null
   let popPending = false, popTimer = null, disconnecting = false
   const disconnect = reason => {
@@ -341,4 +342,4 @@ function installSafety(manager, account, session, state, { actionTimeoutMs = INV
   bot.on('health', tick)
   bot.inventory?.on?.('updateSlot', tick)
 }
-module.exports = { consumeItem, hasEffect, bottleAmplifier, pickConsumable, chooseArmor, armorStats, shouldEat, pickFood, shouldLowHealthAct, isWithinSchedule, deferSafety, installSafety }
+module.exports = { hasRaid, consumeItem, hasEffect, bottleAmplifier, pickConsumable, chooseArmor, armorStats, shouldEat, pickFood, shouldLowHealthAct, isWithinSchedule, deferSafety, installSafety }
